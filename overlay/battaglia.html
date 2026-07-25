@@ -4,6 +4,16 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Battaglia</title>
+  <div id="wsettings" class="wsettings">
+    <div class="ws-sec">View</div>
+    <div class="ws-row">
+      <button id="modeBtn" class="hbtn" type="button" title="Switch between the reward ladder and the mission list">Missions</button>
+    </div>
+    <div class="ws-row">
+      <button id="doneBtn" class="hbtn" type="button" title="Show tiers you have already finished">Show done</button>
+    </div>
+  </div>
+
 <script>/* AMD compatibility: apply the lite skin BEFORE first paint (no flash) when the shell asks for it. */
   if (new URLSearchParams(location.search).has("lite")) document.documentElement.classList.add("amd-lite");
   /* Apply ?theme= before first paint (no flash). The parent canvas keeps this in sync live (same-origin). */
@@ -42,8 +52,6 @@
     border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 40px; }
   .dia { width: 7px; height: 7px; flex: none; background: var(--cyan-bright); transform: rotate(45deg);
     box-shadow: 0 0 8px var(--cyan); }
-  .h-title { font-size: 11px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
-    color: var(--cyan-text); flex: 1; }
   .hbtn { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
     color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--border);
     border-radius: 6px; padding: 4px 7px; cursor: pointer; white-space: nowrap; }
@@ -128,8 +136,6 @@
     <div class="head">
       <span class="dia"></span>
       <span class="h-title" id="who">Battaglia</span>
-      <button id="doneBtn" class="hbtn" type="button" title="Show tiers you have already finished">Show done</button>
-      <button id="modeBtn" class="hbtn" type="button" title="Switch between the reward ladder and the mission list">Missions</button>
     </div>
 
     <div class="standing">
@@ -384,6 +390,13 @@
   load();
   setInterval(load, POLL_MS);
   try { host()?.ready?.(); } catch { /* not embedded */ }
+  // Per-widget settings, opened by the bar's cog. Controls that used to crowd the header live
+  // here; the parent injects its Text size row into this same sheet.
+  window.__widgetSettings = () => $("wsettings").classList.add("open");
+  window.__widgetSettingsRoot = () => $("wsettings");
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#wsettings")) $("wsettings").classList.remove("open");
+  });
 </script>
 </body>
 </html>

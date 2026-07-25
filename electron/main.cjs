@@ -516,6 +516,17 @@ function registerBindingHotkey(accel) {
   return r;
 }
 
+// Live-rebindable hotkey for showing/hiding the Web Page widget - same shape as the others.
+let webViewAccel = null;
+function registerWebViewHotkey(accel) {
+  if (webViewAccel) hotkeys.unregister(webViewAccel);
+  webViewAccel = null;
+  if (!accel || typeof accel !== "string") return { ok: true };
+  const r = hotkeys.register(accel, () => setWebView(!webViewVisible));
+  if (r.ok) webViewAccel = accel;
+  return r;
+}
+
 // Live-rebindable hotkey for showing/hiding the Mining Assistant widget. Same shape as the
 // overlay/binding registrations so the config window can warn on an invalid / in-use combo.
 let miningAccel = null;
@@ -929,6 +940,7 @@ if (!app.requestSingleInstanceLock()) {
       const c = JSON.parse(fs.readFileSync(p, "utf8"));
       if (c.overlayHotkey) overlayKey = c.overlayHotkey;
       if (c.bindingHotkey) bindKey = c.bindingHotkey;
+      if (c.webViewHotkey) registerWebViewHotkey(c.webViewHotkey);
       if (c.miningHotkey) miningKey = c.miningHotkey;
       if (c.interactHotkey) interactKey = c.interactHotkey;
       if (c.moveHotkey) moveKey = c.moveHotkey;
@@ -1035,6 +1047,8 @@ if (!app.requestSingleInstanceLock()) {
     registerBindingHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-mining-hotkey", (_e, accel) =>
     registerMiningHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("set-webview-hotkey", (_e, accel) =>
+    registerWebViewHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-interact-hotkey", (_e, accel) =>
     registerInteractHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-move-hotkey", (_e, accel) =>

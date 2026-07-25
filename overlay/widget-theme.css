@@ -170,3 +170,34 @@ html.amd-lite .wpanel::before { display: none; }
 .wpanel.selectable, .wpanel.selectable *, .wpanel .selectable, .wpanel .selectable * {
   -webkit-user-select: text; user-select: text;
 }
+
+/* ── Widget header ────────────────────────────────────────────────────────────
+   Every widget page had its own copy of these, which is how they drifted: 10px here and 11px
+   there, a subtitle on some and not others. Defining them ONCE means a page only writes a rule
+   when it genuinely differs (the Web Page widget shows a URL instead of a name; the Binding Chart
+   carries view-mode buttons). Don't re-declare .h-title in a page - change it here.
+
+   Shape: [diamond] TITLE  [optional subtitle]  ...controls, right-aligned. */
+.head { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--divider); position: relative; z-index: 4; }
+.head .dia { width: 7px; height: 7px; flex: none; background: var(--cyan-bright);
+  transform: rotate(45deg); box-shadow: 0 0 8px var(--cyan); }
+.h-title { flex: none; font-family: var(--sans); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan-text); white-space: nowrap; }
+/* Secondary text (channel name, unread count, standing...) - always dimmer and never uppercase, so
+   the eye reads the widget's NAME first. It takes the leftover room and pushes controls right. */
+.h-sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: 0.04em; }
+.head .h-title + .hbtn, .head .h-sub + .hbtn { margin-left: auto; }
+
+/* ── Per-widget settings sheet ────────────────────────────────────────────────
+   Opened by the bar's cog (the parent calls __widgetSettings and injects its Text size row here).
+   Controls that used to crowd a widget's header live in here instead. */
+.wsettings { display: none; position: absolute; right: 8px; bottom: 8px; z-index: 40;
+  min-width: 186px; padding: 6px 0 8px; border-radius: 8px; background: var(--menu-bg);
+  border: 1px solid var(--border); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); }
+.wsettings.open { display: block; }
+.wsettings .ws-sec { padding: 6px 12px 2px; font-family: var(--sans); font-size: 9px;
+  font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan-dim); }
+.wsettings .ws-row { display: flex; align-items: center; gap: 6px; padding: 5px 12px; }
+.wsettings .ws-row .hbtn { flex: 1; }

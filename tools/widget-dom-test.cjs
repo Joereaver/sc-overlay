@@ -400,13 +400,23 @@ const REACH = `(async () => {
   ok("no widget control is clipped away by an ancestor", clipped.length === 0, clipped.slice(0, 6).join(" | "));
   ok("every widget control sits inside a reported click region", unreachable.length === 0, unreachable.slice(0, 6).join(" | "));
 
-  // The cog must actually DO something — a dead control that merely exists is the bug we keep hitting.
-  const w0 = WBY.party, e0 = document.getElementById("w-party");
+  // The cog must actually DO something - a dead control that merely exists is the bug we keep
+  // hitting. There are two shapes: a page with its own settings sheet opens THAT, everything else
+  // opens the local popover. Check one of each.
+  const w0 = WBY.notepad, e0 = document.getElementById("w-notepad");
   e0.classList.add("touched");
   e0.querySelector(".wh-cog").click(); await sleep(20);
-  const opened = e0.classList.contains("cfgopen") && visibleArea(e0.querySelector(".wcfg")) > 400;
-  ok("clicking the cog actually opens a visible popover", opened,
-     "cfgopen=" + e0.classList.contains("cfgopen") + " area=" + Math.round(visibleArea(e0.querySelector(".wcfg"))) + " clipper=" + lastClipper);
+  ok("a widget with no page settings opens a visible popover",
+     e0.classList.contains("cfgopen") && visibleArea(e0.querySelector(".wcfg")) > 400,
+     "cfgopen=" + e0.classList.contains("cfgopen") + " area=" + Math.round(visibleArea(e0.querySelector(".wcfg"))));
+  const e1 = document.getElementById("w-party");
+  e1.classList.add("touched");
+  e1.querySelector(".wh-cog").click(); await sleep(40);
+  let sheetOpen = false;
+  try { sheetOpen = document.getElementById("wf-party").contentDocument.getElementById("wsettings").classList.contains("open"); } catch {}
+  ok("a widget WITH page settings opens its own sheet", sheetOpen);
+  ok("...and the Text size row was injected into that sheet",
+     !!document.getElementById("wf-party").contentWindow.__widgetSettingsRoot().querySelector(".wtext-row"));
   // and text size must move
   const before = w0.s.text || 1;
   e0.querySelector(".wcfg-up").click(); await sleep(20);

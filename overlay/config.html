@@ -322,6 +322,12 @@
       <div class="hint" id="overlayHotkeyHint"></div>
     </div>
     <div class="hkrow">
+      <span class="hklabel">Web Page</span>
+      <button type="button" id="webViewHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('webView')">Ctrl + Shift + F3</button>
+      <input type="hidden" id="webViewHotkey" />
+      <div class="hint" id="webViewHotkeyHint"></div>
+    </div>
+    <div class="hkrow">
       <span class="hklabel">Mining Assistant</span>
       <button type="button" id="miningHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('mining')">Shift + F3</button>
       <input type="hidden" id="miningHotkey" />
@@ -525,6 +531,7 @@
     setHotkeyDisplay("overlay", cfg.overlayHotkey || "F3");
     setHotkeyDisplay("binding", cfg.bindingHotkey || "Ctrl+F3");
     setHotkeyDisplay("mining", cfg.miningHotkey || "Shift+F3");
+    setHotkeyDisplay("webView", cfg.webViewHotkey || "Ctrl+Shift+F3");
     setHotkeyDisplay("interact", cfg.interactHotkey || "F");
     setHotkeyDisplay("move", cfg.moveHotkey || "Ctrl+Alt+M");
     document.getElementById("holdToInteract").checked = !!cfg.holdToInteract;
@@ -625,6 +632,7 @@
       overlayHotkey: document.getElementById("overlayHotkey").value.trim() || "F3",
       bindingHotkey: document.getElementById("bindingHotkey").value.trim() || "Ctrl+F3",
       miningHotkey: document.getElementById("miningHotkey").value.trim() || "Shift+F3",
+      webViewHotkey: document.getElementById("webViewHotkey").value.trim() || "Ctrl+Shift+F3",
       interactHotkey: document.getElementById("interactHotkey").value.trim() || "F",
       holdToInteract: document.getElementById("holdToInteract").checked,
       revertThemeOnFoot: document.getElementById("revertThemeOnFoot").checked,
@@ -695,6 +703,8 @@
                apply: (a) => window.overlayConfig && window.overlayConfig.setBindingHotkey && window.overlayConfig.setBindingHotkey(a) },
     mining: { input: "miningHotkey", btn: "miningHotkeyBtn", hint: "miningHotkeyHint", def: "Shift+F3",
                apply: (a) => window.overlayConfig && window.overlayConfig.setMiningHotkey && window.overlayConfig.setMiningHotkey(a) },
+    webView: { input: "webViewHotkey", btn: "webViewHotkeyBtn", hint: "webViewHotkeyHint", def: "Ctrl+Shift+F3",
+               apply: (a) => window.overlayConfig && window.overlayConfig.setWebViewHotkey && window.overlayConfig.setWebViewHotkey(a) },
     interact: { input: "interactHotkey", btn: "interactHotkeyBtn", hint: "interactHotkeyHint", def: "F", bare: true,
                apply: (a) => window.overlayConfig && window.overlayConfig.setInteractHotkey && window.overlayConfig.setInteractHotkey(a) },
     move: { input: "moveHotkey", btn: "moveHotkeyBtn", hint: "moveHotkeyHint", def: "Ctrl+Alt+M",

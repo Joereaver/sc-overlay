@@ -45,8 +45,6 @@
     border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 40px; }
   .dia { width: 7px; height: 7px; flex: none; background: var(--faint); transform: rotate(45deg); transition: background 0.3s; }
   #panel.on .dia { background: var(--cyan-bright); box-shadow: 0 0 8px var(--cyan); }
-  .h-title { font-size: 11px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
-    color: var(--cyan-text); flex: none; }
   #chanTag { flex: 1; font-size: 12px; font-weight: 600; color: var(--gold); overflow: hidden;
     white-space: nowrap; text-overflow: ellipsis; }
   .hbtn { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
@@ -108,7 +106,7 @@
     <div class="head">
       <span class="dia"></span>
       <span class="h-title">Chat</span>
-      <span id="chanTag"></span>
+      <span id="chanTag" class="h-sub"></span>
       <button id="fsDown" class="hbtn sm" type="button" title="Smaller text">A−</button>
       <button id="fsUp" class="hbtn sm" type="button" title="Larger text">A+</button>
       <button id="chanBtn" class="hbtn sm" type="button" title="Change channel">⌕</button>

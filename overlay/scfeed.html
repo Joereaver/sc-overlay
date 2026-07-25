@@ -42,8 +42,6 @@
     border-bottom: 1px solid var(--divider); }
   .dia { width: 7px; height: 7px; flex: none; background: var(--cyan-bright); transform: rotate(45deg);
     box-shadow: 0 0 8px var(--cyan); }
-  .h-title { font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
-    color: var(--cyan-text); flex: 1; }
   .count { font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: 0.04em; }
   .x { font-size: 13px; line-height: 1; color: var(--cyan-dim); background: transparent; border: 0;
     cursor: pointer; padding: 3px 5px; border-radius: 5px; }
@@ -87,7 +85,7 @@
     <div class="head">
       <span class="dia"></span>
       <span class="h-title">SC Feed</span>
-      <span class="count" id="more"></span>
+      <span class="count h-sub" id="more"></span>
       <button class="x" id="audioBtn" type="button" title="Alert settings">♪</button>
       <button class="x" id="close" type="button" title="Dismiss">✕</button>
     </div>

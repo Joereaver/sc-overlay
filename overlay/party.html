@@ -4,6 +4,16 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Party</title>
+  <div id="wsettings" class="wsettings">
+    <div class="ws-sec">Saved splits</div>
+    <div class="ws-row">
+      <button id="saveBtn" class="hbtn" type="button" title="Save this split so you can come back to it after the ore is sold">⤓ Save</button>
+    </div>
+    <div class="ws-row">
+      <button id="folderBtn" class="hbtn" type="button" title="Open the folder holding the saved .json and .txt files">↗ Folder</button>
+    </div>
+  </div>
+
 <script>/* AMD compatibility: apply the lite skin BEFORE first paint (no flash) when the shell asks for it. */
   if (new URLSearchParams(location.search).has("lite")) document.documentElement.classList.add("amd-lite");
   /* Apply ?theme= before first paint (no flash). The parent canvas keeps this in sync live (same-origin). */
@@ -41,8 +51,6 @@
     border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 40px; }
   .dia { width: 7px; height: 7px; flex: none; background: var(--cyan-bright); transform: rotate(45deg);
     box-shadow: 0 0 8px var(--cyan); }
-  .h-title { font-size: 11px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
-    color: var(--cyan-text); flex: 1; }
   .hbtn { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
     color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
@@ -190,7 +198,6 @@
 
     <div class="foot">
       <span class="tot" id="tot"></span>
-      <button id="saveBtn" class="hbtn sm" type="button" title="Save this split so you can come back to it after the ore is sold">⤓ Save</button>
       <button id="listBtn" class="hbtn sm" type="button" title="Show saved splits">Saved</button>
       <button id="evenBtn" class="hbtn sm" type="button" title="Split evenly across everyone">Even split</button>
     </div>
@@ -198,7 +205,6 @@
     <div id="saved">
       <div class="shead">
         <span class="lbl">Saved splits</span>
-        <button id="folderBtn" class="hbtn sm" type="button" title="Open the folder holding the saved .json and .txt files">↗ Folder</button>
       </div>
       <div id="slist"></div>
     </div>
@@ -584,6 +590,13 @@
   setInterval(pollParty, POLL_MS);
   setInterval(pollPot, POLL_MS * 2);
   try { host()?.ready?.(); } catch { /* not embedded */ }
+  // Per-widget settings, opened by the bar's cog. Controls that used to crowd the header live
+  // here; the parent injects its Text size row into this same sheet.
+  window.__widgetSettings = () => $("wsettings").classList.add("open");
+  window.__widgetSettingsRoot = () => $("wsettings");
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#wsettings")) $("wsettings").classList.remove("open");
+  });
 </script>
 </body>
 </html>

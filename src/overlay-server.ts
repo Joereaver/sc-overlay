@@ -156,6 +156,7 @@ interface Config {
   /** Global hotkey that shows/hides the Mining Assistant window (Electron accelerator
    *  syntax). Read by main.cjs at startup. */
   miningHotkey: string;
+  webViewHotkey: string;
   /** Hold-to-interact hotkey (Electron accelerator, default "F"): when hold-to-interact mode is
    *  on, the overlay is passive (click-through) unless this key is HELD. */
   interactHotkey: string;
@@ -238,6 +239,7 @@ const DEFAULTS: Config = {
   bindingHotkey: "Ctrl+F3",
   overlayHotkey: "F3",
   miningHotkey: "Shift+F3",
+  webViewHotkey: "Ctrl+Shift+F3",
   interactHotkey: "F",
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
@@ -1198,6 +1200,7 @@ const server = createServer(async (req, res) => {
     if (typeof body.bindingHotkey === "string" && body.bindingHotkey.trim()) config.bindingHotkey = body.bindingHotkey.trim();
     if (typeof body.overlayHotkey === "string" && body.overlayHotkey.trim()) config.overlayHotkey = body.overlayHotkey.trim();
     if (typeof body.miningHotkey === "string" && body.miningHotkey.trim()) config.miningHotkey = body.miningHotkey.trim();
+    if (typeof body.webViewHotkey === "string" && body.webViewHotkey.trim()) config.webViewHotkey = body.webViewHotkey.trim();
     if (typeof body.interactHotkey === "string" && body.interactHotkey.trim()) config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string" && body.moveHotkey.trim()) config.moveHotkey = body.moveHotkey.trim();
