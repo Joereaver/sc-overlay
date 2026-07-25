@@ -54,7 +54,7 @@ const GROUPING = `(async () => {
   ok("inactive member NOT unloaded", !!document.getElementById("wf-mining").src, "iframe src kept");
   ok("members share x", cs(party,"--wx") === cs(mining,"--wx"), cs(party,"--wx") + " vs " + cs(mining,"--wx"));
   ok("members share width", cs(party,"--ww") === cs(mining,"--ww"), cs(party,"--ww") + " vs " + cs(mining,"--ww"));
-  ok("scaled widget drops .scaled while grouped", !el(mining).classList.contains("scaled"));
+  ok("no widget is scale-based any more (all responsive)", !document.querySelector(".widget.scaled"));
   ok("members flagged .grouped", el(party).classList.contains("grouped") && el(mining).classList.contains("grouped"));
 
   const strip = el(WBY[GROUPS[0] ? GROUPS[0].active : "party"]).querySelector(".wh-tabs");
@@ -84,7 +84,7 @@ const GROUPING = `(async () => {
   // Regression: applyFrame() reads groupOf(), so the group must be dropped BEFORE re-applying the
   // survivor, or the last member stays flagged as grouped.
   ok("survivors standalone again", !el(party).classList.contains("grouped") && !el(mining).classList.contains("grouped"));
-  ok("scaled widget regains .scaled", el(mining).classList.contains("scaled"));
+  ok("mining stays responsive after ungrouping", !el(mining).classList.contains("scaled"));
 
   groupWidgets(party, mining);
   const gs = saved.filter(s => s[0] === "__groups").pop();
@@ -105,11 +105,24 @@ const PAIRS = `(async () => {
   await sleep(500);
 
   const frameBox = (w) => document.getElementById("wf-" + w.key).getBoundingClientRect();
+  // 🔑 The frame being the right size proves NOTHING about whether the widget is usable — Sub's
+  // mining+party breakage had a perfectly sized frame with the panel inside it clipped. So look
+  // INSIDE the iframe and check the page's own panel actually fits the box it was given.
+  const innerFit = (w) => {
+    try {
+      const doc = document.getElementById("wf-" + w.key).contentDocument;
+      const panel = doc && (doc.getElementById("panel") || doc.getElementById("card"));
+      if (!panel) return null;
+      const f = frameBox(w), p = panel.getBoundingClientRect();
+      return { overflowX: Math.round(p.width - f.width), overflowY: Math.round(p.height - f.height) };
+    } catch { return null; }
+  };
+  const fits = (w) => { const o = innerFit(w); return !o || (o.overflowX <= 2 && o.overflowY <= 2); };
   // Snapshot each widget's healthy standalone frame size to compare against after a merge cycle.
   const baseline = {};
   for (const w of WIDGETS) { const r = frameBox(w); baseline[w.key] = [Math.round(r.width), Math.round(r.height)]; }
 
-  const broken = [], groupBad = [];
+  const broken = [], groupBad = [], clipped = [];
   for (let i = 0; i < WIDGETS.length; i++) {
     for (let j = i + 1; j < WIDGETS.length; j++) {
       const a = WIDGETS[i], b = WIDGETS[j];
@@ -122,6 +135,13 @@ const PAIRS = `(async () => {
         groupBad.push(a.key + "+" + b.key + " (members=" + (g ? g.members.length : 0) + " visible=" + vis.length +
                       " frame=" + Math.round(fr.width) + "x" + Math.round(fr.height) + ")");
       }
+      // The fronted member's CONTENT must fit the shared box - this is the check that catches a
+      // widget rendering clipped inside a perfectly-sized frame.
+      const act = WBY[g ? g.active : a.key];
+      if (!fits(act)) {
+        const o = innerFit(act);
+        clipped.push(a.key + "+" + b.key + " grouped -> " + act.key + " overflows by " + o.overflowX + "x" + o.overflowY);
+      }
       // Ungroup. A widget INHERITING the stack's box is intended (you sized that stack on
       // purpose), so don't demand the original size back. What must never happen is what Sub hit:
       // a widget landing at a size nobody chose, or shrinking/growing a bit more on every cycle.
@@ -132,6 +152,10 @@ const PAIRS = `(async () => {
       for (const w of [a, b]) {
         const got = cycle1[w.key];
         if (got[0] < 100 || got[1] < 60) broken.push(a.key + "+" + b.key + " -> " + w.key + " degenerate " + got.join("x"));
+        if (!fits(w)) {
+          const o = innerFit(w);
+          clipped.push(a.key + "+" + b.key + " ungrouped -> " + w.key + " overflows by " + o.overflowX + "x" + o.overflowY);
+        }
       }
       // Same cycle again: the size must SETTLE, not drift further each time.
       groupWidgets(a, b);
@@ -149,26 +173,27 @@ const PAIRS = `(async () => {
     }
   }
   ok("all 28 pairs group cleanly", groupBad.length === 0, groupBad.slice(0, 4).join(" | "));
+  ok("no pair leaves a widget's CONTENT clipped inside its box", clipped.length === 0,
+     clipped.length + " clipped: " + clipped.slice(0, 5).join(" | "));
   ok("no pair leaves a widget degenerate or drifting", broken.length === 0,
      broken.length + " broken: " + broken.slice(0, 4).join(" | "));
-  // A self-sizing widget is the one that CAN drift, so hold it to its natural size specifically.
-  await sleep(400); // measure() runs on a 150ms timer
-  const mr0 = frameBox(WBY.mining);
-  ok("self-sizing widget returns to its natural size after all that",
-     Math.abs(Math.round(mr0.width) - baseline.mining[0]) <= 4 && Math.abs(Math.round(mr0.height) - baseline.mining[1]) <= 4,
-     Math.round(mr0.width) + "x" + Math.round(mr0.height) + " want " + baseline.mining.join("x"));
-
-  // The specific pair Sub reported, checked end to end.
-  groupWidgets(WBY.mining, WBY.twitchChat);
-  await sleep(60);
-  detachFromGroup(WBY.mining);
   await sleep(200);
-  const mr = frameBox(WBY.mining);
-  ok("Sub's case: mining is whole after leaving a Twitch-chat stack",
-     Math.abs(Math.round(mr.width) - baseline.mining[0]) <= 4 && Math.abs(Math.round(mr.height) - baseline.mining[1]) <= 4,
-     Math.round(mr.width) + "x" + Math.round(mr.height) + " want " + baseline.mining.join("x"));
-  ok("mining exposes the remeasure hook grouping needs",
-     typeof document.getElementById("wf-mining").contentWindow.__widgetRemeasure === "function");
+  ok("every widget's content fits its box after all that", WIDGETS.every(fits),
+     WIDGETS.filter(w => !fits(w)).map(w => w.key + " " + JSON.stringify(innerFit(w))).join(" | "));
+
+  // The two pairs Sub called out by name, end to end. What matters is that the CONTENT fits both
+  // while stacked and after separating - frame size alone never revealed the bug.
+  for (const partner of ["twitchChat", "party"]) {
+    groupWidgets(WBY.mining, WBY[partner]);
+    await sleep(80);
+    const gOk = fits(WBY[GROUPS[0].active]);
+    detachFromGroup(WBY.mining);
+    await sleep(200);
+    ok("mining+" + partner + ": content fits stacked AND after separating",
+       gOk && fits(WBY.mining) && fits(WBY[partner]),
+       "stacked=" + gOk + " mining=" + JSON.stringify(innerFit(WBY.mining)) + " " + partner + "=" + JSON.stringify(innerFit(WBY[partner])));
+    resetWidget(WBY.mining); resetWidget(WBY[partner]);
+  }
   return out;
 })()`;
 
@@ -181,7 +206,7 @@ const CHROME = `(async () => {
   const bar = el(w).querySelector(".whead");
   ok("every widget has a title bar", [...document.querySelectorAll(".widget")].every(e => e.querySelector(".whood > .whead")));
   ok("bar carries title + move/reset/settings/close",
-     bar.querySelector(".wh-title") && bar.querySelectorAll(".wh-btn").length === 4,
+     bar.querySelector(".wh-title") && bar.querySelectorAll(".wh-right .wh-btn").length === 4,
      bar.querySelector(".wh-title") && bar.querySelector(".wh-title").textContent);
 
   // The hood hangs ABOVE the widget, so the bar can never cover content.
@@ -271,8 +296,8 @@ const CHROME = `(async () => {
   const bp = document.getElementById("panel");
   const bpbar = bp.querySelector(".whood > .whead");
   ok("Blueprint panel has the bar too", !!bpbar);
-  ok("Blueprint bar has all four controls", bpbar && bpbar.querySelectorAll(".wh-btn").length === 4,
-     bpbar && bpbar.querySelectorAll(".wh-btn").length);
+  ok("Blueprint bar has all four controls", bpbar && bpbar.querySelectorAll(".wh-right .wh-btn").length === 4,
+     bpbar && bpbar.querySelectorAll(".wh-right .wh-btn").length);
   ok("Blueprint's old top-right chrome is gone", !!document.getElementById("grip") && !!document.getElementById("grip").closest(".whead"));
   // NB the panel carries a 3D perspective tilt, so its projected rect and a child's don't share
   // an edge — assert the LAYOUT invariant (the hood is pinned to the panel's bottom) instead.

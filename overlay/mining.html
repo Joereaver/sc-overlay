@@ -231,13 +231,15 @@
      same-origin (no miningApi preload in an iframe, so CANVAS stays false — the self-geometry
      and shell-IPC blocks below are skipped). */
   body.embedded { overflow: visible; background: transparent; }
-  /* 🔑 margin MUST NOT be `auto` here. measure() sizes the iframe from this panel's right/bottom
-     edge, so a centred panel makes the measured size a function of the CURRENT iframe width — grow
-     the frame (which grouping does) and the next measure reports wider still, so it never returns
-     to its natural size and the panel renders cut off. Pinning it to the top-left makes measure a
-     stable fixed point. It also puts the panel flush with the frame, so the parent's bottom bar
-     meets the panel's own border instead of floating a margin away from it. */
-  body.embedded #panel { margin: 0; overflow: visible; transform: none; }
+  /* RESPONSIVE, like the Notepad/Party widgets: the parent owns the box and the panel simply
+     FILLS it, so dragging the corner gives you more room rather than zooming the text. This widget
+     used to size its own frame from its content, which made it the odd one out and broke every
+     stack it joined (a shared box has no single "content size"). Text size is a separate control
+     now — see the bar's settings cog. */
+  body.embedded #panel { margin: 0; width: 100%; height: 100%; transform: none;
+    display: flex; flex-direction: column; overflow: hidden; }
+  /* Whatever runs out of room scrolls instead of being clipped. */
+  body.embedded #panel > .body, body.embedded #panel > .rows, body.embedded #panel > .content { flex: 1 1 auto; min-height: 0; overflow: auto; }
   html.amd-lite body.embedded #panel { transform: none !important; }
 
   /* Move/reposition mode: whole panel becomes a drag surface with a banner (identical to
@@ -867,25 +869,10 @@
     // panel, plus the cog menu when it's open — so it sizes the iframe snugly (no clipped menu,
     // no dead interactive halo below the widget).
     $("panel").addEventListener("pointerdown", () => host()?.summonCog?.());
-    let lastW = 0, lastH = 0;
-    const measure = () => {
-      const p = $("panel").getBoundingClientRect();
-      if (p.width < 2 || p.height < 2) return; // parent has us display:none (armed-hidden) — keep last size, don't shrink to nothing
-      let right = p.right, bottom = p.bottom;
-      // (Corner flair used to be unioned in here so the iframe contained its overhang. The
-      // trinkets now ride the parent's sliding title bar, which the parent sizes itself.)
-      const menu = $("cogMenu");
-      if (menu.classList.contains("open")) { const m = menu.getBoundingClientRect(); right = Math.max(right, m.right); bottom = Math.max(bottom, m.bottom); }
-      const w = Math.ceil(right + 8), h = Math.ceil(bottom + 8);
-      if (w !== lastW || h !== lastH) { lastW = w; lastH = h; host()?.setSize?.(w, h); }
-    };
-    // 🔑 Force the next measure() through the change-gate above. Grouping takes this widget's
-    // frame sizing away (the stack shares one box) and the parent ignores setSize while grouped —
-    // so on UNGROUP the content size hasn't changed, the gate suppresses the call, and the frame
-    // would keep the group's box forever, rendering the panel cut off. The parent calls this
-    // whenever the widget leaves a stack.
-    window.__widgetRemeasure = () => { lastW = 0; lastH = 0; measure(); };
-    setInterval(measure, 150); measure();
+    // NO self-sizing here any more. This widget used to measure its own content and push a frame
+    // size to the parent, which is precisely what made it incompatible with grouping: a stack
+    // shares ONE box, so a member that insists on its own size fights it and ends up clipped, at a
+    // size that then drifts further on every merge. The parent owns the box; we fill it.
     host()?.ready?.();
   }
   // This widget's in-panel cog was REMOVED: the parent canvas's bottom bar now carries a

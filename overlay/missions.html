@@ -234,7 +234,7 @@
   /* Duct-tape corner accents — Drake's field-repair design language, so they belong to
      the Drake theme only. Sit on the panel (tilt with it), hang off the corner, lap a
      little onto it without covering the header/footer text. */
-  .tape { display: none; position: absolute; z-index: 6; pointer-events: none; user-select: none;
+  .tape { display: none; position: absolute; z-index: 31; pointer-events: none; user-select: none;
     filter: drop-shadow(0 3px 5px rgba(0,0,0,.5)); }
   :root[data-theme="drake"] #panel .tape, :root[data-theme="drake"] .widget.flair .tape { display: block; }
   .tape.tr { width: 60px; top: -20px; right: -22px; transform: rotate(50deg); }
@@ -244,7 +244,7 @@
 
   /* Anvil corner hardware — flathead bolt + screw head, so the HUD looks bolted into the
      cockpit. Anvil theme only; sits on the panel's outer corners (needs overflow:visible). */
-  .bolt { display: none; position: absolute; z-index: 6; pointer-events: none; user-select: none;
+  .bolt { display: none; position: absolute; z-index: 31; pointer-events: none; user-select: none;
     filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); }
   :root[data-theme="anvil"] #panel .bolt, :root[data-theme="anvil"] .widget.flair .bolt { display: block; }
   .bolt.tr { width: 30px; top: -9px; right: -9px; transform: rotate(12deg); }
@@ -278,7 +278,7 @@
      Generic corner slots (background-image set per theme), same idea as Drake's tape /
      Anvil's bolts but data-driven: Argo + MISC get machine cogs (two distinct cogs each),
      Grey's gets a rusty bolt with exposed wires. Sit just off the panel's corners. */
-  .corner { display: none; position: absolute; z-index: 6; pointer-events: none;
+  .corner { display: none; position: absolute; z-index: 31; pointer-events: none;
     background-size: contain; background-repeat: no-repeat; filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); }
   :root[data-theme="argo"] .corner, :root[data-theme="misc"] .corner,
   :root[data-theme="greys"] .corner { display: block; }
@@ -470,7 +470,10 @@
   .widget.moving .whead, #panel.moving .whead { cursor: move; }
   .widget.moving .whead .wh-btn, .widget.moving .whead .gtab,
   #panel.moving .whead .wh-btn { pointer-events: none; }
-  .wh-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+  /* Left padding clears the bottom-left trinket, which rides ON TOP of the bar (z 31 vs 30) so it
+     never slides behind it. */
+  .wh-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px;
+    overflow: hidden; padding-left: 26px; }
   .wh-id { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
   .wh-tabs { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; }
   /* A grouped widget shows its stack's TABS in place of its own name — the tabs already name it. */
@@ -491,6 +494,20 @@
      — this button must never quietly stand in for them. */
   .wh-cog { display: none; }
   .widget.has-settings .wh-cog, #panel .wh-cog { display: block; }
+
+  /* Per-widget settings popover, opened from the bar's cog. Every widget gets TEXT SIZE — the
+     widgets are responsive (drag the corner for more ROOM), so how big the text is has to be a
+     separate control, or a narrow widget truncates and a big one just wastes space. Widgets whose
+     page has its own panel (mining, SC Feed) also get a button through to it. */
+  .wcfg { display: none; position: absolute; right: 4px; bottom: calc(100% + 4px); z-index: 34;
+    min-width: 176px; padding: 8px 9px; border-radius: 8px; background: var(--menu-bg);
+    border: 1px solid var(--border); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); }
+  .whead.cfgopen .wcfg { display: block; }
+  .wcfg-row { display: flex; align-items: center; gap: 6px; }
+  .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-text); }
+  .wcfg-val { font-family: var(--mono); font-size: 10px; color: var(--faint); min-width: 34px; text-align: right; }
+  .wcfg-more { margin-top: 7px; width: 100%; }
 
   /* Group tabs — left half of the same bar. */
   .gtab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1960,8 +1977,12 @@
   const WIDGETS = [
     {
       key: "mining", page: "mining.html", title: "Mining Assistant",
-      shape: "scaled", angle: -5, allow: "autoplay", flair: true,
-      def: { x: 40, y: 60 }, size: { w: 416, h: 380 },
+      // Box-shaped like every other widget as of 2026-07-25. It used to be "scaled" (tilt+zoom as
+      // a unit, sizing its own frame from its content) and that made it the odd one out: a stack
+      // shares ONE box, so a member insisting on its own size fought it, rendered clipped, and
+      // drifted further on every merge. Responsive + a text-size control is the better trade.
+      allow: "autoplay", flair: true,
+      def: { x: 40, y: 60 }, size: { w: 416, h: 560, minW: 300, maxW: 1400, minH: 240, maxH: 1600 },
       // A hidden-but-ARMED mining widget stays subscribed so auto-show can pop it on a scan — so
       // it has to be TOLD it's hidden or it announces from off-screen. The rule for every widget:
       // invisible means no sound and no work beyond whatever is needed to un-hide itself.
@@ -1972,15 +1993,6 @@
         requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
         getAngle: () => (w.s.angle != null ? w.s.angle : w.angle),
         setAngle: (deg) => { w.s.angle = Number(deg); applyFrame(w); },
-        // The embedded page measures its own content and sizes the frame snugly. Inline
-        // width/height wins over the CSS vars, which is what keeps it fitted. Ignored while
-        // GROUPED — there the stack's shared box wins, or this would fight it every tick.
-        setSize: (wpx, hpx) => {
-          if (groupOf(w)) return;
-          const f = frameEl(w); if (!f) return;
-          if (wpx) f.style.width = wpx + "px";
-          if (hpx) f.style.height = hpx + "px";
-        },
       }),
     },
     {
@@ -2081,6 +2093,13 @@
         + '<button type="button" class="wh-btn wh-cog" title="' + escapeAttr(w.title) + ' settings">⚙</button>'
         + '<button type="button" class="wh-btn wh-close" title="Close ' + escapeAttr(w.title) + '">✕</button>'
         + '</span>'
+        + '<div class="wcfg">'
+        + '<div class="wcfg-row"><span class="wcfg-lbl">Text size</span>'
+        + '<button type="button" class="wh-btn wcfg-dn" title="Smaller text">A−</button>'
+        + '<button type="button" class="wh-btn wcfg-up" title="Bigger text">A+</button>'
+        + '<span class="wcfg-val"></span></div>'
+        + '<button type="button" class="wh-btn wcfg-more" title="This widget’s own settings">More settings…</button>'
+        + '</div>'
         + '</div></div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -2192,7 +2211,7 @@
       for (const k of survivors) {
         const m = WBY[k]; if (!m) continue;
         m.s.x = g.x; m.s.y = g.y; m.s.w = g.w; m.s.h = g.h;
-        persistW(m); applyFrame(m); remeasure(m);
+        persistW(m); applyFrame(m);
         const el = wEl(m); if (el) el.style.display = m.s.visible ? "" : "none";
       }
     } else {
@@ -2200,67 +2219,45 @@
     }
     persistW(w); applyFrame(w);
     const el = wEl(w); if (el) el.style.display = w.s.visible ? "" : "none";
-    remeasure(w);
     renderGroupTabs();
     saveGroups();
   }
 
-  // A page that sizes its own frame (mining) had that taken away while grouped, and its internal
-  // change-gate would suppress the call that restores it — so ask it to re-measure on the way out
-  // or it renders cut off inside the box the group left behind.
-  function remeasure(w) {
-    if (groupOf(w)) return;
-    try { frameWin(w)?.__widgetRemeasure?.(); } catch { /* iframe gone */ }
-  }
-
-  // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
-  document.addEventListener("click", (e) => {
-    const btn = e.target instanceof Element ? e.target.closest(".gtab") : null; if (!btn) return;
-    e.stopPropagation();
-    const g = GROUPS.find((x) => x.id === btn.dataset.g); if (!g) return;
-    if (btn.classList.contains("gdetach")) {
-      const active = WBY[g.active]; if (active) detachFromGroup(active);
-      return;
-    }
-    const w = WBY[btn.dataset.k]; if (!w) return;
-    g.active = w.key;
-    if (!w.s.visible && window.overlayApi) { // clicking a closed tab reopens it, via the shell
-      const setter = "set" + w.key.charAt(0).toUpperCase() + w.key.slice(1);
-      window.overlayApi[setter]?.(true);
-    }
-    refreshGroupDisplay(g);
-    saveGroups();
-  });
-
-  // Which widget's BAR is under the cursor — the drop target while dragging. Aiming at the bar
-  // (rather than a strip of the panel) is why arrange mode keeps bars out: you drag one bar onto
-  // another, and both ends of the gesture are the same visible thing.
-  function dropTargetAt(cx, cy, dragging) {
-    for (const t of WIDGETS) {
-      if (t === dragging) continue;
-      const el = wEl(t); if (!el || el.style.display === "none") continue;
-      const gt = groupOf(t), gd = groupOf(dragging);
-      if (gt && gd && gt === gd) continue; // already stacked together
-      const bar = el.querySelector(".whead"); if (!bar) continue;
-      const r = bar.getBoundingClientRect();
-      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return t;
-    }
-    return null;
-  }
-  let dropHighlighted = null;
-  function highlightDrop(t) {
-    if (dropHighlighted === t) return;
-    if (dropHighlighted) wEl(dropHighlighted)?.classList.remove("droptarget");
-    dropHighlighted = t;
-    if (t) wEl(t)?.classList.add("droptarget");
-  }
-
   function persistW(w) {
     const layout = w.shape === "scaled"
-      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle }
-      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h };
+      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text }
+      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, text: w.s.text };
     window.overlayApi?.saveWidget?.(w.key, layout);
   }
+
+  // ── Per-widget text size ────────────────────────────────────────────────────────────────
+  // Every widget is responsive now: dragging the corner gives you more ROOM, not bigger text. So
+  // how big the text is has to be its own control — a narrow widget would otherwise truncate or
+  // grow a scrollbar, while someone with a spare monitor just gets acres of whitespace.
+  // Applied as a `zoom` on the embedded document (same-origin), which scales its content without
+  // touching the box the parent owns. Persisted per widget alongside the layout.
+  const TEXT_MIN = 0.7, TEXT_MAX = 2.0;
+  const textScale = (w) => (w.s.text != null ? w.s.text : 1);
+  function applyTextScale(w) {
+    try {
+      const doc = frameEl(w)?.contentDocument;
+      if (doc && doc.documentElement) doc.documentElement.style.zoom = textScale(w);
+    } catch { /* iframe not ready — reapplied on load/ready */ }
+  }
+  function showTextScale(w) {
+    const v = wEl(w)?.querySelector(".wcfg-val");
+    if (v) v.textContent = Math.round(textScale(w) * 100) + "%";
+  }
+  function bumpTextScale(w, by) {
+    w.s.text = Math.round(Math.max(TEXT_MIN, Math.min(TEXT_MAX, textScale(w) + by)) * 100) / 100;
+    applyTextScale(w); showTextScale(w); persistW(w);
+  }
+  // Close any open settings popover on an outside click.
+  document.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t instanceof Element && t.closest(".wcfg, .wh-cog")) return;
+    document.querySelectorAll(".whead.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+  });
 
   // Put ONE widget back to its default spot and size. The tray's "Reset overlay layout" is
   // all-or-nothing (it deletes widgets.json), which is too blunt when a single widget has been
@@ -2269,11 +2266,11 @@
   function resetWidget(w) {
     if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
     w.s.x = w.def.x; w.s.y = w.def.y;
-    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null;
+    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null;
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
-    remeasure(w); // a self-sizing widget must re-fit, or reset leaves it at its last box
+    applyTextScale(w);
     persistW(w);
   }
 
@@ -2294,10 +2291,10 @@
   // Create the iframe (idempotent). Loading it starts whatever the page does — SSE, polling,
   // audio — so only arm it when the widget is shown, or when the shell asks for it to be armed
   // hidden (mining's auto-show).
-  // Does this page have settings of its own? Only then does its per-widget cog appear.
-  // 🔑 Probed on the iframe's LOAD event, not just on the page's ready() call: a page can (and
-  // mining does) call ready() before it finishes defining its own exports, so a ready-only probe
-  // misses them and the cog never shows.
+  // Does this page have settings of its own? That decides whether the cog's popover offers a way
+  // through to them (every widget gets text size regardless).
+  // 🔑 Probed on the iframe's LOAD event, not just on the page's ready() call: a page can call
+  // ready() before it finishes defining its own exports, so a ready-only probe misses them.
   function probeSettings(w) {
     try { wEl(w)?.classList.toggle("has-settings", typeof frameWin(w)?.__widgetSettings === "function"); }
     catch { /* iframe gone */ }
@@ -2306,7 +2303,7 @@
   function ensureFrame(w) {
     if (w.armed) return;
     const f = frameEl(w); if (!f) return;
-    f.addEventListener("load", () => probeSettings(w));
+    f.addEventListener("load", () => { probeSettings(w); applyTextScale(w); });
     const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
     const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
     f.src = "/" + w.page + "?embedded=1&theme=" + encodeURIComponent(theme) + lite;
@@ -2351,7 +2348,7 @@
   // are identical for all of them, so only the extras come from the table.
   for (const w of WIDGETS) {
     const base = {
-      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); },
+      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); applyTextScale(w); },
       // Every embedded page calls this on pointerdown, so it doubles as "the user is engaging
       // THIS widget" — which is what reveals its header even if the wrapper never sees the
       // cursor because an iframe is under it.
@@ -2392,6 +2389,47 @@
   // Re-read the chart PNG whenever the shell asks (a re-exported chart shows up without a restart).
   window.overlayApi?.onBindingChartReload?.(() => { try { frameWin(WBY.bindingChart)?.__bindingReload?.(); } catch { /* not loaded */ } });
 
+  // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
+  document.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest(".gtab") : null; if (!btn) return;
+    e.stopPropagation();
+    const g = GROUPS.find((x) => x.id === btn.dataset.g); if (!g) return;
+    if (btn.classList.contains("gdetach")) {
+      const active = WBY[g.active]; if (active) detachFromGroup(active);
+      return;
+    }
+    const w = WBY[btn.dataset.k]; if (!w) return;
+    g.active = w.key;
+    if (!w.s.visible && window.overlayApi) { // clicking a closed tab reopens it, via the shell
+      const setter = "set" + w.key.charAt(0).toUpperCase() + w.key.slice(1);
+      window.overlayApi[setter]?.(true);
+    }
+    refreshGroupDisplay(g);
+    saveGroups();
+  });
+
+  // Which widget's BAR is under the cursor — the drop target while dragging. Aiming at the bar
+  // (rather than a strip of the panel) is why arrange mode keeps bars out: you drag one bar onto
+  // another, and both ends of the gesture are the same visible thing.
+  function dropTargetAt(cx, cy, dragging) {
+    for (const t of WIDGETS) {
+      if (t === dragging) continue;
+      const el = wEl(t); if (!el || el.style.display === "none") continue;
+      const gt = groupOf(t), gd = groupOf(dragging);
+      if (gt && gd && gt === gd) continue; // already stacked together
+      const bar = el.querySelector(".whead"); if (!bar) continue;
+      const r = bar.getBoundingClientRect();
+      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return t;
+    }
+    return null;
+  }
+  let dropHighlighted = null;
+  function highlightDrop(t) {
+    if (dropHighlighted === t) return;
+    if (dropHighlighted) wEl(dropHighlighted)?.classList.remove("droptarget");
+    dropHighlighted = t;
+    if (t) wEl(t)?.classList.add("droptarget");
+  }
   if (CANVAS) {
     // Load saved layouts (all widgets share widgets.json, keyed by `key`), then wire drag/resize.
     (async () => {
@@ -2481,10 +2519,22 @@
         else setWidgetVisible(w, false); // no shell (OBS/browser) — hide locally
       });
       // THIS widget's own settings, not the app's — global settings live on the global cog and the
-      // tray (Sub, 2026-07-24). The button only exists when the embedded page exposes a panel to
-      // open (see the `has-settings` probe in the bridge), so it never quietly stands in for them.
+      // tray (Sub, 2026-07-24). Opens a small popover carrying TEXT SIZE (every widget has it,
+      // since they're all responsive now) plus a way through to the page's own panel if it has one.
+      const bar = el.querySelector(".whead");
       el.querySelector(".wh-cog")?.addEventListener("click", (e) => {
         e.stopPropagation();
+        const open = !bar.classList.contains("cfgopen");
+        document.querySelectorAll(".whead.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+        bar.classList.toggle("cfgopen", open);
+        if (open) { touchWidget(w); showTextScale(w); }
+      });
+      el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
+      el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
+      el.querySelector(".wcfg-up")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, +0.1); });
+      el.querySelector(".wcfg-more")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        bar.classList.remove("cfgopen");
         try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
       });
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
