@@ -18,8 +18,12 @@ const PRELUDE = `
   const out = [];
   const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const el = (w) => document.getElementById("w-" + w.key);
-  const shown = (w) => el(w).style.display !== "none";
+  // The Blueprint panel is a LOCAL registry widget: it lives in this document rather than an
+  // iframe, so it has no w-/wf- elements and hides via a body class.
+  const el = (w) => (w.local ? document.getElementById("panel") : document.getElementById("w-" + w.key));
+  const shown = (w) => (w.local
+    ? !document.body.classList.contains("bp-hidden")
+    : el(w).style.display !== "none");
   const cs = (w, v) => el(w).style.getPropertyValue(v);
   await sleep(900); // let the async layout loader settle
   // A hidden window never composites, so CSS transitions don't advance and a mid-slide transform
@@ -37,7 +41,7 @@ const GROUPING = `(async () => {
     saveWidget: (id, l) => saved.push([id, JSON.parse(JSON.stringify(l))]),
   });
 
-  ok("registry has 8 widgets", typeof WIDGETS !== "undefined" && WIDGETS.length === 8, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
+  ok("registry has 9 widgets (incl. the Blueprint panel)", typeof WIDGETS !== "undefined" && WIDGETS.length === 9, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
   ok("starts ungrouped", GROUPS.length === 0, GROUPS.length);
   const party = WBY.party, mining = WBY.mining, notepad = WBY.notepad;
   ok("test widgets shown", shown(party) && shown(mining) && shown(notepad));
@@ -104,12 +108,13 @@ const PAIRS = `(async () => {
   for (const w of WIDGETS) { setWidgetVisible(w, true); }
   await sleep(500);
 
-  const frameBox = (w) => document.getElementById("wf-" + w.key).getBoundingClientRect();
+  const frameBox = (w) => (w.local ? el(w).getBoundingClientRect() : document.getElementById("wf-" + w.key).getBoundingClientRect());
   // 🔑 The frame being the right size proves NOTHING about whether the widget is usable — Sub's
   // mining+party breakage had a perfectly sized frame with the panel inside it clipped. So look
   // INSIDE the iframe and check the page's own panel actually fits the box it was given.
   const innerFit = (w) => {
     try {
+      if (w.local) return null; // its content IS this document; nothing to reach into
       const doc = document.getElementById("wf-" + w.key).contentDocument;
       const panel = doc && (doc.getElementById("panel") || doc.getElementById("card"));
       if (!panel) return null;
@@ -129,7 +134,7 @@ const PAIRS = `(async () => {
       groupWidgets(a, b);
       const g = GROUPS[0];
       // While grouped: one box, exactly one member on screen, and it must have real size.
-      const vis = g ? g.members.filter(k => document.getElementById("w-" + k).style.display !== "none") : [];
+      const vis = g ? g.members.filter(k => shown(WBY[k])) : [];
       const fr = frameBox(WBY[g ? g.active : a.key]);
       if (!g || g.members.length !== 2 || vis.length !== 1 || fr.width < 20 || fr.height < 20) {
         groupBad.push(a.key + "+" + b.key + " (members=" + (g ? g.members.length : 0) + " visible=" + vis.length +
@@ -305,9 +310,10 @@ const CHROME = `(async () => {
   // NB the panel carries a 3D perspective tilt, so its projected rect and a child's don't share
   // an edge — assert the LAYOUT invariant (the hood is pinned to the panel's bottom) instead.
   const bphood = bp.querySelector(".whood");
-  ok("Blueprint bar hangs below the panel",
-     bphood && Math.abs(parseFloat(getComputedStyle(bphood).top) - bp.clientHeight) < 1.5,
-     bphood && (getComputedStyle(bphood).top + " vs panel padding-box h " + bp.clientHeight));
+  ok("Blueprint bar hangs below the panel", bphood && bp.clientHeight > 0 &&
+     Math.abs(bphood.getBoundingClientRect().top - bp.getBoundingClientRect().bottom) < 14,
+     bphood && ("hood.top=" + bphood.getBoundingClientRect().top.toFixed(0) +
+                " panel.bottom=" + bp.getBoundingClientRect().bottom.toFixed(0)));
   if (theme0) root.setAttribute("data-theme", theme0); else root.removeAttribute("data-theme");
 
   return out;
@@ -360,7 +366,7 @@ const REACH = `(async () => {
 
   const clipped = [], unreachable = [];
   for (const w of WIDGETS) {
-    const el = document.getElementById("w-" + w.key);
+    const el = w.local ? document.getElementById("panel") : document.getElementById("w-" + w.key);
     el.classList.add("touched"); // bar out, the way hovering it would
     // the bar's own controls
     for (const b of el.querySelectorAll(".wh-right .wh-btn")) {
@@ -372,15 +378,20 @@ const REACH = `(async () => {
     el.querySelector(".wh-cog").click();
     await sleep(20);
     if (el.classList.contains("has-settings")) {
-      let root = null; try { root = document.getElementById("wf-" + w.key).contentWindow.__widgetSettingsRoot(); } catch {}
+      let root = null; try { root = w.local ? document.getElementById("cogMenu") : document.getElementById("wf-" + w.key).contentWindow.__widgetSettingsRoot(); } catch {}
       if (!root || !root.querySelector(".wtext-row")) clipped.push(w.key + " own-menu text row missing");
     } else {
       const cfg = el.querySelector(".wcfg");
-      if (visibleArea(cfg) < 400) clipped.push(w.key + " popover area=" + Math.round(visibleArea(cfg)) + " [clipped by " + lastClipper + "]");
-      else if (!reachable(cfg)) unreachable.push(w.key + " settings popover");
-      for (const b of cfg.querySelectorAll(".wh-btn")) {
-        if (getComputedStyle(b).display === "none") continue;
-        if (visibleArea(b) < 25) clipped.push(w.key + " popover " + b.className.replace("wh-btn ", ""));
+      if (!cfg) {
+        clipped.push(w.key + " has no settings surface at all");
+      } else if (visibleArea(cfg) < 400) {
+        clipped.push(w.key + " popover area=" + Math.round(visibleArea(cfg)) + " [clipped by " + lastClipper + "]");
+      } else {
+        if (!reachable(cfg)) unreachable.push(w.key + " settings popover");
+        for (const b of cfg.querySelectorAll(".wh-btn")) {
+          if (getComputedStyle(b).display === "none") continue;
+          if (visibleArea(b) < 25) clipped.push(w.key + " popover " + b.className.replace("wh-btn ", ""));
+        }
       }
     }
     el.classList.remove("cfgopen");

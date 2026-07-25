@@ -377,12 +377,21 @@
   body.canvas { overflow: hidden; }
   #panel.canvas {
     position: absolute; left: var(--wx, 0px); top: var(--wy, 0px); margin: 0;
+    width: var(--ww, 380px); height: var(--wh, 560px);
+    /* NOT overflow:hidden - the sliding bar, the folder tab and the trinkets all hang outside
+       this box, and clipping here is what made the bar's buttons unreachable. Content is
+       contained by .pool's own scroll instead. */
+    display: flex; flex-direction: column;
     /* Angle is PER-WIDGET (--wangle) in canvas mode, so a left + a right widget can each angle
        inward independently. (The base #panel above keeps the global --twist for OBS sources.) */
-    transform: perspective(1700px) rotateY(var(--wangle, 0deg)) scale(var(--wscale, 1));
+    /* RESPONSIVE on par with every other widget: the corner drag gives more ROOM and text size
+       is its own control. The tilt stays - that is the HUD look, not a sizing mechanism. */
+    transform: perspective(1700px) rotateY(var(--wangle, 0deg));
     transform-origin: 0 0; /* anchor resize/scale (and tilt) at the top-left corner — top-left stays put */
   }
-  html.amd-lite #panel.canvas { transform: scale(var(--wscale, 1)) !important; } /* keep scale, drop tilt/blur */
+  html.amd-lite #panel.canvas { transform: none !important; }
+  /* The pool is what grows and scrolls; header and footer stay put. */
+  #panel.canvas .pool { flex: 1 1 auto; min-height: 0; overflow: auto; } /* keep scale, drop tilt/blur */
   /* In canvas mode the window is fixed full-screen, so OS window-drag regions do nothing —
      dragging is done in JS during arrange mode. Neutralize the app-region drag handles. */
   #panel.canvas .head { -webkit-app-region: no-drag; cursor: default; }
@@ -1053,8 +1062,8 @@
     <img class="tape bl" alt="" src="tape-br.webp">
     <img class="bolt tr" alt="" src="anvil-bolt-tl.webp">
     <img class="bolt bl" alt="" src="anvil-screw-br.webp">
-    <div id="moveBanner"><div class="movebox">⠿ Drag to move · corner to resize<button id="moveDone">Done</button></div></div>
-    <div id="resizeHandle" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
+    <div id="moveBanner" class="wmove"><div class="movebox">⠿ Drag to move · corner to resize<button id="moveDone" class="wdone">Done</button></div></div>
+    <div id="resizeHandle" class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
     <!-- Same sliding chrome as every registry widget. This panel could never take a TOP bar (its
          manufacturer folder tab owns that edge), which is exactly why the bar moved to the bottom. -->
     <div class="whood"><div class="whead">
@@ -1198,9 +1207,8 @@
   // panel keeps its original fixed layout there).
   const CANVAS = !!window.overlayApi || new URLSearchParams(location.search).has("canvas");
   // This widget's layout inside the canvas. null = unset (falls back to a default/baseline).
-  const WIDGET_ID = "blueprint";
   const DEFAULT_ANGLE = 5; // this widget's resting skew until the user changes it (angles right-in)
-  let widget = { x: null, y: null, scale: null };
+  // (the panel's layout state lives on its registry entry - see WBY.blueprint.s)
   // Global cog is SUMMONED, not always-on: it appears when a widget's cog is clicked (this
   // window's, or the Mining window's via IPC) and fades out again when unused, so it's only
   // there when the person needs it. Shared state so the hub can keep it alive while open.
@@ -1885,56 +1893,16 @@
   // Only active in canvas mode (Electron overlay-app, or ?canvas=1). The panel is positioned
   // by --wx/--wy and sized by --wscale; arrange mode (move mode) lets the user drag it and
   // drag the corner to resize, persisting the layout to widgets.json via the shell.
-  function widgetScale() {
-    return widget.scale != null ? widget.scale : Math.max(50, Math.min(200, Number(PREFS.overlayScale) || 100)) / 100;
-  }
-  function applyWidget() {
-    if (!CANVAS) return;
-    const p = $("panel");
-    // widget.x/y are PRIMARY-relative; add the primary's offset within the (multi-monitor) canvas
-    // so an existing layout stays on the primary and a leftward drag carries onto another monitor.
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0;
-    if (widget.x != null) p.style.setProperty("--wx", (widget.x + ox) + "px");
-    if (widget.y != null) p.style.setProperty("--wy", (widget.y + oy) + "px");
-    p.style.setProperty("--wscale", widgetScale());
-    p.style.setProperty("--wangle", (widget.angle != null ? widget.angle : DEFAULT_ANGLE) + "deg");
-  }
-  // Primary-display offset/size within the full-desktop canvas (fetched at init). Falls back to
-  // the whole window so a single-monitor / non-electron context still works.
-  let canvasInfo = null;
-  // Publish the PRIMARY monitor's rect within the (multi-monitor) canvas as CSS vars, so screen-
-  // anchored chrome (the arrange banner/frame + summoned cog) pins to the primary, never a void corner.
-  function applyCanvasVars() {
-    const ci = canvasInfo; if (!ci) return;
-    const s = document.documentElement.style, vw = ci.vw != null ? ci.vw : (ci.px + ci.pw);
-    s.setProperty("--prim-top", ci.py + "px");
-    s.setProperty("--prim-left", ci.px + "px");
-    s.setProperty("--prim-cx", (ci.px + ci.pw / 2) + "px");
-    s.setProperty("--prim-right", (vw - (ci.px + ci.pw)) + "px");
-    s.setProperty("--prim-w", ci.pw + "px");
-    s.setProperty("--prim-h", ci.ph + "px");
-  }
-  // Default resting spot: top-right of the PRIMARY display (mirrors where the old panel sat), so a
-  // new/reset widget never lands on a left/top secondary monitor or in the void between them.
-  function defaultWidgetPos() {
-    const w = 380 * widgetScale();
-    const ci = canvasInfo || { px: 0, py: 0, pw: window.innerWidth, ph: window.innerHeight };
-    // primary-relative; applyWidget() adds the primary's canvas offset so this lands on the primary
-    widget.x = Math.max(8, Math.round(ci.pw - w - 40));
-    widget.y = 40;
-  }
-  function persistWidget() {
-    window.overlayApi?.saveWidget?.(WIDGET_ID, { x: widget.x, y: widget.y, scale: widget.scale, angle: widget.angle, visible: widget.visible });
-  }
-  // Blueprint widget on/off (from the hub). Hides only the panel — the shell window stays alive
-  // to host the global chrome. Persisted so it survives a restart.
-  let bpHidden = false;
-  function setBlueprintVisible(on) {
-    bpHidden = !on;
-    widget.visible = on;
-    document.body.classList.toggle("bp-hidden", bpHidden);
-    persistWidget();
-  }
+  // ── The Blueprint panel is a REGISTRY widget now ────────────────────────────────────────
+  // Its geometry, drag, resize, grouping and text size all run through the same code as every
+  // other widget (WBY.blueprint, `local: true`). What survives here are thin aliases, so the many
+  // existing call sites keep working while there is still exactly one source of truth.
+  const BP = () => WBY.blueprint;
+  function applyWidget() { applyFrame(BP()); }
+  function persistWidget() { persistW(BP()); }
+  function defaultWidgetPos() { BP().defFn(BP()); }
+  function setBlueprintVisible(on) { setWidgetVisible(BP(), on); }
+
   // Pointer-drag helper: track by delta so the panel's transform (twist/scale) never fights it.
   // Holds a shell "drag lock" for the gesture so the (otherwise hover-gated) window stays
   // interactive even if the pointer briefly outruns the widget.
@@ -1951,6 +1919,21 @@
     window.addEventListener("pointerup", up);
   }
 
+  // Primary-display offset/size within the full-desktop canvas (fetched at init). Falls back to
+  // the whole window so a single-monitor / non-electron context still works.
+  let canvasInfo = null;
+  // Publish the PRIMARY monitor's rect within the (multi-monitor) canvas as CSS vars, so screen-
+  // anchored chrome (the arrange banner/frame + summoned cog) pins to the primary, never a void corner.
+  function applyCanvasVars() {
+    const ci = canvasInfo; if (!ci) return;
+    const s = document.documentElement.style, vw = ci.vw != null ? ci.vw : (ci.px + ci.pw);
+    s.setProperty("--prim-top", ci.py + "px");
+    s.setProperty("--prim-left", ci.px + "px");
+    s.setProperty("--prim-cx", (ci.px + ci.pw / 2) + "px");
+    s.setProperty("--prim-right", (vw - (ci.px + ci.pw)) + "px");
+    s.setProperty("--prim-w", ci.pw + "px");
+    s.setProperty("--prim-h", ci.ph + "px");
+  }
   // ══ Canvas widgets ═══════════════════════════════════════════════════════════════════════
   // Every embedded widget is the same object: an iframe on THIS canvas whose geometry this shell
   // owns (one window → no cross-window z-order bugs), whose visibility the shell (main.cjs)
@@ -1978,6 +1961,19 @@
   // Binding Chart were raised to 6000×3000 (they hold a whole website / a dense chart); the rest
   // keep the tighter caps they shipped with.
   const WIDGETS = [
+    {
+      // The main Blueprint panel. A registry widget like any other so it can be GROUPED (Battaglia
+      // + missions was the pairing Sub wanted), but LOCAL: it lives in this document rather than an
+      // iframe, so it has no page to load, no theme to push and no bridge to talk over.
+      key: "blueprint", local: true, title: "Blueprints", flair: true,
+      size: { w: 380, h: 560, minW: 300, maxW: 1400, minH: 240, maxH: 1600 },
+      // Default resting spot: top-right of the PRIMARY display, where this panel has always sat.
+      defFn: (w) => {
+        const ci = canvasInfo || { px: 0, py: 0, pw: window.innerWidth, ph: window.innerHeight };
+        w.s.x = Math.max(8, Math.round(ci.pw - (w.s.w != null ? w.s.w : w.size.w) - 40));
+        w.s.y = 40;
+      },
+    },
     {
       key: "mining", page: "mining.html", title: "Mining Assistant",
       // Box-shaped like every other widget as of 2026-07-25. It used to be "scaled" (tilt+zoom as
@@ -2057,20 +2053,38 @@
   // Runtime state hangs off each entry as `.s` so it never collides with the config above.
   const WBY = {};
   for (const w of WIDGETS) {
-    w.s = { x: null, y: null, w: null, h: null, scale: null, angle: null, visible: false };
+    // The Blueprint panel is the app's main surface, so it starts SHOWN; every other widget is
+    // opt-in and starts hidden.
+    w.s = { x: null, y: null, w: null, h: null, scale: null, angle: null, visible: !!w.local };
     w.armed = false; // iframe src is set (page live) — true even while hidden, for auto-show
     WBY[w.key] = w;
   }
 
-  const wEl = (w) => $("w-" + w.key);
-  const frameEl = (w) => $("wf-" + w.key);
+  const wEl = (w) => (w.local ? $("panel") : $("w-" + w.key));
+  const frameEl = (w) => (w.local ? null : $("wf-" + w.key));
   const frameWin = (w) => { try { return frameEl(w)?.contentWindow || null; } catch { return null; } };
+  // A local widget's settings live in THIS document, reached directly rather than over the bridge.
+  const wSettingsRoot = (w) => {
+    if (w.local) return $("cogMenu");
+    try { return frameWin(w)?.__widgetSettingsRoot?.() || null; } catch { return null; }
+  };
+  const wOpenSettings = (w) => {
+    if (w.local) { $("cogMenu")?.classList.add("open"); $("cog")?.classList.add("open"); return; }
+    try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
+  };
+  function showEl(w, vis) {
+    if (w.local) { document.body.classList.toggle("bp-hidden", !vis); return; }
+    const el = wEl(w); if (el) el.style.display = vis ? "" : "none";
+  }
+  const wShown = (w) => (w.local
+    ? !document.body.classList.contains("bp-hidden")
+    : (wEl(w) && wEl(w).style.display !== "none"));
   const wScale = (w) => (w.s.scale != null ? w.s.scale : Math.max(50, Math.min(200, Number(PREFS.overlayScale) || 100)) / 100);
 
   // Generate every widget's markup into #widgets (see the container in the body).
   function buildWidgetEls() {
     const host = $("widgets"); if (!host) return;
-    host.innerHTML = WIDGETS.map((w) => {
+    host.innerHTML = WIDGETS.filter((w) => !w.local).map((w) => {
       const cls = "widget" + (w.shape === "scaled" ? " scaled" : "") + (w.notifier ? " notifier" : "")
         + (w.flair ? " flair" : "");
       const style = "display:none" + (w.z ? ";--wz:" + w.z : "");
@@ -2155,7 +2169,7 @@
   function refreshGroupDisplay(g) {
     for (const k of g.members) {
       const w = WBY[k], el = wEl(w); if (!w || !el) continue;
-      el.style.display = (w.s.visible && g.active === k) ? "" : "none";
+      showEl(w, w.s.visible && g.active === k);
     }
     renderGroupTabs();
   }
@@ -2213,14 +2227,12 @@
       for (const k of survivors) {
         const m = WBY[k]; if (!m) continue;
         m.s.x = g.x; m.s.y = g.y; m.s.w = g.w; m.s.h = g.h;
-        persistW(m); applyFrame(m);
-        const el = wEl(m); if (el) el.style.display = m.s.visible ? "" : "none";
+        persistW(m); applyFrame(m); showEl(m, m.s.visible);
       }
     } else {
       refreshGroupDisplay(g);
     }
-    persistW(w); applyFrame(w);
-    const el = wEl(w); if (el) el.style.display = w.s.visible ? "" : "none";
+    persistW(w); applyFrame(w); showEl(w, w.s.visible);
     renderGroupTabs();
     saveGroups();
   }
@@ -2241,6 +2253,7 @@
   const TEXT_MIN = 0.7, TEXT_MAX = 2.0;
   const textScale = (w) => (w.s.text != null ? w.s.text : 1);
   function applyTextScale(w) {
+    if (w.local) { const c = wEl(w)?.querySelector(".pool"); if (c) c.style.zoom = textScale(w); return; }
     try {
       const doc = frameEl(w)?.contentDocument;
       if (doc && doc.documentElement) doc.documentElement.style.zoom = textScale(w);
@@ -2252,14 +2265,13 @@
   const textReadouts = (w) => {
     const out = [];
     const local = wEl(w)?.querySelector(".wcfg-val"); if (local) out.push(local);
-    try { const r = frameWin(w)?.__widgetSettingsRoot?.(); const inj = r?.querySelector(".wtext-val"); if (inj) out.push(inj); }
-    catch { /* iframe gone */ }
+    const r = wSettingsRoot(w); const inj = r?.querySelector(".wtext-val"); if (inj) out.push(inj);
     return out;
   };
   // Inject a Text size row into a page's OWN settings menu, so its cog opens one place with
   // everything in it (Sub, 2026-07-25) rather than a popover that points at a second menu.
   function injectTextRow(w) {
-    let root; try { root = frameWin(w)?.__widgetSettingsRoot?.(); } catch { return; }
+    const root = wSettingsRoot(w);
     if (!root || root.querySelector(".wtext-row")) return;
     const doc = root.ownerDocument;
     const row = doc.createElement("div");
@@ -2291,8 +2303,8 @@
   // the registry defaults, and persistW writes the nulls through so the reset survives a restart.
   function resetWidget(w) {
     if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
-    w.s.x = w.def.x; w.s.y = w.def.y;
     w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null;
+    if (w.defFn) w.defFn(w); else { w.s.x = w.def.x; w.s.y = w.def.y; }
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
@@ -2322,6 +2334,7 @@
   // 🔑 Probed on the iframe's LOAD event, not just on the page's ready() call: a page can call
   // ready() before it finishes defining its own exports, so a ready-only probe misses them.
   function probeSettings(w) {
+    if (w.local) { wEl(w)?.classList.add("has-settings"); injectTextRow(w); return; }
     try {
       const has = typeof frameWin(w)?.__widgetSettings === "function";
       wEl(w)?.classList.toggle("has-settings", has);
@@ -2330,7 +2343,7 @@
   }
 
   function ensureFrame(w) {
-    if (w.armed) return;
+    if (w.local || w.armed) return;
     const f = frameEl(w); if (!f) return;
     f.addEventListener("load", () => { probeSettings(w); applyTextScale(w); });
     const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
@@ -2346,13 +2359,13 @@
     if (on) {
       ensureFrame(w);
       if (g) { g.active = w.key; saveGroups(); } // turning one on brings its tab forward
-      el.style.display = "";
+      showEl(w, true);
       applyFrame(w);
       w.onShow?.(w);
       if (g) refreshGroupDisplay(g);
     } else {
       w.onHide?.(w);
-      el.style.display = "none";
+      showEl(w, false);
       el.classList.remove("moving");
       // Closing a tab leaves the stack, the way closing a browser tab does.
       if (g) detachFromGroup(w);
@@ -2363,7 +2376,7 @@
   // Keep an embedded page's theme in sync when the overlay retints (same-origin; no SSE needed).
   // It applies ?theme= at load, so a not-yet-ready iframe is already correct.
   function syncWidgetTheme(w) {
-    if (!w.armed) return;
+    if (w.local || !w.armed) return;
     const f = frameEl(w); if (!f) return;
     try {
       const doc = f.contentDocument;
@@ -2376,6 +2389,7 @@
   // Same-origin bridges: every embedded page calls window.parent.__<key>Host. The common members
   // are identical for all of them, so only the extras come from the table.
   for (const w of WIDGETS) {
+    if (w.local) continue; // nothing to bridge to - it is in this document
     const base = {
       ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); applyTextScale(w); },
       // Every embedded page calls this on pointerdown, so it doubles as "the user is engaging
@@ -2408,6 +2422,7 @@
   // Shell (main.cjs) drives visibility on a per-widget channel: {on:true} show ·
   // {on:false,arm:true} load hidden so it can pop itself later · {on:false} hide.
   for (const w of WIDGETS) {
+    if (w.local) continue; // no shell channel; the hub toggles this one directly
     const chan = "on" + w.key.charAt(0).toUpperCase() + w.key.slice(1) + "Visible";
     window.overlayApi?.[chan]?.((s) => {
       if (!s) return;
@@ -2443,7 +2458,7 @@
   function dropTargetAt(cx, cy, dragging) {
     for (const t of WIDGETS) {
       if (t === dragging) continue;
-      const el = wEl(t); if (!el || el.style.display === "none") continue;
+      const el = wEl(t); if (!el || !wShown(t)) continue;
       const gt = groupOf(t), gd = groupOf(dragging);
       if (gt && gd && gt === gd) continue; // already stacked together
       const bar = el.querySelector(".whead"); if (!bar) continue;
@@ -2475,8 +2490,12 @@
       for (const w of WIDGETS) {
         const saved = (all && all[w.key]) || null;
         if (saved) w.s = { ...w.s, ...saved };
-        if (w.s.x == null || w.s.y == null) { w.s.x = w.def.x; w.s.y = w.def.y; }
+        if (w.s.x == null || w.s.y == null) {
+          if (w.defFn) w.defFn(w); else { w.s.x = w.def.x; w.s.y = w.def.y; }
+        }
         applyFrame(w);
+        applyTextScale(w);
+        if (w.local) probeSettings(w); // no iframe load event will ever fire for it
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
       renderGroupTabs();
@@ -2588,20 +2607,10 @@
       try { canvasInfo = await window.overlayApi?.getCanvasInfo?.() || null; } catch { /* single-monitor fallback */ }
       applyCanvasVars(); // pin screen-anchored chrome to the primary monitor (multi-monitor void-safe)
       let saved = null;
-      try { saved = (await window.overlayApi?.getWidgets?.())?.[WIDGET_ID] || null; } catch { /* none */ }
+      // (the panel's own layout is loaded by the registry loader, keyed "blueprint")
       const q = new URLSearchParams(location.search); // test overrides
-      if (q.has("wx") || q.has("wy") || q.has("wscale") || q.has("wangle")) {
-        saved = { ...(saved || {}) };
-        if (q.has("wx")) saved.x = +q.get("wx");
-        if (q.has("wy")) saved.y = +q.get("wy");
-        if (q.has("wscale")) saved.scale = +q.get("wscale");
-        if (q.has("wangle")) saved.angle = +q.get("wangle");
-      }
-      if (saved) widget = { ...widget, ...saved };
-      if (widget.x == null || widget.y == null) defaultWidgetPos();
-      applyWidget();
       applyAllFrames(); // re-apply every widget with the now-loaded canvas offset (they init in their own async block)
-      if (widget.visible === false) { bpHidden = true; document.body.classList.add("bp-hidden"); } // restore hidden state
+      if (WBY.blueprint.s.visible === false) document.body.classList.add("bp-hidden"); // restore hidden state
       if (q.has("arrange")) { // headless-test the arrange chrome (incl. any widget also shown via its own flag)
         $("panel").classList.add("moving"); document.body.classList.add("arranging");
         for (const w of WIDGETS) {
@@ -2618,22 +2627,8 @@
       if (q.has("hub")) { $("globalCog").classList.add("show", "open"); $("hub").classList.add("open"); } // headless-test the hub
     })();
 
-    // Move: drag anywhere on the banner (arrange mode) → shift the widget by pointer delta.
-    $("moveBanner").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#moveDone") || e.target.closest("#resizeHandle")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = widget.x, oy = widget.y;
-      dragPointer((ev) => { widget.x = ox + (ev.clientX - sx); widget.y = oy + (ev.clientY - sy); applyWidget(); });
-    });
-    // Resize: drag the corner handle → change this widget's scale (independent of any global).
-    $("resizeHandle").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, os = widgetScale();
-      dragPointer((ev) => {
-        widget.scale = Math.max(0.5, Math.min(2.5, os + (ev.clientX - sx) / 380));
-        applyWidget();
-      });
-    });
+    // (drag + resize for this panel are wired by the generic per-widget loop, which finds
+    //  #moveBanner / #resizeHandle through the same .wmove / .wresize hooks.)
   }
 
   // ── Global overlay-app hub (canvas shell only) ────────────────────────────
@@ -2664,7 +2659,7 @@
       fetch("/api/config").then((r) => r.json()).then((c) => {
         $("hubTheme").value = c.theme || "mobiglas";
       }).catch(() => { /* fall back to whatever's in the inputs */ });
-      $("wgBlueprint").checked = !bpHidden;
+      $("wgBlueprint").checked = WBY.blueprint.s.visible !== false;
       window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
       window.overlayApi.setModal?.(true); window.overlayApi.hover?.(true);
     }
@@ -2719,18 +2714,8 @@
         if (w.notifier) scFeedPreview(shown);
       }
     });
-    $("grip").addEventListener("click", () => window.overlayApi.beginMove?.());
     // Close the Blueprint panel from the panel itself (setBlueprintVisible persists it, and the
     // hub checkbox reads that flag when it opens, so the two stay in step).
-    $("bpClose")?.addEventListener("click", (e) => { e.stopPropagation(); setBlueprintVisible(false); });
-    // Reset just this panel — same idea as a widget's ↺, using the panel's own default placement.
-    $("bpReset")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      widget.scale = null; widget.angle = null;
-      defaultWidgetPos();
-      applyWidget();
-      persistWidget();
-    });
     // Hovering the panel pulls its bar out too; `.touched` keeps it out while its cog menu is open.
     $("panel").addEventListener("pointerdown", () => $("panel").classList.add("touched"));
     document.addEventListener("pointerdown", (e) => {
