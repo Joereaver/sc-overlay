@@ -236,17 +236,19 @@
      little onto it without covering the header/footer text. */
   .tape { display: none; position: absolute; z-index: 6; pointer-events: none; user-select: none;
     filter: drop-shadow(0 3px 5px rgba(0,0,0,.5)); }
-  :root[data-theme="drake"] #panel .tape { display: block; }
-  .tape.tl { width: 60px; top: -20px; left: -22px; transform: rotate(-50deg); }
-  .tape.br { width: 60px; bottom: -34px; right: -30px; transform: rotate(-19deg); }
+  :root[data-theme="drake"] #panel .tape, :root[data-theme="drake"] .widget.flair .tape { display: block; }
+  .tape.tr { width: 60px; top: -20px; right: -22px; transform: rotate(50deg); }
+  .tape.bl { width: 60px; bottom: -34px; left: -30px; --trinket-rot: 19deg; }
+  .widget.flair .tape.tr { width: 62px; top: -18px; right: -20px; transform: rotate(44deg); }
+  .widget.flair .tape.bl { width: 66px; bottom: -30px; left: -26px; --trinket-rot: 13deg; }
 
   /* Anvil corner hardware — flathead bolt + screw head, so the HUD looks bolted into the
      cockpit. Anvil theme only; sits on the panel's outer corners (needs overflow:visible). */
   .bolt { display: none; position: absolute; z-index: 6; pointer-events: none; user-select: none;
     filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); }
-  :root[data-theme="anvil"] #panel .bolt { display: block; }
-  .bolt.tl { width: 30px; top: -9px; left: -9px; transform: rotate(-12deg); }
-  .bolt.br { width: 29px; bottom: -9px; right: -9px; transform: rotate(15deg); }
+  :root[data-theme="anvil"] #panel .bolt, :root[data-theme="anvil"] .widget.flair .bolt { display: block; }
+  .bolt.tr { width: 30px; top: -9px; right: -9px; transform: rotate(12deg); }
+  .bolt.bl { width: 29px; bottom: -9px; left: -9px; --trinket-rot: -15deg; }
 
   /* ── Manufacturer logo folder-tab ───────────────────────────────────────────
      A file-folder-style tab on the panel's top-left that houses the ship's manufacturer
@@ -280,15 +282,28 @@
     background-size: contain; background-repeat: no-repeat; filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); }
   :root[data-theme="argo"] .corner, :root[data-theme="misc"] .corner,
   :root[data-theme="greys"] .corner { display: block; }
+  /* 🔑 The trinkets are NOT chrome — they're the skin's identity, so they stay visible at all
+     times (Sub, 2026-07-25). The BOTTOM one is anchored to the bar: when the bar slides out it
+     travels down with it instead of vanishing or being covered. Corners are top-RIGHT and
+     bottom-LEFT so they clear the bar's right-justified controls and the panel's top-left
+     manufacturer folder tab. */
+  .tape.bl, .bolt.bl, .corner.bl {
+    transform: translateY(var(--trinket-shift, 0px)) rotate(var(--trinket-rot, 0deg));
+    transition: transform 0.16s ease; }
+  /* Whenever the bar is out, the bottom trinket shifts down by exactly the bar's height. Driven by
+     an inherited VARIABLE rather than a transform override, so it composes with each trinket's own
+     rotation and doesn't have to out-specify every per-theme rule. */
+  #panel:hover, #panel.touched, #panel.moving,
+  .widget:hover, .widget.touched, .widget.grouped, .widget.moving { --trinket-shift: var(--whead-h, 28px); }
   /* Argo — chunky industrial cogs */
-  :root[data-theme="argo"] .corner.tl { width: 34px; height: 34px; top: -12px; left: -12px; background-image: url(cog-argo-tl.png); transform: rotate(-6deg); }
-  :root[data-theme="argo"] .corner.br { width: 32px; height: 32px; bottom: -11px; right: -11px; background-image: url(cog-argo-br.png); transform: rotate(11deg); }
+  :root[data-theme="argo"] .corner.tr { width: 34px; height: 34px; top: -12px; right: -12px; background-image: url(cog-argo-tl.png); }
+  :root[data-theme="argo"] .corner.bl { width: 32px; height: 32px; bottom: -11px; left: -11px; background-image: url(cog-argo-br.png); }
   /* MISC — finer, cleaner gears */
-  :root[data-theme="misc"] .corner.tl { width: 30px; height: 30px; top: -10px; left: -10px; background-image: url(cog-misc-tl.png); }
-  :root[data-theme="misc"] .corner.br { width: 31px; height: 31px; bottom: -11px; right: -11px; background-image: url(cog-misc-br.png); transform: rotate(8deg); }
+  :root[data-theme="misc"] .corner.tr { width: 30px; height: 30px; top: -10px; right: -10px; background-image: url(cog-misc-tl.png); }
+  :root[data-theme="misc"] .corner.bl { width: 31px; height: 31px; bottom: -11px; left: -11px; background-image: url(cog-misc-br.png); }
   /* Grey's — rusty bolt + exposed wires */
-  :root[data-theme="greys"] .corner.tl { width: 46px; height: 46px; top: -15px; left: -15px; background-image: url(greys-corner-tl.png); }
-  :root[data-theme="greys"] .corner.br { width: 46px; height: 46px; bottom: -15px; right: -15px; background-image: url(greys-corner-br.png); }
+  :root[data-theme="greys"] .corner.tr { width: 46px; height: 46px; top: -15px; right: -15px; background-image: url(greys-corner-tl.png); }
+  :root[data-theme="greys"] .corner.bl { width: 46px; height: 46px; bottom: -15px; left: -15px; background-image: url(greys-corner-br.png); }
   /* Origin Jumpworks — a fine dashed inset stroke reads as high-end contrast stitching on a leather
      dash (their luxury interiors). Gold thread (value color) just inside the panel edge. */
   .stitch { display: none; position: absolute; inset: 5px; border-radius: 8px; pointer-events: none; z-index: 4;
@@ -446,8 +461,15 @@
      alone would rely on the wrapper tracking a cursor that's over a child IFRAME), and always
      while grouped. */
   .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead,
-  #panel:hover .whead, #panel.touched .whead { transform: translateY(0); pointer-events: auto; }
-  .widget.moving .whood, #panel.moving .whood { display: none; } /* arrange mode: the drag shield owns the widget */
+  #panel:hover .whead, #panel.touched .whead,
+  .widget.moving .whead, #panel.moving .whead { transform: translateY(0); pointer-events: auto; }
+  /* ARRANGE MODE keeps the bar OUT and turns it into the grab handle: you drag a widget by its bar
+     and drop it onto another widget's bar to stack them (Sub, 2026-07-25) — the same gesture as
+     dragging a browser tab onto another window. Its buttons and tabs go inert so they can't
+     swallow the drag. */
+  .widget.moving .whead, #panel.moving .whead { cursor: move; }
+  .widget.moving .whead .wh-btn, .widget.moving .whead .gtab,
+  #panel.moving .whead .wh-btn { pointer-events: none; }
   .wh-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px; overflow: hidden; }
   .wh-id { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
   .wh-tabs { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; }
@@ -470,22 +492,6 @@
   .wh-cog { display: none; }
   .widget.has-settings .wh-cog, #panel .wh-cog { display: block; }
 
-  /* Manufacturer trinket, riding the bar. The skin flair used to be permanent corner decoration;
-     here it slides out with the chrome, so the resting widget is pure content.
-     🔑 It must fit INSIDE the bar's height: the hood clips at the bar's own box, so anything
-     overhanging would peek out while the bar is parked. It stands in for the diamond rather than
-     sitting beside it, so the bar's layout doesn't shift between themes. */
-  .wh-flair { display: none; flex: none; width: 22px; height: 22px; background-repeat: no-repeat;
-    background-position: center; background-size: contain; }
-  :root[data-theme="drake"] .flair .wh-flair { display: block; background-image: url(tape-m-tl.webp); transform: rotate(-8deg); }
-  :root[data-theme="anvil"] .flair .wh-flair { display: block; background-image: url(anvil-bolt-tl.webp); }
-  :root[data-theme="argo"] .flair .wh-flair { display: block; background-image: url(cog-argo-tl.png); }
-  :root[data-theme="misc"] .flair .wh-flair { display: block; background-image: url(cog-misc-tl.png); }
-  :root[data-theme="greys"] .flair .wh-flair { display: block; background-image: url(greys-corner-tl.png); }
-  :root[data-theme="drake"] .flair .whead .dia, :root[data-theme="anvil"] .flair .whead .dia,
-  :root[data-theme="argo"] .flair .whead .dia, :root[data-theme="misc"] .flair .whead .dia,
-  :root[data-theme="greys"] .flair .whead .dia { display: none; }
-
   /* Group tabs — left half of the same bar. */
   .gtab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
@@ -495,12 +501,11 @@
   .gtab.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.22); border-color: var(--cyan); }
   .gtab.gdetach { flex: none; letter-spacing: 0; font-size: 11px; padding: 4px 7px; }
 
-  /* Drop target: the top strip of the widget you're dragging onto lights up, since the hover
-     header is suppressed while arranging and there'd otherwise be nothing to aim at. */
-  .widget.droptarget::after { content: "GROUP HERE"; position: absolute; left: 0; right: 0; top: 0;
-    height: 34px; z-index: 55; display: flex; align-items: center; justify-content: center;
+  /* Drop target: the BAR you're dragging onto lights up — the thing you're actually aiming at. */
+  .widget.droptarget .whead::after { content: "GROUP HERE"; position: absolute; inset: 0;
+    z-index: 55; display: flex; align-items: center; justify-content: center;
     font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.18em;
-    color: #04141b; background: rgba(var(--accent-rgb), 0.85); border-radius: 10px 10px 0 0; }
+    color: #04141b; background: rgba(var(--accent-rgb), 0.9); border-radius: 0 0 9px 9px; }
 
   /* NOTIFIER widgets (SC Feed) are invisible until they have something to say. The iframe stays
      mounted — it's the thing doing the polling — so the box is always present; the shell only
@@ -1020,14 +1025,14 @@
 <body>
   <div id="panel" class="empty">
     <div class="brandtab"><img alt="" class="brandtab-logo"></div>
-    <div class="corner tl"></div>
-    <div class="corner br"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
     <div class="stitch"></div>
     <div class="trialmark"></div>
-    <img class="tape tl" alt="" src="tape-tl.webp">
-    <img class="tape br" alt="" src="tape-br.webp">
-    <img class="bolt tl" alt="" src="anvil-bolt-tl.webp">
-    <img class="bolt br" alt="" src="anvil-screw-br.webp">
+    <img class="tape tr" alt="" src="tape-tl.webp">
+    <img class="tape bl" alt="" src="tape-br.webp">
+    <img class="bolt tr" alt="" src="anvil-bolt-tl.webp">
+    <img class="bolt bl" alt="" src="anvil-screw-br.webp">
     <div id="moveBanner"><div class="movebox">⠿ Drag to move · corner to resize<button id="moveDone">Done</button></div></div>
     <div id="resizeHandle" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
     <!-- Same sliding chrome as every registry widget. This panel could never take a TOP bar (its
@@ -2056,12 +2061,17 @@
       const style = "display:none" + (w.z ? ";--wz:" + w.z : "");
       const allow = w.allow ? ' allow="' + escapeAttr(w.allow) + '"' : "";
       const label = w.moveLabel || "⠿ Drag to move · corner to resize";
+      const trinkets = w.flair
+        ? '<img class="tape tr" alt="" src="tape-m-tl.webp"><img class="tape bl" alt="" src="tape-m-br.webp">'
+          + '<img class="bolt tr" alt="" src="anvil-bolt-tl.webp"><img class="bolt bl" alt="" src="anvil-screw-br.webp">'
+          + '<div class="corner tr"></div><div class="corner bl"></div>'
+        : "";
       return '<div class="' + cls + '" id="w-' + w.key + '" style="' + style + '">'
         + '<iframe id="wf-' + w.key + '" title="' + escapeAttr(w.title) + '"' + allow + ' scrolling="no"></iframe>'
+        + trinkets
         + '<div class="whood"><div class="whead">'
         + '<span class="wh-left">'
         + '<span class="wh-id">'
-        + (w.flair ? '<span class="wh-flair"></span>' : "")
         + '<span class="dia"></span><span class="wh-title">' + escapeHtml(w.title) + '</span>'
         + '</span><span class="wh-tabs"></span>'
         + '</span>'
@@ -2222,16 +2232,18 @@
     saveGroups();
   });
 
-  // Which widget's top strip is under the cursor — the drop target while dragging.
-  const DROP_STRIP = 34;
+  // Which widget's BAR is under the cursor — the drop target while dragging. Aiming at the bar
+  // (rather than a strip of the panel) is why arrange mode keeps bars out: you drag one bar onto
+  // another, and both ends of the gesture are the same visible thing.
   function dropTargetAt(cx, cy, dragging) {
     for (const t of WIDGETS) {
       if (t === dragging) continue;
       const el = wEl(t); if (!el || el.style.display === "none") continue;
       const gt = groupOf(t), gd = groupOf(dragging);
       if (gt && gd && gt === gd) continue; // already stacked together
-      const r = el.getBoundingClientRect();
-      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.top + DROP_STRIP) return t;
+      const bar = el.querySelector(".whead"); if (!bar) continue;
+      const r = bar.getBoundingClientRect();
+      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return t;
     }
     return null;
   }
@@ -2407,7 +2419,9 @@
       const el = wEl(w); if (!el) continue;
       // The move banner doubles as a drag shield over the iframe, which would otherwise swallow
       // the pointer.
-      el.querySelector(".wmove")?.addEventListener("pointerdown", (e) => {
+      // Two grab surfaces, one gesture: the full-widget shield (the big easy target) and the bar
+      // itself, so a widget can be dragged by its bar onto another widget's bar.
+      const startDrag = (e) => {
         if (e.target.closest(".wdone") || e.target.closest(".wresize")) return;
         e.preventDefault();
         // Dragging any member of a group moves the whole stack.
@@ -2423,10 +2437,16 @@
           highlightDrop(dropOn);
         }, () => {
           highlightDrop(null);
-          if (dropOn) groupWidgets(w, dropOn);      // dropped on another widget's header → stack
+          if (dropOn) groupWidgets(w, dropOn);      // dropped on another widget's bar → stack
           else if (g0) saveGroups();
           else persistW(w);
         });
+      };
+      el.querySelector(".wmove")?.addEventListener("pointerdown", startDrag);
+      // The bar only drags while arranging — otherwise it's a normal button bar.
+      el.querySelector(".whead")?.addEventListener("pointerdown", (e) => {
+        if (!el.classList.contains("moving")) return;
+        startDrag(e);
       });
       el.querySelector(".wresize")?.addEventListener("pointerdown", (e) => {
         e.preventDefault(); e.stopPropagation();

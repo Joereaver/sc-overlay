@@ -25,7 +25,7 @@ const PRELUDE = `
   // A hidden window never composites, so CSS transitions don't advance and a mid-slide transform
   // would be read as "still parked". Assert on settled geometry instead.
   const noAnim = document.createElement("style");
-  noAnim.textContent = ".whead{transition:none !important}";
+  noAnim.textContent = ".whead,.tape,.bolt,.corner{transition:none !important}";
   document.head.appendChild(noAnim);
 `;
 
@@ -213,31 +213,48 @@ const CHROME = `(async () => {
   ok("parked bar is NOT reported to the shell", ![...document.querySelectorAll(RSEL)].includes(bar));
 
   // Arrange mode hands the whole widget to the drag shield.
+  // Arrange mode KEEPS the bar out: it's the drag handle, and the thing you aim at to stack
+  // widgets (drag one bar onto another).
   el(w).classList.add("moving");
-  ok("bar hidden in arrange mode", getComputedStyle(hood).display === "none", getComputedStyle(hood).display);
+  ok("bar stays OUT in arrange mode (it's the drag handle)",
+     getComputedStyle(hood).display !== "none" &&
+     getComputedStyle(bar).transform.replace(/ /g, "") === "matrix(1,0,0,1,0,0)",
+     getComputedStyle(bar).transform);
+  ok("bar's buttons go inert while arranging", getComputedStyle(bar.querySelector(".wh-btn")).pointerEvents === "none");
   el(w).classList.remove("moving");
 
-  // ── manufacturer trinket rides the bar ──────────────────────────────────────
-  const mw = WBY.mining, mbar = el(mw).querySelector(".whead");
-  const flair = mbar.querySelector(".wh-flair");
-  ok("flair widget is marked", el(mw).classList.contains("flair"));
-  ok("flair element on the bar", !!flair);
-  ok("no flair on a non-flair widget", !el(WBY.notepad).querySelector(".wh-flair"));
+  // ── manufacturer trinkets ──────────────────────────────────────────────────
+  // They are the skin's IDENTITY, not chrome: visible at all times, including while the bar is
+  // parked, and the bottom one travels with the bar instead of being covered or hidden.
+  const mw = WBY.mining;
   const root = document.documentElement, theme0 = root.getAttribute("data-theme");
+  ok("flair widget is marked", el(mw).classList.contains("flair"));
+  const tTr = el(mw).querySelector(".tape.tr"), tBl = el(mw).querySelector(".tape.bl");
+  ok("trinkets sit top-right and bottom-left", !!tTr && !!tBl);
+  ok("no trinkets on a non-flair widget", !el(WBY.notepad).querySelector(".tape.tr, .corner.tr"));
+
   root.setAttribute("data-theme", "mobiglas");
-  ok("no trinket on a theme that has none", getComputedStyle(flair).display === "none", getComputedStyle(flair).display);
+  ok("no trinket on a theme that has none", getComputedStyle(tTr).display === "none", getComputedStyle(tTr).display);
   root.setAttribute("data-theme", "drake");
-  ok("Drake shows its tape", getComputedStyle(flair).display === "block" && /tape/.test(getComputedStyle(flair).backgroundImage),
-     getComputedStyle(flair).backgroundImage.slice(0, 60));
-  ok("trinket replaces the diamond", getComputedStyle(mbar.querySelector(".dia")).display === "none");
-  // Must fit inside the bar, or it would peek out above a parked bar (the hood clips at the bar).
-  el(mw).classList.add("touched");
-  const fr = flair.getBoundingClientRect(), br = mbar.getBoundingClientRect();
-  ok("trinket fits inside the bar", fr.height <= br.height + 0.5 && fr.top >= br.top - 0.5,
-     "flair h=" + fr.height.toFixed(1) + " bar h=" + br.height.toFixed(1));
+  ok("Drake shows its tape", getComputedStyle(tTr).display === "block", getComputedStyle(tTr).display);
+
+  // The requirement Sub called out: they must NOT disappear with the bar.
   el(mw).classList.remove("touched");
+  ok("trinkets stay visible while the bar is PARKED",
+     getComputedStyle(tTr).display === "block" && getComputedStyle(tBl).display === "block");
+  const blParked = tBl.getBoundingClientRect().top;
+  el(mw).classList.add("touched");
+  const blOut = tBl.getBoundingClientRect().top;
+  const barH = parseFloat(getComputedStyle(el(mw).querySelector(".whead")).height);
+  ok("bottom trinket travels DOWN with the bar", Math.abs((blOut - blParked) - barH) < 2,
+     "moved " + (blOut - blParked).toFixed(1) + "px, bar is " + barH.toFixed(1) + "px");
+  ok("top trinket stays put", Math.abs(el(mw).querySelector(".tape.tr").getBoundingClientRect().top - tTr.getBoundingClientRect().top) < 0.5);
+  el(mw).classList.remove("touched");
+
   root.setAttribute("data-theme", "argo");
-  ok("Argo shows its cog", /cog-argo/.test(getComputedStyle(flair).backgroundImage));
+  ok("Argo shows its cog", /cog-argo/.test(getComputedStyle(el(mw).querySelector(".corner.tr")).backgroundImage));
+  if (theme0) root.setAttribute("data-theme", theme0); else root.removeAttribute("data-theme");
+  const mbar = el(mw).querySelector(".whead");
 
   // ── per-widget settings cog ────────────────────────────────────────────────
   // It opens THAT widget's own panel, so it only exists where the page exposes one. It must never

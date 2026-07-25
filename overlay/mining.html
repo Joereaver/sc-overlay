@@ -392,7 +392,6 @@
   <div id="resizeHandle" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
   <div class="head">
     <div id="grip" title="Move window"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></div>
-    <div id="cog" title="Mining settings">⚙</div>
     <div id="cogMenu">
       <div class="cog-sec cog-canvas-only">This widget</div>
       <div class="cog-slider cog-canvas-only"><span>Angle</span><input type="range" id="cogAngle" min="-35" max="35" step="1" value="0" /><b id="cogAngleV">0°</b></div>
@@ -760,7 +759,7 @@
   // it (clicks pass to the game everywhere else — so it can't be clicked by accident).
   function setCog(open) {
     $("cogMenu").classList.toggle("open", open);
-    $("cog").classList.toggle("open", open);
+    $("cog")?.classList.toggle("open", open); // the in-panel cog is gone; the parent bar owns it now
     if (open) {
       const ang = EMBEDDED ? (host()?.getAngle?.() ?? DEFAULT_ANGLE)
                            : (widget.angle != null ? widget.angle : DEFAULT_ANGLE);
@@ -816,7 +815,7 @@
       if (saved) widget = { ...widget, ...saved };
       if (widget.x == null || widget.y == null) defaultWidgetPos();
       applyMiningWidget();
-      if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
+      if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog")?.classList.add("open"); } // headless-test the widget cog
       if (q.has("arrange")) $("panel").classList.add("moving"); // headless-test the arrange chrome
     })();
     $("moveBanner").addEventListener("pointerdown", (e) => {
@@ -889,7 +888,9 @@
     setInterval(measure, 150); measure();
     host()?.ready?.();
   }
-  $("cog").addEventListener("click", (e) => { e.stopPropagation(); setCog(!$("cogMenu").classList.contains("open")); });
+  // This widget's in-panel cog was REMOVED: the parent canvas's bottom bar now carries a
+  // per-widget settings cog for every widget, and two cogs opening the same menu is one too many.
+  // The menu itself stays — it's what __widgetSettings (below) opens.
   // The parent bar's per-widget cog opens THIS widget's settings (its presence there is probed
   // from this function existing), so both cogs open the same menu.
   window.__widgetSettings = () => setCog(true);
