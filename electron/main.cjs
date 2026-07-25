@@ -329,7 +329,14 @@ function pollCursor() {
   let pt; try { pt = screen.getCursorScreenPoint(); } catch { return; }
   if (overlay && !overlay.isDestroyed()) {
     const over = insideRegions(overlayRegions, overlay, pt);
-    if (over !== hovering) { hovering = over; applyMouse(); }
+    if (over !== hovering) {
+      hovering = over; applyMouse();
+      // Tell the page when the cursor has left everything. It can't work this out on its own:
+      // the window is click-through by then, so it gets no mousemove and therefore no mouseleave
+      // — which is why a widget whose header was revealed by a CLICK (any page with a text field
+      // reports pointerdown to reveal its bar) kept that bar out forever.
+      if (!over) { try { overlay.webContents.send("overlay:cursor-away"); } catch { /* gone */ } }
+    }
   }
 }
 function startMousePoll() { if (!mousePoll) mousePoll = setInterval(pollCursor, 30); }

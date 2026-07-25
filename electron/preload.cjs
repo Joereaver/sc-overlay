@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   arrange: (on) => ipcRenderer.send(on ? "overlay:begin-move" : "overlay:end-move"),
   // The Mining window's cog was clicked → summon this shell's global cog too.
   onSummonCog: (cb) => ipcRenderer.on("overlay:summon-cog", () => cb()),
+  // The cursor left every interactive region. The page can't see this for itself: once the window
+  // goes click-through it receives no mouse events at all, so no mouseleave ever arrives.
+  onCursorAway: (cb) => ipcRenderer.on("overlay:cursor-away", () => cb()),
   // ── Mining Assistant (now folded into this canvas as an iframe widget) ──────────
   // The embedded mining page reaches these through the parent (same-origin). Native tone
   // picker + clear (renderers can't open OS dialogs); a suppress-gated auto-show request;

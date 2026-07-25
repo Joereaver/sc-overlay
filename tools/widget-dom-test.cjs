@@ -681,6 +681,63 @@ const HEADERS = `(async () => {
   return out;
 })()`;
 
+// ── Suite 9: chrome anchoring + the header latch ──────────────────────────────
+// Three bugs Sub hit in one sitting, all from the Blueprint panel being #panel rather than a
+// .widget, or from the page not being told something only the shell knows.
+const ANCHOR = `(async () => {
+  ${PRELUDE}
+  const panel = document.getElementById("panel");
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(400);
+
+  // 1. The panel's bar carries a group's TABS, so grouping must pin it out exactly like any
+  //    other member's. Every ".widget.grouped" rule needs its "#panel.grouped" twin.
+  // Dropped-onto-other = the one that fronts, so this is the panel fronting a stack — the case
+  // that broke. (The reverse, Battaglia fronting, is just another .widget and already covered.)
+  groupWidgets(WBY.blueprint, WBY.battaglia);
+  await sleep(60);
+  // (this preload restores a saved mining+party group too, so find the panel's own)
+  const bg = GROUPS.find((x) => x.members.includes("blueprint"));
+  ok("the panel is the fronted member", bg && bg.active === "blueprint", bg && bg.active);
+  ok("grouping the panel flags it", panel.classList.contains("grouped"));
+  const pbar = panel.querySelector(".whead");
+  ok("the panel's bar stays out while grouped",
+     getComputedStyle(pbar).transform.replace(/ /g, "") === "matrix(1,0,0,1,0,0)",
+     getComputedStyle(pbar).transform);
+  ok("its tabs are rendered", panel.querySelectorAll(".wh-tabs .gtab").length >= 2,
+     panel.querySelectorAll(".wh-tabs .gtab:not(.gdetach)").length + " tabs");
+  // The shell only hit-tests rects matching RSEL, so a bar that isn't in that list is unclickable.
+  ok("the grouped panel's bar is a reportable region", !!document.querySelector("#panel.grouped .whead"));
+  detachFromGroup(WBY.blueprint);
+  await sleep(30);
+
+  // 2. The cog lives in the BOTTOM bar, so its menu has to open down there — it was anchored
+  //    inside .head (position:relative) and opened at the TOP of the panel instead.
+  const menu = document.getElementById("cogMenu");
+  ok("the cog menu hangs off the panel, not the header", menu.parentElement === panel, menu.parentElement.className || menu.parentElement.id);
+  menu.classList.add("open");
+  await sleep(30);
+  const pr = panel.getBoundingClientRect(), mr = menu.getBoundingClientRect();
+  ok("it opens at the panel's bottom", mr.bottom > pr.top + pr.height / 2,
+     Math.round(mr.bottom - pr.top) + "px down a " + Math.round(pr.height) + "px panel");
+  ok("...flush with the bottom edge", Math.abs(pr.bottom - mr.bottom) < 24, Math.round(pr.bottom - mr.bottom) + "px up from it");
+  ok("...and beside the cog, on the right", Math.abs(pr.right - mr.right) < 24, Math.round(pr.right - mr.right) + "px in from it");
+  ok("it can't outgrow the screen", mr.height <= window.innerHeight * 0.8, Math.round(mr.height) + "px");
+  menu.classList.remove("open");
+
+  // 3. Any page with a text field reveals its bar on pointerdown (hover can't see through an
+  //    iframe). Nothing was clearing that latch when the cursor went back to the GAME, because a
+  //    click-through window gets no mouseleave — so the bar never retracted.
+  const np = WBY.notepad;
+  touchWidget(np);
+  ok("clicking into a widget reveals its bar", el(np).classList.contains("touched"));
+  ok("the page listens for the shell's cursor-away", typeof window.__fireCursorAway === "function");
+  if (typeof window.__fireCursorAway === "function") window.__fireCursorAway();
+  await sleep(30);
+  ok("the bar retracts once the cursor leaves the overlay", !el(np).classList.contains("touched"));
+  return out;
+})()`;
+
 async function run(label, script, preload) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
@@ -731,6 +788,7 @@ app.whenReady().then(async () => {
     fails += await run("dragging + reset", DRAG, null);
     fails += await run("page headers", HEADERS, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
+    fails += await run("chrome anchoring + latches", ANCHOR, path.join(__dirname, "widget-dom-stub-preload.cjs"));
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);
     console.error(`is the sidecar running? \`npm run overlay\` should be listening on :${PORT}`);

@@ -293,7 +293,7 @@
   /* Whenever the bar is out, the bottom trinket shifts down by exactly the bar's height. Driven by
      an inherited VARIABLE rather than a transform override, so it composes with each trinket's own
      rotation and doesn't have to out-specify every per-theme rule. */
-  #panel:hover, #panel.touched, #panel.moving,
+  #panel:hover, #panel.touched, #panel.moving, #panel.grouped,
   body.dragging #panel, body.dragging .widget,
   .widget:hover, .widget.touched, .widget.grouped, .widget.moving { --trinket-shift: var(--whead-h, 28px); }
   /* Argo — chunky industrial cogs */
@@ -470,8 +470,12 @@
   /* Out on hover, on `.touched` (set when an embedded page reports a pointerdown, since hover
      alone would rely on the wrapper tracking a cursor that's over a child IFRAME), and always
      while grouped. */
+  /* 🔑 #panel is the Blueprint widget and it is NOT a .widget — it's this document's own panel.
+     Every `.widget.grouped` rule needs a `#panel.grouped` twin or grouping it behaves differently
+     from grouping anything else: its bar carries the group's TABS, and without this the tab row
+     vanished the moment the cursor left (Sub hit this merging Battaglia into the tracker). */
   .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead,
-  #panel:hover .whead, #panel.touched .whead,
+  #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead,
   .widget.moving .whead, #panel.moving .whead { transform: translateY(0); pointer-events: auto; }
   /* While a widget is being DRAGGED every bar comes out: the bar is the drop target, and the drag
      shield means the widget under the cursor never sees :hover to reveal its own. You aim at
@@ -664,7 +668,9 @@
   #cog.open { background: rgba(var(--accent-rgb), 0.26); border-color: var(--cyan); }
   #panel.moving .whood { display: none; }
 
+  /* Capped so a short panel can't grow a menu taller than the screen it opens on. */
   #cogMenu { display: none; position: absolute; bottom: 6px; right: 6px; z-index: 31; width: 232px;
+    max-height: 76vh; overflow-y: auto;
     -webkit-app-region: no-drag; background: var(--menu-bg); border: 1px solid var(--border); border-radius: 4px;
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); padding: 6px 0 8px; }
   #cogMenu.open { display: block; }
@@ -1105,22 +1111,27 @@
         <div class="bp-pop-name" id="bpPopName"></div>
       </div>
     </div>
+    <!-- 🔑 A child of #panel, NOT of .head. It's positioned bottom-right to open beside the cog,
+         which lives in the bottom bar — but .head is position:relative, so while it sat in there
+         "bottom: 6px" meant the bottom of the HEADER and the menu opened at the top of the panel,
+         nowhere near the cog and off-screen for anyone with the panel high up (Sub, 2026-07-25). -->
+    <div id="cogMenu">
+      <div class="cog-sec cog-canvas-only">This widget</div>
+      <div class="cog-slider cog-canvas-only"><label>Angle <b id="cogAngleV">0°</b></label><input type="range" id="cogAngle" min="-35" max="35" step="1" value="0" /></div>
+      <div class="cog-sec">Display</div>
+      <label class="cog-opt"><input type="checkbox" id="tgCatbar" /> Show category filter bar</label>
+      <label class="cog-opt"><input type="checkbox" id="tgOddsAdj" /> Show my real odds (only what I still need)</label>
+      <label class="cog-opt"><input type="checkbox" id="tgTimeRel" /> Recent times as “2h ago”</label>
+      <div class="cog-sec">OCR (opt-in)</div>
+      <label class="cog-opt"><input type="checkbox" id="tgMissionOcr" /> Scan for tracked mission</label>
+      <label class="cog-opt"><input type="checkbox" id="tgFabCapture" /> Contribute item images</label>
+      <div class="cog-sec">Tools</div>
+      <button type="button" id="verify" class="cog-btn" title="Re-scan your game logs (including backups) for received blueprints">⟳ Verify from logs</button>
+      <div class="cog-status" id="vstatus"></div>
+      <button type="button" id="openSettings" class="cog-btn" title="Open the full settings window">⚙ Open full settings…</button>
+    </div>
+
     <div class="head">
-      <div id="cogMenu">
-        <div class="cog-sec cog-canvas-only">This widget</div>
-        <div class="cog-slider cog-canvas-only"><label>Angle <b id="cogAngleV">0°</b></label><input type="range" id="cogAngle" min="-35" max="35" step="1" value="0" /></div>
-        <div class="cog-sec">Display</div>
-        <label class="cog-opt"><input type="checkbox" id="tgCatbar" /> Show category filter bar</label>
-        <label class="cog-opt"><input type="checkbox" id="tgOddsAdj" /> Show my real odds (only what I still need)</label>
-        <label class="cog-opt"><input type="checkbox" id="tgTimeRel" /> Recent times as “2h ago”</label>
-        <div class="cog-sec">OCR (opt-in)</div>
-        <label class="cog-opt"><input type="checkbox" id="tgMissionOcr" /> Scan for tracked mission</label>
-        <label class="cog-opt"><input type="checkbox" id="tgFabCapture" /> Contribute item images</label>
-        <div class="cog-sec">Tools</div>
-        <button type="button" id="verify" class="cog-btn" title="Re-scan your game logs (including backups) for received blueprints">⟳ Verify from logs</button>
-        <div class="cog-status" id="vstatus"></div>
-        <button type="button" id="openSettings" class="cog-btn" title="Open the full settings window">⚙ Open full settings…</button>
-      </div>
       <div class="eyebrow"><span class="dot" id="liveDot"></span> Active Mission<span id="liveTip">SubliminalsTV is <b>live</b>. Click if you want to hang out ↗</span></div>
       <div class="titlerow">
         <div class="title" id="title">No mission tracked</div>
@@ -2381,6 +2392,12 @@
     const t = e.target; // a non-Element target (document) has no closest()
     if (!(t instanceof Element) || !t.closest(".widget")) touchWidget(null);
   });
+  // ...and when the cursor leaves the overlay entirely. Without this the latch only ever cleared
+  // on a pointerdown somewhere else IN this window — but after clicking into Twitch chat or the
+  // Notepad you move the cursor back to the GAME, where the window is click-through and sees
+  // nothing at all, so the bar stayed out for good. The shell's cursor poll is the only thing
+  // that still knows where the pointer is.
+  window.overlayApi?.onCursorAway?.(() => touchWidget(null));
 
   // Create the iframe (idempotent). Loading it starts whatever the page does — SSE, polling,
   // audio — so only arm it when the widget is shown, or when the shell asks for it to be armed
@@ -2820,7 +2837,7 @@
       // for .widget — so it needs reporting in its own right, but ONLY while it's out. A parked
       // bar must not leave a permanently-clickable strip over the game. (#panel's own bar is
       // covered the same way; #panel itself is already listed.)
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead";
+      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {

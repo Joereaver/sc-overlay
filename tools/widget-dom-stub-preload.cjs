@@ -20,6 +20,9 @@ const real = {
   getWidgets: async () => JSON.parse(JSON.stringify(SAVED)),
   saveWidget: () => {},
   getCanvasInfo: async () => ({ px: 0, py: 0, pw: 1920, ph: 1080, vw: 1920, vh: 1080 }),
+  // Held so a test can fire it: this signal only ever comes from the shell's cursor poll, which
+  // is the whole point of it — the page has no way to notice the cursor leaving on its own.
+  onCursorAway: (cb) => { window.__fireCursorAway = cb; },
 };
 window.overlayApi = new Proxy(real, {
   get(t, k) { return k in t ? t[k] : () => {}; },
