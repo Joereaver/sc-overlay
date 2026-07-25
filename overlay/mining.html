@@ -878,6 +878,9 @@
     host()?.ready?.();
   }
   $("cog").addEventListener("click", (e) => { e.stopPropagation(); setCog(!$("cogMenu").classList.contains("open")); });
+  // The parent bar's per-widget cog opens THIS widget's settings (its presence there is probed
+  // from this function existing), so both cogs open the same menu.
+  window.__widgetSettings = () => setCog(true);
   $("cogMenu").addEventListener("click", (e) => e.stopPropagation());
   document.addEventListener("click", () => { if ($("cogMenu").classList.contains("open")) setCog(false); });
 

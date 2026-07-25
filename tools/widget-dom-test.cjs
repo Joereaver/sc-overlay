@@ -22,6 +22,11 @@ const PRELUDE = `
   const shown = (w) => el(w).style.display !== "none";
   const cs = (w, v) => el(w).style.getPropertyValue(v);
   await sleep(900); // let the async layout loader settle
+  // A hidden window never composites, so CSS transitions don't advance and a mid-slide transform
+  // would be read as "still parked". Assert on settled geometry instead.
+  const noAnim = document.createElement("style");
+  noAnim.textContent = ".whead{transition:none !important}";
+  document.head.appendChild(noAnim);
 `;
 
 // ── Suite 1: grouping behaviour ────────────────────────────────────────────────
@@ -52,14 +57,17 @@ const GROUPING = `(async () => {
   ok("scaled widget drops .scaled while grouped", !el(mining).classList.contains("scaled"));
   ok("members flagged .grouped", el(party).classList.contains("grouped") && el(mining).classList.contains("grouped"));
 
-  const strip = document.querySelector("#wgroups .gtabs");
+  const strip = el(WBY[GROUPS[0] ? GROUPS[0].active : "party"]).querySelector(".wh-tabs");
   ok("tab strip rendered", !!strip);
   const tabs = strip ? [...strip.querySelectorAll(".gtab:not(.gdetach)")].map(b => b.dataset.k) : [];
   ok("a tab per member", tabs.join(",") === "mining,party", tabs.join(","));
   ok("detach button present", !!(strip && strip.querySelector(".gdetach")));
-  ok("strip sits BELOW the box (bottom tabs)",
-     strip && Math.abs(parseFloat(strip.style.getPropertyValue("--wy")) - (g.y + g.h)) < 0.5,
-     strip && ("strip y=" + strip.style.getPropertyValue("--wy") + " box bottom=" + (g.y + g.h)));
+  ok("tabs live in the fronted member's own bar", !!(strip && strip.closest(".whead")));
+  ok("grouped bar is pinned OUT (tabs must stay visible)",
+     getComputedStyle(el(WBY[g.active]).querySelector(".whead")).transform.replace(/ /g, "") === "matrix(1,0,0,1,0,0)",
+     getComputedStyle(el(WBY[g.active]).querySelector(".whead")).transform);
+  ok("grouped widget shows tabs instead of its name",
+     getComputedStyle(el(WBY[g.active]).querySelector(".wh-id")).display === "none");
 
   strip.querySelector('.gtab[data-k="mining"]').click();
   await sleep(30);
@@ -72,7 +80,7 @@ const GROUPING = `(async () => {
 
   detachFromGroup(WBY[GROUPS[0].active]);
   ok("group dissolves below 2 members", GROUPS.length === 0, GROUPS.length);
-  ok("no strip once dissolved", !document.querySelector("#wgroups .gtabs"));
+  ok("no tabs once dissolved", ![...document.querySelectorAll(".wh-tabs")].some(t => t.innerHTML.trim()));
   // Regression: applyFrame() reads groupOf(), so the group must be dropped BEFORE re-applying the
   // survivor, or the last member stays flagged as grouped.
   ok("survivors standalone again", !el(party).classList.contains("grouped") && !el(mining).classList.contains("grouped"));
@@ -89,38 +97,33 @@ const GROUPING = `(async () => {
 // ── Suite 2: title-bar chrome (parked behind the widget, slides out on hover) ──
 const CHROME = `(async () => {
   ${PRELUDE}
-  // Transitions don't advance in a hidden window, so assert on the resting/settled geometry.
-  const kill = document.createElement("style");
-  kill.textContent = ".whead{transition:none !important}";
-  document.head.appendChild(kill);
-
   const w = WBY.party;
   const box = () => el(w).getBoundingClientRect();
   const hood = el(w).querySelector(".whood");
   const bar = el(w).querySelector(".whead");
   ok("every widget has a title bar", [...document.querySelectorAll(".widget")].every(e => e.querySelector(".whood > .whead")));
-  ok("bar carries title + 3 buttons",
-     bar.querySelector(".wh-title") && bar.querySelectorAll(".wh-btn").length === 3,
+  ok("bar carries title + move/reset/settings/close",
+     bar.querySelector(".wh-title") && bar.querySelectorAll(".wh-btn").length === 4,
      bar.querySelector(".wh-title") && bar.querySelector(".wh-title").textContent);
 
   // The hood hangs ABOVE the widget, so the bar can never cover content.
   const hr = hood.getBoundingClientRect();
-  ok("hood sits above the widget", Math.abs(hr.bottom - box().top) < 1, "hood.bottom=" + hr.bottom.toFixed(1) + " widget.top=" + box().top.toFixed(1));
+  ok("hood sits below the widget", Math.abs(hr.top - box().bottom) < 1, "hood.top=" + hr.top.toFixed(1) + " widget.bottom=" + box().bottom.toFixed(1));
   ok("hood clips its contents", getComputedStyle(hood).overflow === "hidden", getComputedStyle(hood).overflow);
 
   // At rest the bar is pushed fully below the hood => clipped away to nothing.
   el(w).classList.remove("touched");
   const parked = bar.getBoundingClientRect();
-  ok("bar is PARKED behind the widget at rest", parked.top >= hr.bottom - 1,
-     "bar.top=" + parked.top.toFixed(1) + " hood.bottom=" + hr.bottom.toFixed(1));
+  ok("bar is PARKED behind the widget at rest", parked.bottom <= hr.top + 1,
+     "bar.bottom=" + parked.bottom.toFixed(1) + " hood.top=" + hr.top.toFixed(1));
   ok("parked bar is not clickable", getComputedStyle(bar).pointerEvents === "none", getComputedStyle(bar).pointerEvents);
 
   // Slid out: it occupies the strip ABOVE the widget and stops exactly at its top edge.
   el(w).classList.add("touched");
   const outR = bar.getBoundingClientRect();
-  ok("bar slides OUT above the widget", outR.bottom <= box().top + 1 && outR.top < box().top,
-     "bar=" + outR.top.toFixed(1) + ".." + outR.bottom.toFixed(1) + " widget.top=" + box().top.toFixed(1));
-  ok("slid-out bar covers NO widget content", outR.bottom <= box().top + 1);
+  ok("bar slides OUT below the widget", outR.top >= box().bottom - 1 && outR.bottom > box().bottom,
+     "bar=" + outR.top.toFixed(1) + ".." + outR.bottom.toFixed(1) + " widget.bottom=" + box().bottom.toFixed(1));
+  ok("slid-out bar covers NO widget content", outR.top >= box().bottom - 1);
   ok("slid-out bar is clickable", getComputedStyle(bar).pointerEvents === "auto");
   ok("bar spans the widget width", Math.abs(outR.width - box().width) < 2, outR.width.toFixed(1) + " vs " + box().width.toFixed(1));
 
@@ -157,9 +160,33 @@ const CHROME = `(async () => {
   el(mw).classList.remove("touched");
   root.setAttribute("data-theme", "argo");
   ok("Argo shows its cog", /cog-argo/.test(getComputedStyle(flair).backgroundImage));
+
+  // ── per-widget settings cog ────────────────────────────────────────────────
+  // It opens THAT widget's own panel, so it only exists where the page exposes one. It must never
+  // quietly stand in for global settings (those live on the global cog and the tray).
+  for (let i = 0; i < 40 && !el(mw).classList.contains("has-settings"); i++) await sleep(50); // iframe load
+  ok("Mining exposes its own settings", typeof document.getElementById("wf-mining").contentWindow.__widgetSettings === "function");
+  ok("Mining's cog is shown", el(mw).classList.contains("has-settings") && getComputedStyle(mbar.querySelector(".wh-cog")).display !== "none");
+  const np = WBY.notepad;
+  ok("a widget with no settings hides its cog",
+     !el(np).classList.contains("has-settings") && getComputedStyle(el(np).querySelector(".wh-cog")).display === "none",
+     getComputedStyle(el(np).querySelector(".wh-cog")).display);
+
+  // ── the Blueprint panel carries the same bar ───────────────────────────────
+  const bp = document.getElementById("panel");
+  const bpbar = bp.querySelector(".whood > .whead");
+  ok("Blueprint panel has the bar too", !!bpbar);
+  ok("Blueprint bar has all four controls", bpbar && bpbar.querySelectorAll(".wh-btn").length === 4,
+     bpbar && bpbar.querySelectorAll(".wh-btn").length);
+  ok("Blueprint's old top-right chrome is gone", !!document.getElementById("grip") && !!document.getElementById("grip").closest(".whead"));
+  // NB the panel carries a 3D perspective tilt, so its projected rect and a child's don't share
+  // an edge — assert the LAYOUT invariant (the hood is pinned to the panel's bottom) instead.
+  const bphood = bp.querySelector(".whood");
+  ok("Blueprint bar hangs below the panel",
+     bphood && Math.abs(parseFloat(getComputedStyle(bphood).top) - bp.clientHeight) < 1.5,
+     bphood && (getComputedStyle(bphood).top + " vs panel padding-box h " + bp.clientHeight));
   if (theme0) root.setAttribute("data-theme", theme0); else root.removeAttribute("data-theme");
 
-  kill.remove();
   return out;
 })()`;
 
@@ -180,11 +207,9 @@ const RESTORE = `(async () => {
      "party=" + cs(WBY.party,"--wx") + " mining=" + cs(WBY.mining,"--wx"));
   ok("group width applied", cs(WBY.party, "--ww") === "500px", cs(WBY.party, "--ww"));
   ok("ungrouped widget keeps its own saved spot", cs(WBY.notepad, "--wx") === "500px", cs(WBY.notepad, "--wx"));
-  const strip = document.querySelector("#wgroups .gtabs");
+  const strip = el(WBY[GROUPS[0] ? GROUPS[0].active : "party"]).querySelector(".wh-tabs");
   ok("tab strip restored", !!strip);
-  ok("strip under the restored box",
-     strip && Math.abs(parseFloat(strip.style.getPropertyValue("--wy")) - (g.y + g.h)) < 0.5,
-     strip && strip.style.getPropertyValue("--wy"));
+  ok("tabs restored into the fronted member's bar", !!(strip && strip.querySelector(".gtab")));
   return out;
 })()`;
 

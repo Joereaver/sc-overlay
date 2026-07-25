@@ -413,57 +413,50 @@
   .widget.moving .wresize { display: grid; }
   .wresize svg { width: 12px; height: 12px; display: block; }
 
-  /* Per-widget TITLE BAR — real window chrome (title + reset / settings / close), the way a
-     desktop window has one. Two things make it feel like part of the widget rather than something
-     pasted over it:
-       · it lives ABOVE the widget, so it never covers a single pixel of content, and
-       · at rest it is parked BEHIND the widget's top edge and CLIPPED away to nothing by .whood,
-         so hovering makes it SLIDE OUT from behind the panel instead of fading in on top of it.
-     The bar was always there; the hover just pulls it out.
+  /* ── Widget chrome: ONE bar along the BOTTOM edge ────────────────────────────
+     Tabs LEFT, controls RIGHT (Sub, 2026-07-24). Merging them onto one row is what lets the
+     Blueprint widget join in: its manufacturer folder tab owns the TOP edge, so chrome that lives
+     on the bottom never competes with it — and one bar reads as less furniture than two.
 
-     🔑 Why the clipping hood exists: the slide is `translateY(100%)` on the bar, and the hood's
-     `overflow:hidden` is what turns "pushed down over the widget" into "hidden behind it". Without
-     the hood the parked bar would sit visibly across the widget's top and swallow its clicks.
+     At rest the bar is parked BEHIND the widget's bottom edge and clipped away to nothing by
+     .whood, so hovering makes it SLIDE OUT from behind the panel rather than fade in on top of
+     it. The bar was always there; the hover just pulls it out.
 
-     🔑 Why hovering the bar doesn't make it retract: CSS :hover follows the DOM tree, not
-     geometry, so hovering this absolutely-positioned child still counts as hovering .widget even
-     though it's outside the widget's box. The cursor can travel up off the widget onto the bar and
-     it stays out. (The bar's rect is reported to the shell only while it's out — see RSEL — so a
-     retracted bar never eats a click meant for the game.) */
-  .whood { position: absolute; left: 0; right: 0; bottom: 100%; height: var(--whead-h, 28px);
+     🔑 GROUPED widgets pin the bar OUT permanently: the tabs are the only thing showing that a
+     stack exists and which widget is fronted, so a group would otherwise look identical to a lone
+     widget until hovered.
+
+     🔑 Why the clipping hood exists: the slide is a translate on the bar, and the hood's
+     overflow:hidden is what turns "pushed up over the widget" into "hidden behind it". Without it
+     the parked bar would sit visibly across the widget and swallow its clicks.
+
+     🔑 Why hovering the bar doesn't retract it: CSS :hover follows the DOM tree, not geometry, so
+     hovering this absolutely-positioned child still counts as hovering .widget even though it sits
+     outside the widget's box. The cursor can travel down off the widget onto the bar. (The bar's
+     rect is reported to the shell only while it's out — see RSEL — so a parked bar never eats a
+     click meant for the game.) */
+  .whood { position: absolute; left: 0; right: 0; top: 100%; height: var(--whead-h, 28px);
     overflow: hidden; pointer-events: none; z-index: 30; }
-  .whead { position: absolute; left: 0; right: 0; bottom: 0; height: var(--whead-h, 28px);
-    box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 9px;
-    pointer-events: none; transform: translateY(100%); transition: transform 0.16s ease;
-    background: linear-gradient(180deg, rgba(8, 17, 26, 0.96), rgba(8, 17, 26, 0.82));
-    border: 1px solid var(--border); border-bottom: 0; border-radius: 9px 9px 0 0; }
-  /* Slid out on hover, and by `.touched` — set when an embedded page reports a pointerdown, since
-     hover alone would rely on the wrapper tracking a cursor that's over a child IFRAME. */
-  .widget:hover .whead, .widget.touched .whead { transform: translateY(0); pointer-events: auto; }
-  .widget.moving .whood { display: none; } /* arrange mode: the drag shield owns the widget */
+  .whead { position: absolute; left: 0; right: 0; top: 0; height: var(--whead-h, 28px);
+    box-sizing: border-box; display: flex; align-items: center; gap: 4px; padding: 0 5px;
+    pointer-events: none; transform: translateY(-100%); transition: transform 0.16s ease;
+    background: linear-gradient(180deg, rgba(8, 17, 26, 0.82), rgba(8, 17, 26, 0.96));
+    border: 1px solid var(--border); border-top: 0; border-radius: 0 0 9px 9px; }
+  /* Out on hover, on `.touched` (set when an embedded page reports a pointerdown, since hover
+     alone would rely on the wrapper tracking a cursor that's over a child IFRAME), and always
+     while grouped. */
+  .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead,
+  #panel:hover .whead, #panel.touched .whead { transform: translateY(0); pointer-events: auto; }
+  .widget.moving .whood, #panel.moving .whood { display: none; } /* arrange mode: the drag shield owns the widget */
+  .wh-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+  .wh-id { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+  .wh-tabs { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; }
+  /* A grouped widget shows its stack's TABS in place of its own name — the tabs already name it. */
+  .widget.grouped .wh-id { display: none; }
+  .wh-right { flex: none; display: flex; align-items: center; gap: 4px; }
   .whead .dia { width: 6px; height: 6px; flex: none; background: var(--cyan-bright);
     transform: rotate(45deg); box-shadow: 0 0 8px var(--cyan); }
-
-  /* Manufacturer trinket, riding the title bar (Sub, 2026-07-24). The skin flair used to be
-     permanent corner decoration; on the bar it slides out with the chrome, so the resting widget
-     is pure content and the flair is part of what the hover reveals.
-     🔑 It has to fit INSIDE the bar's height: the hood clips at the bar's own box, so anything
-     overhanging above it would peek out while the bar is parked. It stands in for the diamond
-     rather than sitting next to it, so the bar's layout doesn't shift between themes. */
-  .wh-flair { display: none; flex: none; width: 22px; height: 22px; background-repeat: no-repeat;
-    background-position: center; background-size: contain; }
-  :root[data-theme="drake"] .widget.flair .wh-flair { display: block; background-image: url(tape-m-tl.webp); transform: rotate(-8deg); }
-  :root[data-theme="anvil"] .widget.flair .wh-flair { display: block; background-image: url(anvil-bolt-tl.webp); }
-  :root[data-theme="argo"] .widget.flair .wh-flair { display: block; background-image: url(cog-argo-tl.png); }
-  :root[data-theme="misc"] .widget.flair .wh-flair { display: block; background-image: url(cog-misc-tl.png); }
-  :root[data-theme="greys"] .widget.flair .wh-flair { display: block; background-image: url(greys-corner-tl.png); }
-  /* When a trinket is showing it replaces the generic diamond. */
-  :root[data-theme="drake"] .widget.flair .whead .dia,
-  :root[data-theme="anvil"] .widget.flair .whead .dia,
-  :root[data-theme="argo"] .widget.flair .whead .dia,
-  :root[data-theme="misc"] .widget.flair .whead .dia,
-  :root[data-theme="greys"] .widget.flair .whead .dia { display: none; }
-  .wh-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .wh-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--sans); font-size: 9.5px; font-weight: 700; letter-spacing: 0.18em;
     text-transform: uppercase; color: var(--cyan-text); }
   .wh-btn { flex: none; font-family: var(--sans); font-size: 11px; line-height: 1;
@@ -471,21 +464,30 @@
     border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; cursor: pointer; }
   .wh-btn:hover { background: rgba(var(--accent-rgb), 0.26); border-color: var(--cyan); }
   .wh-btn.wh-close:hover { background: rgba(255, 90, 90, 0.28); border-color: #ff8080; color: #ffd7d7; }
+  /* The per-widget cog opens THAT widget's own settings, so it only exists when the embedded page
+     actually exposes some (__widgetSettings). Global settings live on the global cog and the tray
+     — this button must never quietly stand in for them. */
+  .wh-cog { display: none; }
+  .widget.has-settings .wh-cog, #panel .wh-cog { display: block; }
 
-  /* ── Widget groups: tab strip ────────────────────────────────────────────────
-     Drag a widget onto another's header to stack them as tabs in one frame (screen real estate —
-     Party split and the Mining Assistant go hand in hand). The strip sits at the BOTTOM of the
-     group box, deliberately: the Blueprint widget's manufacturer folder tab owns its top edge, so
-     a top strip would collide with it, and a bottom strip never hangs over empty canvas. */
-  /* ALWAYS visible, unlike the title bar (Sub's call): the tabs are the only thing telling you a
-     stack exists and which widget is fronted, so hiding them would make a group look identical to
-     a lone widget until you hovered it. Styled to mirror the title bar so the two read as one
-     piece of chrome — same gradient (flipped, since this one hangs below), border and radius. */
-  .gtabs { position: absolute; left: var(--wx); top: var(--wy); width: var(--ww); z-index: 22;
-    display: flex; gap: 3px; padding: 3px; box-sizing: border-box; overflow: hidden;
-    background: linear-gradient(180deg, rgba(8, 17, 26, 0.82), rgba(8, 17, 26, 0.96));
-    border: 1px solid var(--border); border-top: 0; border-radius: 0 0 9px 9px; }
-  .gtab { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Manufacturer trinket, riding the bar. The skin flair used to be permanent corner decoration;
+     here it slides out with the chrome, so the resting widget is pure content.
+     🔑 It must fit INSIDE the bar's height: the hood clips at the bar's own box, so anything
+     overhanging would peek out while the bar is parked. It stands in for the diamond rather than
+     sitting beside it, so the bar's layout doesn't shift between themes. */
+  .wh-flair { display: none; flex: none; width: 22px; height: 22px; background-repeat: no-repeat;
+    background-position: center; background-size: contain; }
+  :root[data-theme="drake"] .flair .wh-flair { display: block; background-image: url(tape-m-tl.webp); transform: rotate(-8deg); }
+  :root[data-theme="anvil"] .flair .wh-flair { display: block; background-image: url(anvil-bolt-tl.webp); }
+  :root[data-theme="argo"] .flair .wh-flair { display: block; background-image: url(cog-argo-tl.png); }
+  :root[data-theme="misc"] .flair .wh-flair { display: block; background-image: url(cog-misc-tl.png); }
+  :root[data-theme="greys"] .flair .wh-flair { display: block; background-image: url(greys-corner-tl.png); }
+  :root[data-theme="drake"] .flair .whead .dia, :root[data-theme="anvil"] .flair .whead .dia,
+  :root[data-theme="argo"] .flair .whead .dia, :root[data-theme="misc"] .flair .whead .dia,
+  :root[data-theme="greys"] .flair .whead .dia { display: none; }
+
+  /* Group tabs — left half of the same bar. */
+  .gtab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
     text-transform: uppercase; color: var(--cyan-dim); background: transparent;
     border: 1px solid transparent; border-radius: 5px; padding: 4px 5px; cursor: pointer; }
@@ -600,38 +602,13 @@
     border: 1px solid var(--cyan); background: rgba(var(--accent-rgb), 0.15); color: var(--cyan); }
   #moveDone:hover { background: rgba(var(--accent-rgb), 0.3); }
 
-  /* Grab handle: a discoverable "move" affordance that fades in on hover (Electron
-     only). Clicking it drops into move mode — the reliable, hover-suspended drag. */
-  #grip { display: none; position: absolute; top: 8px; right: 44px; z-index: 20;
-    width: 25px; height: 25px; place-items: center; -webkit-app-region: no-drag;
-    cursor: grab; user-select: none; border: 1px solid var(--border); border-radius: 4px;
-    background: rgba(8, 17, 26, 0.72); color: var(--cyan); opacity: 0; transition: opacity 0.15s ease; }
-  #grip svg { width: 14px; height: 14px; display: block; }
-  #panel.electron #grip { display: grid; opacity: 0.85; }
-  #grip:hover { opacity: 1 !important; background: rgba(var(--accent-rgb), 0.2); }
-  #panel.moving #grip { display: none; }
+  /* #grip / #cog / #bpClose used to be absolutely-positioned chrome in the panel's top-right.
+     They're ordinary .wh-btn's in the bottom bar now (see "Widget chrome"), so they need no
+     positioning of their own — only the open-state highlight the cog still uses. */
+  #cog.open { background: rgba(var(--accent-rgb), 0.26); border-color: var(--cyan); }
+  #panel.moving .whood { display: none; }
 
-  /* Settings cog (top-right) — hover-revealed like the grip, so the resting overlay stays
-     clean. Opens the declutter menu (hide odds / verify / category bar) + OCR status. */
-  #cog { position: absolute; top: 8px; right: 11px; z-index: 22; -webkit-app-region: no-drag;
-    width: 25px; height: 25px; display: grid; place-items: center; cursor: pointer;
-    border: 1px solid var(--border); border-radius: 4px; background: rgba(8, 17, 26, 0.72);
-    color: var(--cyan); font-size: 14px; line-height: 1; opacity: 0.85; transition: opacity 0.15s ease; }
-  #cog.open { opacity: 1; }
-  #cog:hover { opacity: 1; background: rgba(var(--accent-rgb), 0.2); }
-  #panel.moving #cog { display: none; }
-
-  /* Blueprint close — the other widgets carry ✕ in their own hover header, but this panel's
-     top-left folder tab showcases the manufacturer skin, so it must NOT gain a competing bar.
-     Instead the control folds into the grip/cog row that's already there (Sub's call). */
-  #bpClose { display: none; position: absolute; top: 8px; right: 77px; z-index: 22;
-    -webkit-app-region: no-drag; width: 25px; height: 25px; place-items: center; cursor: pointer;
-    border: 1px solid var(--border); border-radius: 4px; background: rgba(8, 17, 26, 0.72);
-    color: var(--cyan); font-size: 12px; line-height: 1; opacity: 0.85; transition: opacity 0.15s ease; }
-  #panel.electron #bpClose { display: grid; }
-  #bpClose:hover { opacity: 1; background: rgba(255, 90, 90, 0.28); border-color: #ff8080; color: #ffd7d7; }
-  #panel.moving #bpClose { display: none; }
-  #cogMenu { display: none; position: absolute; top: 37px; right: 11px; z-index: 31; width: 232px;
+  #cogMenu { display: none; position: absolute; bottom: 36px; right: 6px; z-index: 31; width: 232px;
     -webkit-app-region: no-drag; background: var(--menu-bg); border: 1px solid var(--border); border-radius: 4px;
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); padding: 6px 0 8px; }
   #cogMenu.open { display: block; }
@@ -1053,6 +1030,17 @@
     <img class="bolt br" alt="" src="anvil-screw-br.webp">
     <div id="moveBanner"><div class="movebox">⠿ Drag to move · corner to resize<button id="moveDone">Done</button></div></div>
     <div id="resizeHandle" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
+    <!-- Same sliding chrome as every registry widget. This panel could never take a TOP bar (its
+         manufacturer folder tab owns that edge), which is exactly why the bar moved to the bottom. -->
+    <div class="whood"><div class="whead">
+      <span class="wh-left"><span class="wh-id"><span class="dia"></span><span class="wh-title">Blueprints</span></span><span class="wh-tabs"></span></span>
+      <span class="wh-right">
+        <button type="button" class="wh-btn wh-move" id="grip" title="Move / arrange widgets">&#10287;</button>
+        <button type="button" class="wh-btn wh-reset" id="bpReset" title="Reset this widget’s position and size">&#8634;</button>
+        <button type="button" class="wh-btn wh-cog" id="cog" title="Blueprints settings">&#9881;</button>
+        <button type="button" class="wh-btn wh-close" id="bpClose" title="Close the Blueprint panel">&#10005;</button>
+      </span>
+    </div></div>
     <!-- Global "Blueprint Received" pop — fires on any real-time receipt regardless of the mission shown. -->
     <div id="bpPop" class="bp-pop">
       <span class="bp-pop-thumb"><img id="bpPopImg" alt=""></span>
@@ -1062,9 +1050,6 @@
       </div>
     </div>
     <div class="head">
-      <div id="grip" title="Move overlay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg></div>
-      <div id="bpClose" title="Close the Blueprint panel">✕</div>
-      <div id="cog" title="Overlay settings">⚙</div>
       <div id="cogMenu">
         <div class="cog-sec cog-canvas-only">This widget</div>
         <div class="cog-slider cog-canvas-only"><label>Angle <b id="cogAngleV">0°</b></label><input type="range" id="cogAngle" min="-35" max="35" step="1" value="0" /></div>
@@ -2074,11 +2059,18 @@
       return '<div class="' + cls + '" id="w-' + w.key + '" style="' + style + '">'
         + '<iframe id="wf-' + w.key + '" title="' + escapeAttr(w.title) + '"' + allow + ' scrolling="no"></iframe>'
         + '<div class="whood"><div class="whead">'
+        + '<span class="wh-left">'
+        + '<span class="wh-id">'
         + (w.flair ? '<span class="wh-flair"></span>' : "")
         + '<span class="dia"></span><span class="wh-title">' + escapeHtml(w.title) + '</span>'
+        + '</span><span class="wh-tabs"></span>'
+        + '</span>'
+        + '<span class="wh-right">'
+        + '<button type="button" class="wh-btn wh-move" title="Move / arrange widgets">⠿</button>'
         + '<button type="button" class="wh-btn wh-reset" title="Reset this widget’s position and size">↺</button>'
-        + '<button type="button" class="wh-btn wh-cog" title="Settings">⚙</button>'
+        + '<button type="button" class="wh-btn wh-cog" title="' + escapeAttr(w.title) + ' settings">⚙</button>'
         + '<button type="button" class="wh-btn wh-close" title="Close ' + escapeAttr(w.title) + '">✕</button>'
+        + '</span>'
         + '</div></div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -2137,22 +2129,22 @@
     renderGroupTabs();
   }
 
+  // Tabs live in the LEFT half of the FRONTED member's own bar, so a stack shows exactly one bar
+  // (the visible widget's) rather than a separate floating strip. Every other member's tab slot is
+  // cleared, since only one of them is on screen at a time anyway.
   function renderGroupTabs() {
-    const host = $("wgroups"); if (!host) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0;
-    host.innerHTML = GROUPS.map((g) => {
-      // A group whose members are all closed shows no strip.
-      if (!g.members.some((k) => WBY[k]?.s.visible)) return "";
-      const tabs = g.members.map((k) => {
-        const w = WBY[k]; if (!w) return "";
+    for (const w of WIDGETS) {
+      const el = wEl(w); if (!el) continue;
+      const slot = el.querySelector(".wh-tabs"); if (!slot) continue;
+      const g = groupOf(w);
+      if (!g || g.active !== w.key) { if (slot.innerHTML) slot.innerHTML = ""; continue; }
+      slot.innerHTML = g.members.map((k) => {
+        const m = WBY[k]; if (!m) return "";
         return '<button type="button" class="gtab' + (g.active === k ? " on" : "") + '"'
-          + ' data-g="' + g.id + '" data-k="' + k + '">' + escapeHtml(w.title) + '</button>';
-      }).join("");
-      return '<div class="gtabs" style="--wx:' + (g.x + ox) + 'px;--wy:' + (g.y + oy + g.h) + 'px;--ww:' + g.w + 'px">'
-        + tabs
-        + '<button type="button" class="gtab gdetach" data-g="' + g.id + '" title="Pop the current tab out of this group">⧉</button>'
-        + '</div>';
-    }).join("");
+          + ' data-g="' + g.id + '" data-k="' + k + '">' + escapeHtml(m.title) + '</button>';
+      }).join("")
+        + '<button type="button" class="gtab gdetach" data-g="' + g.id + '" title="Pop this tab out of the group">⧉</button>';
+    }
   }
 
   // Merge `a` into whatever group `b` belongs to, creating one if `b` is still standalone.
@@ -2202,9 +2194,9 @@
     saveGroups();
   }
 
-  // Tab clicks (delegated — the strips are re-rendered constantly).
-  $("wgroups")?.addEventListener("click", (e) => {
-    const btn = e.target.closest(".gtab"); if (!btn) return;
+  // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
+  document.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest(".gtab") : null; if (!btn) return;
     e.stopPropagation();
     const g = GROUPS.find((x) => x.id === btn.dataset.g); if (!g) return;
     if (btn.classList.contains("gdetach")) {
@@ -2280,9 +2272,19 @@
   // Create the iframe (idempotent). Loading it starts whatever the page does — SSE, polling,
   // audio — so only arm it when the widget is shown, or when the shell asks for it to be armed
   // hidden (mining's auto-show).
+  // Does this page have settings of its own? Only then does its per-widget cog appear.
+  // 🔑 Probed on the iframe's LOAD event, not just on the page's ready() call: a page can (and
+  // mining does) call ready() before it finishes defining its own exports, so a ready-only probe
+  // misses them and the cog never shows.
+  function probeSettings(w) {
+    try { wEl(w)?.classList.toggle("has-settings", typeof frameWin(w)?.__widgetSettings === "function"); }
+    catch { /* iframe gone */ }
+  }
+
   function ensureFrame(w) {
     if (w.armed) return;
     const f = frameEl(w); if (!f) return;
+    f.addEventListener("load", () => probeSettings(w));
     const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
     const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
     f.src = "/" + w.page + "?embedded=1&theme=" + encodeURIComponent(theme) + lite;
@@ -2327,7 +2329,7 @@
   // are identical for all of them, so only the extras come from the table.
   for (const w of WIDGETS) {
     const base = {
-      ready: () => { applyFrame(w); syncWidgetTheme(w); },
+      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); },
       // Every embedded page calls this on pointerdown, so it doubles as "the user is engaging
       // THIS widget" — which is what reveals its header even if the wrapper never sees the
       // cursor because an iframe is under it.
@@ -2448,10 +2450,14 @@
         if (window.overlayApi?.[setter]) window.overlayApi[setter](false);
         else setWidgetVisible(w, false); // no shell (OBS/browser) — hide locally
       });
+      // THIS widget's own settings, not the app's — global settings live on the global cog and the
+      // tray (Sub, 2026-07-24). The button only exists when the embedded page exposes a panel to
+      // open (see the `has-settings` probe in the bridge), so it never quietly stands in for them.
       el.querySelector(".wh-cog")?.addEventListener("click", (e) => {
         e.stopPropagation();
-        window.overlayApi?.openSettings?.();
+        try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
       });
+      el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
       el.querySelector(".wh-reset")?.addEventListener("click", (e) => { e.stopPropagation(); resetWidget(w); });
       // Engaging a widget's own chrome reveals its header too (the iframe can't report this one).
       el.addEventListener("pointerdown", () => touchWidget(w));
@@ -2605,6 +2611,20 @@
     // Close the Blueprint panel from the panel itself (setBlueprintVisible persists it, and the
     // hub checkbox reads that flag when it opens, so the two stay in step).
     $("bpClose")?.addEventListener("click", (e) => { e.stopPropagation(); setBlueprintVisible(false); });
+    // Reset just this panel — same idea as a widget's ↺, using the panel's own default placement.
+    $("bpReset")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      widget.scale = null; widget.angle = null;
+      defaultWidgetPos();
+      applyWidget();
+      persistWidget();
+    });
+    // Hovering the panel pulls its bar out too; `.touched` keeps it out while its cog menu is open.
+    $("panel").addEventListener("pointerdown", () => $("panel").classList.add("touched"));
+    document.addEventListener("pointerdown", (e) => {
+      const t = e.target;
+      if (!(t instanceof Element) || !t.closest("#panel")) $("panel").classList.remove("touched");
+    });
     $("moveDone").addEventListener("click", () => window.overlayApi.endMove());
     // The full-screen banner's Done exits arrange for ALL widgets. It's off the panel, so it
     // reports hover (like the global cog) to make itself clickable.
@@ -2626,7 +2646,11 @@
       // The slid-out title bar sits ABOVE its widget, outside the rect getBoundingClientRect()
       // reports for .widget — so it needs reporting in its own right, but ONLY while it's out.
       // A parked bar must not leave a permanently-clickable strip hanging over the game.
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .gtabs, .widget:hover .whead, .widget.touched .whead";
+      // The slid-out bar hangs BELOW its widget, outside the rect getBoundingClientRect() reports
+      // for .widget — so it needs reporting in its own right, but ONLY while it's out. A parked
+      // bar must not leave a permanently-clickable strip over the game. (#panel's own bar is
+      // covered the same way; #panel itself is already listed.)
+      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {
