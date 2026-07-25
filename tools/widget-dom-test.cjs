@@ -316,6 +316,93 @@ const CHROME = `(async () => {
   return out;
 })()`;
 
+// ── Suite 5: every control is actually VISIBLE and REACHABLE ──────────────────
+// Three separate bugs this session were the same shape: a control that exists, is display:block,
+// and does nothing — because an ancestor's overflow:hidden clipped it away (mining's cog menu, the
+// settings popover) or it sat outside every region the shell hit-tests (so the click went to the
+// game). getBoundingClientRect() is happily non-zero in both cases, so only an explicit check
+// finds them. This suite opens each widget's chrome and proves you could actually click it.
+const REACH = `(async () => {
+  ${PRELUDE}
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(400);
+
+  // Intersect an element's rect with every clipping ancestor's rect. Anything that survives with
+  // real area is genuinely on screen; anything that doesn't has been clipped away.
+  let lastClipper = "";
+  const visibleArea = (node) => {
+    let r = node.getBoundingClientRect();
+    let x0 = r.left, y0 = r.top, x1 = r.right, y1 = r.bottom;
+    lastClipper = "";
+    for (let p = node.parentElement; p; p = p.parentElement) {
+      const st = getComputedStyle(p);
+      // An ancestor only clips if it establishes a clipping box; a scrollable one still shows what
+      // is inside its padding box. html/body are the viewport and never count as clippers here.
+      if (p === document.body || p === document.documentElement) continue;
+      if (st.overflow === "visible" && st.overflowX === "visible" && st.overflowY === "visible") continue;
+      const pr = p.getBoundingClientRect();
+      const nx0 = Math.max(x0, pr.left), ny0 = Math.max(y0, pr.top);
+      const nx1 = Math.min(x1, pr.right), ny1 = Math.min(y1, pr.bottom);
+      if ((nx1 - nx0) * (ny1 - ny0) < (x1 - x0) * (y1 - y0)) {
+        lastClipper = p.tagName + "." + String(p.className).split(" ")[0];
+      }
+      x0 = nx0; y0 = ny0; x1 = nx1; y1 = ny1;
+    }
+    return Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+  };
+  // The shell only routes clicks to rects this page reports; anything outside them hits the game.
+  const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead";
+  const reachable = (node) => {
+    const r = node.getBoundingClientRect();
+    const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+    return [...document.querySelectorAll(RSEL)].some((reg) => {
+      const q = reg.getBoundingClientRect();
+      return cx >= q.left && cx <= q.right && cy >= q.top && cy <= q.bottom;
+    });
+  };
+
+  const clipped = [], unreachable = [];
+  for (const w of WIDGETS) {
+    const el = document.getElementById("w-" + w.key);
+    el.classList.add("touched"); // bar out, the way hovering it would
+    // the bar's own controls
+    for (const b of el.querySelectorAll(".wh-right .wh-btn")) {
+      const cls = b.className.replace("wh-btn ", "");
+      if (visibleArea(b) < 25) clipped.push(w.key + " " + cls + " [clipped by " + lastClipper + "]");
+      else if (!reachable(b)) unreachable.push(w.key + " " + cls);
+    }
+    // and the settings popover it opens
+    el.querySelector(".wh-cog").click();
+    await sleep(20);
+    const cfg = el.querySelector(".wcfg");
+    if (visibleArea(cfg) < 400) clipped.push(w.key + " popover area=" + Math.round(visibleArea(cfg)) + " [clipped by " + lastClipper + "]");
+    else if (!reachable(cfg)) unreachable.push(w.key + " settings popover");
+    for (const b of cfg.querySelectorAll(".wh-btn")) {
+      if (getComputedStyle(b).display === "none") continue;
+      if (visibleArea(b) < 25) clipped.push(w.key + " popover " + b.className.replace("wh-btn ", ""));
+    }
+    el.classList.remove("cfgopen");
+    el.classList.remove("touched");
+  }
+  ok("no widget control is clipped away by an ancestor", clipped.length === 0, clipped.slice(0, 6).join(" | "));
+  ok("every widget control sits inside a reported click region", unreachable.length === 0, unreachable.slice(0, 6).join(" | "));
+
+  // The cog must actually DO something — a dead control that merely exists is the bug we keep hitting.
+  const w0 = WBY.party, e0 = document.getElementById("w-party");
+  e0.classList.add("touched");
+  e0.querySelector(".wh-cog").click(); await sleep(20);
+  const opened = e0.classList.contains("cfgopen") && visibleArea(e0.querySelector(".wcfg")) > 400;
+  ok("clicking the cog actually opens a visible popover", opened,
+     "cfgopen=" + e0.classList.contains("cfgopen") + " area=" + Math.round(visibleArea(e0.querySelector(".wcfg"))) + " clipper=" + lastClipper);
+  // and text size must move
+  const before = w0.s.text || 1;
+  e0.querySelector(".wcfg-up").click(); await sleep(20);
+  ok("text size control changes the scale", (w0.s.text || 1) > before, before + " -> " + (w0.s.text || 1));
+  e0.querySelector(".wcfg-dn").click();
+  e0.classList.remove("cfgopen", "touched");
+  return out;
+})()`;
+
 // ── Suite 3: restore from a saved (and partly corrupt) layout ──────────────────
 const RESTORE = `(async () => {
   ${PRELUDE}
@@ -366,6 +453,7 @@ app.whenReady().then(async () => {
     fails += await run("widget grouping", GROUPING, null);
     fails += await run("pair merges (brute force)", PAIRS, null);
     fails += await run("title-bar chrome", CHROME, null);
+    fails += await run("controls visible + reachable", REACH, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);

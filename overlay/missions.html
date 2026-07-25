@@ -501,10 +501,14 @@
      widgets are responsive (drag the corner for more ROOM), so how big the text is has to be a
      separate control, or a narrow widget truncates and a big one just wastes space. Widgets whose
      page has its own panel (mining, SC Feed) also get a button through to it. */
-  .wcfg { display: none; position: absolute; right: 4px; bottom: calc(100% + 4px); z-index: 34;
+  /* 🔑 NOT inside .whood — that's `overflow:hidden` and one bar tall, so a popover opening above
+     the bar is clipped to nothing (this is the third time that trap has bitten: mining's cog menu
+     and the trinket z-order were the same shape of bug). It hangs off the WIDGET, inside its rect,
+     which also means the shell's cursor hit-test already covers it without a new region. */
+  .wcfg { display: none; position: absolute; right: 6px; bottom: 6px; z-index: 34;
     min-width: 176px; padding: 8px 9px; border-radius: 8px; background: var(--menu-bg);
     border: 1px solid var(--border); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); }
-  .whead.cfgopen .wcfg { display: block; }
+  .widget.cfgopen .wcfg { display: block; }
   .wcfg-row { display: flex; align-items: center; gap: 6px; }
   .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-text); }
@@ -2095,6 +2099,7 @@
         + '<button type="button" class="wh-btn wh-cog" title="' + escapeAttr(w.title) + ' settings">⚙</button>'
         + '<button type="button" class="wh-btn wh-close" title="Close ' + escapeAttr(w.title) + '">✕</button>'
         + '</span>'
+        + '</div></div>'
         + '<div class="wcfg">'
         + '<div class="wcfg-row"><span class="wcfg-lbl">Text size</span>'
         + '<button type="button" class="wh-btn wcfg-dn" title="Smaller text">A−</button>'
@@ -2102,7 +2107,6 @@
         + '<span class="wcfg-val"></span></div>'
         + '<button type="button" class="wh-btn wcfg-more" title="This widget’s own settings">More settings…</button>'
         + '</div>'
-        + '</div></div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
         + '</div>';
@@ -2258,7 +2262,7 @@
   document.addEventListener("click", (e) => {
     const t = e.target;
     if (t instanceof Element && t.closest(".wcfg, .wh-cog")) return;
-    document.querySelectorAll(".whead.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+    document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
   });
 
   // Put ONE widget back to its default spot and size. The tray's "Reset overlay layout" is
@@ -2528,9 +2532,9 @@
       const bar = el.querySelector(".whead");
       el.querySelector(".wh-cog")?.addEventListener("click", (e) => {
         e.stopPropagation();
-        const open = !bar.classList.contains("cfgopen");
-        document.querySelectorAll(".whead.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
-        bar.classList.toggle("cfgopen", open);
+        const open = !el.classList.contains("cfgopen");
+        document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+        el.classList.toggle("cfgopen", open);
         if (open) { touchWidget(w); showTextScale(w); }
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
@@ -2538,7 +2542,7 @@
       el.querySelector(".wcfg-up")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, +0.1); });
       el.querySelector(".wcfg-more")?.addEventListener("click", (e) => {
         e.stopPropagation();
-        bar.classList.remove("cfgopen");
+        el.classList.remove("cfgopen");
         try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
       });
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
@@ -2734,7 +2738,7 @@
       // for .widget — so it needs reporting in its own right, but ONLY while it's out. A parked
       // bar must not leave a permanently-clickable strip over the game. (#panel's own bar is
       // covered the same way; #panel itself is already listed.)
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead";
+      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {
