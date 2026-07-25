@@ -39,7 +39,12 @@ function writeFgPs1() {
   ].join("\n"));
   fgPs1Written = true;
 }
+// Prefer the long-lived watcher (foreground.cjs): it already knows the answer, so the common case
+// costs nothing. The spawn below is now only the cold-start / helper-died fallback — it used to
+// run on EVERY tick, i.e. ~20 PowerShell launches a minute for one HWND.
+const fgWatch = require("./foreground.cjs");
 function foregroundWindow() {
+  if (fgWatch.ready()) return Promise.resolve(fgWatch.foreground());
   return new Promise((resolve) => {
     try { writeFgPs1(); } catch { return resolve({ name: "", rect: null }); }
     execFile("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", fgPs1], { windowsHide: true, timeout: 4000 }, (err, out) => {
@@ -287,6 +292,10 @@ function startFabCapture({ port, configDir, onStatus }) {
     // The Mining Assistant (refinery timers + signature scanner) also reads the screen;
     // refinery/mineable reads are routed to its tracker server-side in /api/screen-read.
     const mining = cfg.miningAssistant === true;
+    // The foreground watcher is only worth running while something here is armed — with all three
+    // opt-ins off this loop does nothing but re-read a config file every 3s, and shouldn't be
+    // keeping a helper process alive to do it.
+    fgWatch.want("ocr", fab || miss || mining);
     if (!fab && !miss && !mining) { emitContext("off"); return; }
     // Watchdog: a single hung await (e.g. a fetch to the sidecar while it's restarting during an
     // auto-update) must never latch the loop forever. If a prior tick has held `busy` well past

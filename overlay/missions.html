@@ -2128,9 +2128,24 @@
     if (w.local) { $("cogMenu")?.classList.add("open"); $("cog")?.classList.add("open"); return; }
     try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
   };
+  // 🔑 The ONE place a widget goes on or off screen, and therefore the one place that tells the
+  // page about it. It used to be setWidgetVisible that fired onShow/onHide — but that isn't the
+  // only path here: a widget backgrounded as a GROUP TAB goes through refreshGroupDisplay, which
+  // calls straight into showEl. So a mining widget tabbed behind another kept announcing rocks
+  // out loud from a box nobody could see, because it was never told it had gone dark.
+  // (Rule, unchanged: invisible means no sound and no work beyond un-hiding itself.)
   function showEl(w, vis) {
-    if (w.local) { document.body.classList.toggle("bp-hidden", !vis); return; }
-    const el = wEl(w); if (el) el.style.display = vis ? "" : "none";
+    vis = !!vis;
+    const was = wShown(w);
+    if (w.local) document.body.classList.toggle("bp-hidden", !vis);
+    else { const el = wEl(w); if (el) el.style.display = vis ? "" : "none"; }
+    if (vis !== was) notifyVisibility(w, vis);
+  }
+  // Also called on the page's own ready(): an armed-hidden iframe (mining waiting to auto-show)
+  // is created and hidden in the same breath, so the hide fired while its contentWindow was still
+  // empty and the call vanished into an optional chain. The page asks again once it can listen.
+  function notifyVisibility(w, vis) {
+    try { (vis ? w.onShow : w.onHide)?.(w); } catch { /* iframe gone mid-flip */ }
   }
   const wShown = (w) => (w.local
     ? !document.body.classList.contains("bp-hidden")
@@ -2418,11 +2433,33 @@
   function ensureFrame(w) {
     if (w.local || w.armed) return;
     const f = frameEl(w); if (!f) return;
-    f.addEventListener("load", () => { probeSettings(w); applyTextScale(w); });
+    // Wire the load handler ONCE — a widget can be unloaded and re-armed any number of times now.
+    if (!w.wired) {
+      w.wired = true;
+      f.addEventListener("load", () => { if (w.armed) { probeSettings(w); applyTextScale(w); } });
+    }
     const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
     const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
     f.src = "/" + w.page + "?embedded=1&theme=" + encodeURIComponent(theme) + lite;
     w.armed = true;
+  }
+
+  // 🔑 CLOSED MEANS CLOSED (Sub, 2026-07-25). Hiding a widget used to leave its iframe loaded
+  // forever, so a widget you opened once and closed kept its poll timers running, kept its SSE
+  // stream open and, in Twitch chat's case, kept an IRC socket taking every message in the
+  // channel — for a box that isn't on screen. Dropping the src frees the timers, the sockets and
+  // the document's memory in one go; re-opening reloads it, which is what "open" should mean.
+  //
+  // NOT the same as backgrounding a group tab: that never comes through here (see
+  // refreshGroupDisplay), so a tabbed-away widget still keeps its scrollback and unsaved text.
+  // A widget the shell ARMED (mining waiting to auto-show, see keepLoaded) also stays loaded —
+  // it has to be listening to be able to pop itself up.
+  function unloadFrame(w) {
+    if (w.local || !w.armed || w.keepLoaded) return;
+    const f = frameEl(w); if (!f) return;
+    w.armed = false;
+    try { f.src = "about:blank"; } catch { /* already gone */ }
+    wEl(w)?.classList.remove("has-settings");
   }
 
   function setWidgetVisible(w, on) {
@@ -2432,13 +2469,12 @@
     if (on) {
       ensureFrame(w);
       if (g) { g.active = w.key; saveGroups(); } // turning one on brings its tab forward
-      showEl(w, true);
+      showEl(w, true); // fires onShow
       applyFrame(w);
-      w.onShow?.(w);
       if (g) refreshGroupDisplay(g);
     } else {
-      w.onHide?.(w);
-      showEl(w, false);
+      showEl(w, false); // fires onHide
+      unloadFrame(w);
       el.classList.remove("moving");
       // Closing a tab leaves the stack, the way closing a browser tab does.
       if (g) detachFromGroup(w);
@@ -2464,7 +2500,9 @@
   for (const w of WIDGETS) {
     if (w.local) continue; // nothing to bridge to - it is in this document
     const base = {
-      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); applyTextScale(w); },
+      // notifyVisibility: the page is only NOW able to hear it. An armed-hidden widget is created
+      // and hidden before its contentWindow exists, so that first onHide went nowhere.
+      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); applyTextScale(w); notifyVisibility(w, wShown(w)); },
       // Every embedded page calls this on pointerdown, so it doubles as "the user is engaging
       // THIS widget" — which is what reveals its header even if the wrapper never sees the
       // cursor because an iframe is under it.
@@ -2499,6 +2537,9 @@
     const chan = "on" + w.key.charAt(0).toUpperCase() + w.key.slice(1) + "Visible";
     window.overlayApi?.[chan]?.((s) => {
       if (!s) return;
+      // `arm` = "keep listening while hidden" (mining's auto-show). Everything else gets unloaded
+      // when it's closed, so it stops costing anything.
+      w.keepLoaded = !!s.arm;
       if (s.on) setWidgetVisible(w, true);
       else { if (s.arm) ensureFrame(w); setWidgetVisible(w, false); }
     });
@@ -2838,12 +2879,19 @@
       // bar must not leave a permanently-clickable strip over the game. (#panel's own bar is
       // covered the same way; #panel itself is already listed.)
       const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+      // Only cross the process boundary when the answer actually changed. The rects are stable for
+      // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
+      // IPC messages a second, forever.
+      let lastRegions = "";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {
           const r = el.getBoundingClientRect();
           if (r.width > 1 && r.height > 1) rects.push({ x: r.left, y: r.top, w: r.width, h: r.height });
         });
+        const sig = JSON.stringify(rects);
+        if (sig === lastRegions) return;
+        lastRegions = sig;
         window.overlayApi.reportRegions(rects);
       };
       setInterval(reportRegions, 100);

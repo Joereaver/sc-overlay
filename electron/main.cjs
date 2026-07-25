@@ -20,6 +20,7 @@ const { autoUpdater } = require("electron-updater");
 // globalShortcut, so they fire while Star Citizen has focus (RegisterHotKey does not).
 const hotkeys = require("./hotkeys.cjs");
 const { startFabCapture } = require("./capture.cjs");
+const foreground = require("./foreground.cjs");
 
 // GPU hardware acceleration is OFF by default: the HUD is a transparent, always-on-top
 // window composited over a fullscreen Vulkan game (Star Citizen), and GPU-compositing it
@@ -305,7 +306,15 @@ function applyMouse() {
   // Arrange mode is for MOVING and RESIZING widgets, so it must never require holding the
   // interact key — you'd be holding a key with one hand to drag with the other. The hold only
   // ever gates reaching INTO a widget's content (Sub, 2026-07-25).
-  const canHover = holdMode ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
+  // 🔑 Hold-to-interact only applies while the GAME is in front (Sub, 2026-07-25). The hold exists
+  // so gameplay can't accidentally click the HUD — on the desktop there's nothing to protect, and
+  // demanding it there meant pressing the interact key (default "F", a plain letter) over Discord
+  // or a browser, where it just typed an f into whatever had focus. We can't swallow the key: the
+  // hook is deliberately passive/non-consuming (EAC-safe), so the fix is to not need it. Falls
+  // back to the old always-hold behaviour until the foreground watcher has answered once, so a
+  // failed helper can't silently make the overlay click-grabby mid-game.
+  const holdActive = holdMode && (!foreground.ready() || foreground.gameInFront());
+  const canHover = holdActive ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
   const interactive = dragging || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }
@@ -325,8 +334,27 @@ function insideRegions(regions, win, pt) {
   }
   return false;
 }
+// How close the cursor is to the nearest interactive rect, in pixels (0 = inside one). Used to
+// decide how often we need to keep looking.
+function distanceToRegions(regions, win, pt) {
+  if (!regions.length || !win || win.isDestroyed()) return Infinity;
+  const b = win.getBounds();
+  let best = Infinity;
+  for (const r of regions) {
+    const x1 = b.x + r.x, y1 = b.y + r.y;
+    const dx = Math.max(x1 - pt.x, 0, pt.x - (x1 + r.w));
+    const dy = Math.max(y1 - pt.y, 0, pt.y - (y1 + r.h));
+    best = Math.min(best, Math.hypot(dx, dy));
+    if (best === 0) return 0;
+  }
+  return best;
+}
 function pollCursor() {
   let pt; try { pt = screen.getCursorScreenPoint(); } catch { return; }
+  // Back off while the cursor is nowhere near a widget. Hit-testing 33×/s matters only when the
+  // pointer is about to cross a boundary; out in the middle of the game it's pure overhead, and
+  // the cursor can't cover the slack distance faster than the slow tick.
+  retuneMousePoll(distanceToRegions(overlayRegions, overlay, pt));
   if (overlay && !overlay.isDestroyed()) {
     const over = insideRegions(overlayRegions, overlay, pt);
     if (over !== hovering) {
@@ -339,7 +367,23 @@ function pollCursor() {
     }
   }
 }
-function startMousePoll() { if (!mousePoll) mousePoll = setInterval(pollCursor, 30); }
+// 30ms near a widget (the boundary has to feel instant), 200ms when the cursor is far from every
+// one of them. NEAR_PX is generous enough that no realistic flick crosses the gap inside one slow
+// tick, and any tick that finds itself close re-arms the fast rate before it matters.
+const POLL_FAST_MS = 30, POLL_SLOW_MS = 200, NEAR_PX = 260;
+let pollRate = 0;
+function retuneMousePoll(dist) {
+  const want = dist <= NEAR_PX ? POLL_FAST_MS : POLL_SLOW_MS;
+  if (want === pollRate || !mousePoll) return;
+  clearInterval(mousePoll);
+  pollRate = want;
+  mousePoll = setInterval(pollCursor, want);
+}
+function startMousePoll() {
+  if (mousePoll) return;
+  pollRate = POLL_FAST_MS;
+  mousePoll = setInterval(pollCursor, POLL_FAST_MS);
+}
 
 // The binding chart is now a normal canvas WIDGET (overlay/bindingwidget.html) rather than a
 // separate full-screen click-through window — you place and size it like everything else, and the
@@ -923,6 +967,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // One helper answers "who's in front" for both the OCR gate and hold-to-interact — and only
+    // runs while one of them actually wants it (see foreground.want). Alt-tabbing in or out of the
+    // game changes whether the hold is required, so re-evaluate on every change rather than
+    // waiting for something else to notice.
+    foreground.onChange(() => applyMouse());
     startServer();
     const up = await waitForServer();
     if (!up) console.error("[electron] server did not come up on :" + PORT);
@@ -953,6 +1002,7 @@ if (!app.requestSingleInstanceLock()) {
       if (c.moveHotkey) moveKey = c.moveHotkey;
       if (c.holdToInteract === true) holdMode = true; // opt-in: require holding the interact key
     } catch { /* defaults */ }
+    foreground.want("hold", holdMode); // only track the foreground app if something asks
     registerOverlayHotkey(overlayKey);
     registerBindingHotkey(bindKey);
     registerMiningHotkey(miningKey);
@@ -1070,7 +1120,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   // Hold-to-interact opt-in: when off (default), the overlay is clickable whenever the cursor is
   // over a widget; when on, it's passive unless the interact key is held.
-  ipcMain.handle("app:set-hold-mode", (_e, on) => { holdMode = !!on; applyMouse(); return holdMode; });
+  ipcMain.handle("app:set-hold-mode", (_e, on) => { holdMode = !!on; foreground.want("hold", holdMode); applyMouse(); return holdMode; });
 
   // Legacy hover signal — hover is now driven by pollCursor() hit-testing the reported regions,
   // so this is a no-op (kept so the preload bridge / page calls don't error).
@@ -1196,6 +1246,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("before-quit", () => {
     app.isQuitting = true;
     hotkeys.unregisterAll();
+    foreground.stop(); // a piped child would otherwise outlive us
     if (server) server.kill();
     if (tray) tray.destroy();
   });

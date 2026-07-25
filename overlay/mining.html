@@ -467,7 +467,11 @@
     try { const u = new SpeechSynthesisUtterance(text); u.rate = 1.02; u.volume = getVol(); speechSynthesis.cancel(); speechSynthesis.speak(u); } catch {}
   }
   // Set by the parent canvas whenever the widget is shown/hidden. Hidden => no audio, no speech.
-  let hiddenMode = false;
+  // 🔑 Defaults to HIDDEN when embedded: this page can be loaded while off-screen (armed, waiting
+  // to auto-show), and the safe assumption for a widget that hasn't been told anything yet is
+  // silence. The parent re-states the truth on ready(). Standalone (OBS/browser) has no parent to
+  // tell it, so there it starts visible.
+  let hiddenMode = new URLSearchParams(location.search).has("embedded");
   window.__miningSetHidden = (on) => {
     hiddenMode = !!on;
     if (hiddenMode) { try { speechSynthesis.cancel(); } catch { /* none */ } }

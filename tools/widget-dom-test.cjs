@@ -738,6 +738,74 @@ const ANCHOR = `(async () => {
   return out;
 })()`;
 
+// ── Suite 10: lifecycle — a closed widget must cost nothing ───────────────────
+// Sub's rule: if a widget isn't open it shouldn't be using resources. Hiding used to leave the
+// iframe loaded, so a widget opened once kept polling / holding its socket forever — and mining
+// kept ANNOUNCING from a box that wasn't on screen, because the one path that backgrounds a group
+// tab never told the page it had gone dark.
+const LIFECYCLE = `(async () => {
+  ${PRELUDE}
+  const party = WBY.party, mining = WBY.mining, notepad = WBY.notepad;
+  const src = (w) => { const f = document.getElementById("wf-" + w.key); return f ? (f.getAttribute("src") || "") : "(none)"; };
+  const loaded = (w) => /\\.html/.test(src(w));
+
+  setWidgetVisible(party, true);
+  await sleep(200);
+  ok("opening a widget loads its page", loaded(party), src(party).slice(0, 40));
+
+  setWidgetVisible(party, false);
+  await sleep(120);
+  ok("closing it unloads the page", !loaded(party), src(party).slice(0, 40));
+  ok("...and it is no longer armed", !party.armed);
+
+  setWidgetVisible(party, true);
+  await sleep(200);
+  ok("reopening loads it again", loaded(party), src(party).slice(0, 40));
+
+  // Count the visibility signals the page receives. This is what mining listens to for its
+  // "hidden => no sound" rule, so a missed call is an audible bug.
+  let hides = 0, shows = 0;
+  const oh = mining.onHide, os = mining.onShow;
+  mining.onHide = (w) => { hides++; if (oh) oh(w); };
+  mining.onShow = (w) => { shows++; if (os) os(w); };
+  // (it starts visible in this harness, and re-showing a shown widget correctly signals nothing —
+  //  so hide it first, which is also the signal mining relies on to go quiet)
+  setWidgetVisible(mining, false);
+  await sleep(120);
+  ok("hiding a widget tells the page", hides >= 1, hides);
+  setWidgetVisible(mining, true);
+  await sleep(250);
+  ok("showing it tells the page", shows >= 1, shows);
+
+  // Backgrounding it as a group TAB is the case that was silently missed.
+  groupWidgets(party, mining);
+  await sleep(80);
+  ok("the tabbed-away widget is off screen", !shown(mining), "display=" + (document.getElementById("w-mining").style.display || "(shown)"));
+  ok("...and the page was TOLD it went dark", hides >= 2, hides + " hide signals");
+  ok("...but keeps its iframe (state survives tabbing)", loaded(mining), src(mining).slice(0, 40));
+
+  // Bringing it back to the front must say so again.
+  const before = shows;
+  const strip = document.getElementById("w-party").querySelector(".wh-tabs")
+    || document.getElementById("w-mining").querySelector(".wh-tabs");
+  strip.querySelector('.gtab[data-k="mining"]').click();
+  await sleep(80);
+  ok("fronting the tab tells the page it is visible again", shows > before, shows);
+  mining.onHide = oh; mining.onShow = os;
+
+  // An ARMED widget (mining waiting to auto-show) must stay loaded even while hidden.
+  detachFromGroup(WBY[GROUPS[0] ? GROUPS[0].active : "mining"]);
+  mining.keepLoaded = true;
+  setWidgetVisible(mining, false);
+  await sleep(120);
+  ok("an armed widget stays loaded while hidden", loaded(mining), src(mining).slice(0, 40));
+  mining.keepLoaded = false;
+  setWidgetVisible(mining, false);
+  await sleep(120);
+  ok("...and unloads once it is no longer armed", !loaded(mining), src(mining).slice(0, 40));
+  return out;
+})()`;
+
 async function run(label, script, preload) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
@@ -789,6 +857,7 @@ app.whenReady().then(async () => {
     fails += await run("page headers", HEADERS, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
     fails += await run("chrome anchoring + latches", ANCHOR, path.join(__dirname, "widget-dom-stub-preload.cjs"));
+    fails += await run("lifecycle: closed = idle", LIFECYCLE, null);
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);
     console.error(`is the sidecar running? \`npm run overlay\` should be listening on :${PORT}`);
