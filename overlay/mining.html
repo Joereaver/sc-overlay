@@ -231,7 +231,13 @@
      same-origin (no miningApi preload in an iframe, so CANVAS stays false — the self-geometry
      and shell-IPC blocks below are skipped). */
   body.embedded { overflow: visible; background: transparent; }
-  body.embedded #panel { margin: 6px auto 16px; overflow: visible; transform: none; } /* the old 34px top gap existed only to keep corner flair out of negative iframe coords; the trinkets now ride the parent's title bar */
+  /* 🔑 margin MUST NOT be `auto` here. measure() sizes the iframe from this panel's right/bottom
+     edge, so a centred panel makes the measured size a function of the CURRENT iframe width — grow
+     the frame (which grouping does) and the next measure reports wider still, so it never returns
+     to its natural size and the panel renders cut off. Pinning it to the top-left makes measure a
+     stable fixed point. It also puts the panel flush with the frame, so the parent's bottom bar
+     meets the panel's own border instead of floating a margin away from it. */
+  body.embedded #panel { margin: 0; overflow: visible; transform: none; }
   html.amd-lite body.embedded #panel { transform: none !important; }
 
   /* Move/reposition mode: whole panel becomes a drag surface with a banner (identical to
@@ -874,6 +880,12 @@
       const w = Math.ceil(right + 8), h = Math.ceil(bottom + 8);
       if (w !== lastW || h !== lastH) { lastW = w; lastH = h; host()?.setSize?.(w, h); }
     };
+    // 🔑 Force the next measure() through the change-gate above. Grouping takes this widget's
+    // frame sizing away (the stack shares one box) and the parent ignores setSize while grouped —
+    // so on UNGROUP the content size hasn't changed, the gate suppresses the call, and the frame
+    // would keep the group's box forever, rendering the panel cut off. The parent calls this
+    // whenever the widget leaves a stack.
+    window.__widgetRemeasure = () => { lastW = 0; lastH = 0; measure(); };
     setInterval(measure, 150); measure();
     host()?.ready?.();
   }

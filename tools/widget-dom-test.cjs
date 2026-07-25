@@ -94,7 +94,85 @@ const GROUPING = `(async () => {
   return out;
 })()`;
 
-// ── Suite 2: title-bar chrome (parked behind the widget, slides out on hover) ──
+// ── Suite 2: BRUTE-FORCE every pair merge ─────────────────────────────────────
+// Sub hit a real bug merging Twitch chat with the Mining Assistant: the Mining panel came back
+// cut off, and stayed broken even after separating them. Rather than test the pairs he happened
+// to try, group and ungroup ALL 28 combinations and assert the widget is whole afterwards.
+const PAIRS = `(async () => {
+  ${PRELUDE}
+  // Show everything so every pair is actually mergeable.
+  for (const w of WIDGETS) { setWidgetVisible(w, true); }
+  await sleep(500);
+
+  const frameBox = (w) => document.getElementById("wf-" + w.key).getBoundingClientRect();
+  // Snapshot each widget's healthy standalone frame size to compare against after a merge cycle.
+  const baseline = {};
+  for (const w of WIDGETS) { const r = frameBox(w); baseline[w.key] = [Math.round(r.width), Math.round(r.height)]; }
+
+  const broken = [], groupBad = [];
+  for (let i = 0; i < WIDGETS.length; i++) {
+    for (let j = i + 1; j < WIDGETS.length; j++) {
+      const a = WIDGETS[i], b = WIDGETS[j];
+      groupWidgets(a, b);
+      const g = GROUPS[0];
+      // While grouped: one box, exactly one member on screen, and it must have real size.
+      const vis = g ? g.members.filter(k => document.getElementById("w-" + k).style.display !== "none") : [];
+      const fr = frameBox(WBY[g ? g.active : a.key]);
+      if (!g || g.members.length !== 2 || vis.length !== 1 || fr.width < 20 || fr.height < 20) {
+        groupBad.push(a.key + "+" + b.key + " (members=" + (g ? g.members.length : 0) + " visible=" + vis.length +
+                      " frame=" + Math.round(fr.width) + "x" + Math.round(fr.height) + ")");
+      }
+      // Ungroup. A widget INHERITING the stack's box is intended (you sized that stack on
+      // purpose), so don't demand the original size back. What must never happen is what Sub hit:
+      // a widget landing at a size nobody chose, or shrinking/growing a bit more on every cycle.
+      while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+      await sleep(60); // mining re-measures on a timer
+      const cycle1 = {};
+      for (const w of [a, b]) { const r = frameBox(w); cycle1[w.key] = [Math.round(r.width), Math.round(r.height)]; }
+      for (const w of [a, b]) {
+        const got = cycle1[w.key];
+        if (got[0] < 100 || got[1] < 60) broken.push(a.key + "+" + b.key + " -> " + w.key + " degenerate " + got.join("x"));
+      }
+      // Same cycle again: the size must SETTLE, not drift further each time.
+      groupWidgets(a, b);
+      while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+      await sleep(60);
+      for (const w of [a, b]) {
+        const r = frameBox(w), got = [Math.round(r.width), Math.round(r.height)], was = cycle1[w.key];
+        if (Math.abs(got[0] - was[0]) > 4 || Math.abs(got[1] - was[1]) > 4) {
+          broken.push(a.key + "+" + b.key + " -> " + w.key + " DRIFTS " + was.join("x") + " then " + got.join("x"));
+        }
+      }
+      // put them back where they started so the next pair starts clean
+      for (const w of [a, b]) { resetWidget(w); }
+      await sleep(40);
+    }
+  }
+  ok("all 28 pairs group cleanly", groupBad.length === 0, groupBad.slice(0, 4).join(" | "));
+  ok("no pair leaves a widget degenerate or drifting", broken.length === 0,
+     broken.length + " broken: " + broken.slice(0, 4).join(" | "));
+  // A self-sizing widget is the one that CAN drift, so hold it to its natural size specifically.
+  await sleep(400); // measure() runs on a 150ms timer
+  const mr0 = frameBox(WBY.mining);
+  ok("self-sizing widget returns to its natural size after all that",
+     Math.abs(Math.round(mr0.width) - baseline.mining[0]) <= 4 && Math.abs(Math.round(mr0.height) - baseline.mining[1]) <= 4,
+     Math.round(mr0.width) + "x" + Math.round(mr0.height) + " want " + baseline.mining.join("x"));
+
+  // The specific pair Sub reported, checked end to end.
+  groupWidgets(WBY.mining, WBY.twitchChat);
+  await sleep(60);
+  detachFromGroup(WBY.mining);
+  await sleep(200);
+  const mr = frameBox(WBY.mining);
+  ok("Sub's case: mining is whole after leaving a Twitch-chat stack",
+     Math.abs(Math.round(mr.width) - baseline.mining[0]) <= 4 && Math.abs(Math.round(mr.height) - baseline.mining[1]) <= 4,
+     Math.round(mr.width) + "x" + Math.round(mr.height) + " want " + baseline.mining.join("x"));
+  ok("mining exposes the remeasure hook grouping needs",
+     typeof document.getElementById("wf-mining").contentWindow.__widgetRemeasure === "function");
+  return out;
+})()`;
+
+// ── Suite 3: title-bar chrome (parked behind the widget, slides out on hover) ──
 const CHROME = `(async () => {
   ${PRELUDE}
   const w = WBY.party;
@@ -238,6 +316,7 @@ app.whenReady().then(async () => {
   let fails = 0;
   try {
     fails += await run("widget grouping", GROUPING, null);
+    fails += await run("pair merges (brute force)", PAIRS, null);
     fails += await run("title-bar chrome", CHROME, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
   } catch (e) {

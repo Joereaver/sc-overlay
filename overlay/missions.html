@@ -2182,7 +2182,7 @@
       for (const k of survivors) {
         const m = WBY[k]; if (!m) continue;
         m.s.x = g.x; m.s.y = g.y; m.s.w = g.w; m.s.h = g.h;
-        persistW(m); applyFrame(m);
+        persistW(m); applyFrame(m); remeasure(m);
         const el = wEl(m); if (el) el.style.display = m.s.visible ? "" : "none";
       }
     } else {
@@ -2190,8 +2190,17 @@
     }
     persistW(w); applyFrame(w);
     const el = wEl(w); if (el) el.style.display = w.s.visible ? "" : "none";
+    remeasure(w);
     renderGroupTabs();
     saveGroups();
+  }
+
+  // A page that sizes its own frame (mining) had that taken away while grouped, and its internal
+  // change-gate would suppress the call that restores it — so ask it to re-measure on the way out
+  // or it renders cut off inside the box the group left behind.
+  function remeasure(w) {
+    if (groupOf(w)) return;
+    try { frameWin(w)?.__widgetRemeasure?.(); } catch { /* iframe gone */ }
   }
 
   // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
@@ -2252,6 +2261,7 @@
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
+    remeasure(w); // a self-sizing widget must re-fit, or reset leaves it at its last box
     persistW(w);
   }
 
