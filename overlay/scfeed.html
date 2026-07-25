@@ -327,6 +327,7 @@
   $("audioBtn").addEventListener("click", (e) => { e.stopPropagation(); ensureActx(); $("panel").classList.toggle("audio"); });
   // Per-widget settings for the parent bar's cog: this widget's settings ARE its alert panel.
   window.__widgetSettings = () => { ensureActx(); $("panel").classList.add("audio"); };
+  window.__widgetSettingsRoot = () => $("audio"); // parent injects its Text size row here
   $("audioDone").addEventListener("click", (e) => { e.stopPropagation(); $("panel").classList.remove("audio"); });
   $("aVoice").addEventListener("change", () => saveCfg({ voice: $("aVoice").checked }));
   $("aSound").addEventListener("change", () => saveCfg({ sound: $("aSound").checked }));

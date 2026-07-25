@@ -885,6 +885,9 @@
   // The parent bar's per-widget cog opens THIS widget's settings (its presence there is probed
   // from this function existing), so both cogs open the same menu.
   window.__widgetSettings = () => setCog(true);
+  // Lets the parent inject its Text size row INTO this menu, so the bar's cog opens ONE settings
+  // surface instead of a separate popover that then points at another one.
+  window.__widgetSettingsRoot = () => $("cogMenu");
   $("cogMenu").addEventListener("click", (e) => e.stopPropagation());
   document.addEventListener("click", () => { if ($("cogMenu").classList.contains("open")) setCog(false); });
 

@@ -494,8 +494,6 @@
      — this button must never quietly stand in for them. */
   .wh-cog { display: block; }
   /* ...but the pass-through to the page's own panel only exists when there IS one. */
-  .wcfg-more { display: none; }
-  .widget.has-settings .wcfg-more, #panel .wcfg-more { display: block; }
 
   /* Per-widget settings popover, opened from the bar's cog. Every widget gets TEXT SIZE — the
      widgets are responsive (drag the corner for more ROOM), so how big the text is has to be a
@@ -513,7 +511,6 @@
   .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-text); }
   .wcfg-val { font-family: var(--mono); font-size: 10px; color: var(--faint); min-width: 34px; text-align: right; }
-  .wcfg-more { margin-top: 7px; width: 100%; }
 
   /* Group tabs — left half of the same bar. */
   .gtab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2105,7 +2102,6 @@
         + '<button type="button" class="wh-btn wcfg-dn" title="Smaller text">A−</button>'
         + '<button type="button" class="wh-btn wcfg-up" title="Bigger text">A+</button>'
         + '<span class="wcfg-val"></span></div>'
-        + '<button type="button" class="wh-btn wcfg-more" title="This widget’s own settings">More settings…</button>'
         + '</div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -2251,8 +2247,32 @@
     } catch { /* iframe not ready — reapplied on load/ready */ }
   }
   function showTextScale(w) {
-    const v = wEl(w)?.querySelector(".wcfg-val");
-    if (v) v.textContent = Math.round(textScale(w) * 100) + "%";
+    for (const v of textReadouts(w)) v.textContent = Math.round(textScale(w) * 100) + "%";
+  }
+  const textReadouts = (w) => {
+    const out = [];
+    const local = wEl(w)?.querySelector(".wcfg-val"); if (local) out.push(local);
+    try { const r = frameWin(w)?.__widgetSettingsRoot?.(); const inj = r?.querySelector(".wtext-val"); if (inj) out.push(inj); }
+    catch { /* iframe gone */ }
+    return out;
+  };
+  // Inject a Text size row into a page's OWN settings menu, so its cog opens one place with
+  // everything in it (Sub, 2026-07-25) rather than a popover that points at a second menu.
+  function injectTextRow(w) {
+    let root; try { root = frameWin(w)?.__widgetSettingsRoot?.(); } catch { return; }
+    if (!root || root.querySelector(".wtext-row")) return;
+    const doc = root.ownerDocument;
+    const row = doc.createElement("div");
+    row.className = "wtext-row";
+    row.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 12px;";
+    row.innerHTML = '<span style="flex:1;font-size:11px;letter-spacing:.06em;opacity:.85">Text size</span>'
+      + '<button type="button" class="wtext-dn" style="font:inherit;font-size:11px;cursor:pointer;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);color:inherit">A−</button>'
+      + '<button type="button" class="wtext-up" style="font:inherit;font-size:11px;cursor:pointer;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);color:inherit">A+</button>'
+      + '<b class="wtext-val" style="min-width:34px;text-align:right;font-size:10px;opacity:.75"></b>';
+    row.querySelector(".wtext-dn").addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
+    row.querySelector(".wtext-up").addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, +0.1); });
+    root.appendChild(row);
+    showTextScale(w);
   }
   function bumpTextScale(w, by) {
     w.s.text = Math.round(Math.max(TEXT_MIN, Math.min(TEXT_MAX, textScale(w) + by)) * 100) / 100;
@@ -2302,8 +2322,11 @@
   // 🔑 Probed on the iframe's LOAD event, not just on the page's ready() call: a page can call
   // ready() before it finishes defining its own exports, so a ready-only probe misses them.
   function probeSettings(w) {
-    try { wEl(w)?.classList.toggle("has-settings", typeof frameWin(w)?.__widgetSettings === "function"); }
-    catch { /* iframe gone */ }
+    try {
+      const has = typeof frameWin(w)?.__widgetSettings === "function";
+      wEl(w)?.classList.toggle("has-settings", has);
+      if (has) injectTextRow(w);
+    } catch { /* iframe gone */ }
   }
 
   function ensureFrame(w) {
@@ -2532,19 +2555,20 @@
       const bar = el.querySelector(".whead");
       el.querySelector(".wh-cog")?.addEventListener("click", (e) => {
         e.stopPropagation();
-        const open = !el.classList.contains("cfgopen");
         document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
-        el.classList.toggle("cfgopen", open);
-        if (open) { touchWidget(w); showTextScale(w); }
+        touchWidget(w);
+        // ONE destination. A page with its own settings opens THAT (the Text size row was injected
+        // into it); everything else opens the local popover, which carries Text size itself.
+        if (el.classList.contains("has-settings")) {
+          try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); } catch { /* iframe gone */ }
+          return;
+        }
+        el.classList.add("cfgopen");
+        showTextScale(w);
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
       el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
       el.querySelector(".wcfg-up")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, +0.1); });
-      el.querySelector(".wcfg-more")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        el.classList.remove("cfgopen");
-        try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
-      });
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
       el.querySelector(".wh-reset")?.addEventListener("click", (e) => { e.stopPropagation(); resetWidget(w); });
       // Engaging a widget's own chrome reveals its header too (the iframe can't report this one).

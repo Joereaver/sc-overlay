@@ -292,11 +292,8 @@ const CHROME = `(async () => {
   // EVERY widget has a cog now - it carries text size, which they all have. Only the pass-through
   // to a page's own settings panel depends on that page having one.
   ok("every widget has a cog", WIDGETS.every(x => getComputedStyle(el(x).querySelector(".wh-cog")).display !== "none"));
-  ok("pass-through to page settings only where the page has them",
-     getComputedStyle(el(mw).querySelector(".wcfg-more")).display !== "none" &&
-     getComputedStyle(el(np).querySelector(".wcfg-more")).display === "none",
-     "mining=" + getComputedStyle(el(mw).querySelector(".wcfg-more")).display +
-     " notepad=" + getComputedStyle(el(np).querySelector(".wcfg-more")).display);
+  ok("a page's OWN settings menu gets the Text size row injected",
+     !!document.getElementById("wf-mining").contentWindow.__widgetSettingsRoot().querySelector(".wtext-row"));
 
   // ── the Blueprint panel carries the same bar ───────────────────────────────
   const bp = document.getElementById("panel");
@@ -371,15 +368,20 @@ const REACH = `(async () => {
       if (visibleArea(b) < 25) clipped.push(w.key + " " + cls + " [clipped by " + lastClipper + "]");
       else if (!reachable(b)) unreachable.push(w.key + " " + cls);
     }
-    // and the settings popover it opens
+    // and whatever its cog opens - the page's own menu, or the local popover
     el.querySelector(".wh-cog").click();
     await sleep(20);
-    const cfg = el.querySelector(".wcfg");
-    if (visibleArea(cfg) < 400) clipped.push(w.key + " popover area=" + Math.round(visibleArea(cfg)) + " [clipped by " + lastClipper + "]");
-    else if (!reachable(cfg)) unreachable.push(w.key + " settings popover");
-    for (const b of cfg.querySelectorAll(".wh-btn")) {
-      if (getComputedStyle(b).display === "none") continue;
-      if (visibleArea(b) < 25) clipped.push(w.key + " popover " + b.className.replace("wh-btn ", ""));
+    if (el.classList.contains("has-settings")) {
+      let root = null; try { root = document.getElementById("wf-" + w.key).contentWindow.__widgetSettingsRoot(); } catch {}
+      if (!root || !root.querySelector(".wtext-row")) clipped.push(w.key + " own-menu text row missing");
+    } else {
+      const cfg = el.querySelector(".wcfg");
+      if (visibleArea(cfg) < 400) clipped.push(w.key + " popover area=" + Math.round(visibleArea(cfg)) + " [clipped by " + lastClipper + "]");
+      else if (!reachable(cfg)) unreachable.push(w.key + " settings popover");
+      for (const b of cfg.querySelectorAll(".wh-btn")) {
+        if (getComputedStyle(b).display === "none") continue;
+        if (visibleArea(b) < 25) clipped.push(w.key + " popover " + b.className.replace("wh-btn ", ""));
+      }
     }
     el.classList.remove("cfgopen");
     el.classList.remove("touched");
