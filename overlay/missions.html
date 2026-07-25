@@ -443,6 +443,26 @@
   .widget.moving .whood { display: none; } /* arrange mode: the drag shield owns the widget */
   .whead .dia { width: 6px; height: 6px; flex: none; background: var(--cyan-bright);
     transform: rotate(45deg); box-shadow: 0 0 8px var(--cyan); }
+
+  /* Manufacturer trinket, riding the title bar (Sub, 2026-07-24). The skin flair used to be
+     permanent corner decoration; on the bar it slides out with the chrome, so the resting widget
+     is pure content and the flair is part of what the hover reveals.
+     🔑 It has to fit INSIDE the bar's height: the hood clips at the bar's own box, so anything
+     overhanging above it would peek out while the bar is parked. It stands in for the diamond
+     rather than sitting next to it, so the bar's layout doesn't shift between themes. */
+  .wh-flair { display: none; flex: none; width: 22px; height: 22px; background-repeat: no-repeat;
+    background-position: center; background-size: contain; }
+  :root[data-theme="drake"] .widget.flair .wh-flair { display: block; background-image: url(tape-m-tl.webp); transform: rotate(-8deg); }
+  :root[data-theme="anvil"] .widget.flair .wh-flair { display: block; background-image: url(anvil-bolt-tl.webp); }
+  :root[data-theme="argo"] .widget.flair .wh-flair { display: block; background-image: url(cog-argo-tl.png); }
+  :root[data-theme="misc"] .widget.flair .wh-flair { display: block; background-image: url(cog-misc-tl.png); }
+  :root[data-theme="greys"] .widget.flair .wh-flair { display: block; background-image: url(greys-corner-tl.png); }
+  /* When a trinket is showing it replaces the generic diamond. */
+  :root[data-theme="drake"] .widget.flair .whead .dia,
+  :root[data-theme="anvil"] .widget.flair .whead .dia,
+  :root[data-theme="argo"] .widget.flair .whead .dia,
+  :root[data-theme="misc"] .widget.flair .whead .dia,
+  :root[data-theme="greys"] .widget.flair .whead .dia { display: none; }
   .wh-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--sans); font-size: 9.5px; font-weight: 700; letter-spacing: 0.18em;
     text-transform: uppercase; color: var(--cyan-text); }
@@ -457,10 +477,14 @@
      Party split and the Mining Assistant go hand in hand). The strip sits at the BOTTOM of the
      group box, deliberately: the Blueprint widget's manufacturer folder tab owns its top edge, so
      a top strip would collide with it, and a bottom strip never hangs over empty canvas. */
+  /* ALWAYS visible, unlike the title bar (Sub's call): the tabs are the only thing telling you a
+     stack exists and which widget is fronted, so hiding them would make a group look identical to
+     a lone widget until you hovered it. Styled to mirror the title bar so the two read as one
+     piece of chrome — same gradient (flipped, since this one hangs below), border and radius. */
   .gtabs { position: absolute; left: var(--wx); top: var(--wy); width: var(--ww); z-index: 22;
     display: flex; gap: 3px; padding: 3px; box-sizing: border-box; overflow: hidden;
-    background: linear-gradient(180deg, rgba(8, 17, 26, 0.72), rgba(8, 17, 26, 0.95));
-    border: 1px solid var(--border); border-top: 0; border-radius: 0 0 10px 10px; }
+    background: linear-gradient(180deg, rgba(8, 17, 26, 0.82), rgba(8, 17, 26, 0.96));
+    border: 1px solid var(--border); border-top: 0; border-radius: 0 0 9px 9px; }
   .gtab { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
     text-transform: uppercase; color: var(--cyan-dim); background: transparent;
@@ -1946,7 +1970,7 @@
   const WIDGETS = [
     {
       key: "mining", page: "mining.html", title: "Mining Assistant",
-      shape: "scaled", angle: -5, allow: "autoplay",
+      shape: "scaled", angle: -5, allow: "autoplay", flair: true,
       def: { x: 40, y: 60 }, size: { w: 416, h: 380 },
       // A hidden-but-ARMED mining widget stays subscribed so auto-show can pop it on a scan — so
       // it has to be TOLD it's hidden or it announces from off-screen. The rule for every widget:
@@ -2042,13 +2066,15 @@
   function buildWidgetEls() {
     const host = $("widgets"); if (!host) return;
     host.innerHTML = WIDGETS.map((w) => {
-      const cls = "widget" + (w.shape === "scaled" ? " scaled" : "") + (w.notifier ? " notifier" : "");
+      const cls = "widget" + (w.shape === "scaled" ? " scaled" : "") + (w.notifier ? " notifier" : "")
+        + (w.flair ? " flair" : "");
       const style = "display:none" + (w.z ? ";--wz:" + w.z : "");
       const allow = w.allow ? ' allow="' + escapeAttr(w.allow) + '"' : "";
       const label = w.moveLabel || "⠿ Drag to move · corner to resize";
       return '<div class="' + cls + '" id="w-' + w.key + '" style="' + style + '">'
         + '<iframe id="wf-' + w.key + '" title="' + escapeAttr(w.title) + '"' + allow + ' scrolling="no"></iframe>'
         + '<div class="whood"><div class="whead">'
+        + (w.flair ? '<span class="wh-flair"></span>' : "")
         + '<span class="dia"></span><span class="wh-title">' + escapeHtml(w.title) + '</span>'
         + '<button type="button" class="wh-btn wh-reset" title="Reset this widget’s position and size">↺</button>'
         + '<button type="button" class="wh-btn wh-cog" title="Settings">⚙</button>'

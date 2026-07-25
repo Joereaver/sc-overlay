@@ -135,6 +135,30 @@ const CHROME = `(async () => {
   el(w).classList.add("moving");
   ok("bar hidden in arrange mode", getComputedStyle(hood).display === "none", getComputedStyle(hood).display);
   el(w).classList.remove("moving");
+
+  // ── manufacturer trinket rides the bar ──────────────────────────────────────
+  const mw = WBY.mining, mbar = el(mw).querySelector(".whead");
+  const flair = mbar.querySelector(".wh-flair");
+  ok("flair widget is marked", el(mw).classList.contains("flair"));
+  ok("flair element on the bar", !!flair);
+  ok("no flair on a non-flair widget", !el(WBY.notepad).querySelector(".wh-flair"));
+  const root = document.documentElement, theme0 = root.getAttribute("data-theme");
+  root.setAttribute("data-theme", "mobiglas");
+  ok("no trinket on a theme that has none", getComputedStyle(flair).display === "none", getComputedStyle(flair).display);
+  root.setAttribute("data-theme", "drake");
+  ok("Drake shows its tape", getComputedStyle(flair).display === "block" && /tape/.test(getComputedStyle(flair).backgroundImage),
+     getComputedStyle(flair).backgroundImage.slice(0, 60));
+  ok("trinket replaces the diamond", getComputedStyle(mbar.querySelector(".dia")).display === "none");
+  // Must fit inside the bar, or it would peek out above a parked bar (the hood clips at the bar).
+  el(mw).classList.add("touched");
+  const fr = flair.getBoundingClientRect(), br = mbar.getBoundingClientRect();
+  ok("trinket fits inside the bar", fr.height <= br.height + 0.5 && fr.top >= br.top - 0.5,
+     "flair h=" + fr.height.toFixed(1) + " bar h=" + br.height.toFixed(1));
+  el(mw).classList.remove("touched");
+  root.setAttribute("data-theme", "argo");
+  ok("Argo shows its cog", /cog-argo/.test(getComputedStyle(flair).backgroundImage));
+  if (theme0) root.setAttribute("data-theme", theme0); else root.removeAttribute("data-theme");
+
   kill.remove();
   return out;
 })()`;
