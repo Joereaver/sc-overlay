@@ -380,136 +380,52 @@
   #resizeHandle svg { width: 12px; height: 12px; display: block; }
   #panel.moving #resizeHandle { display: grid; }
 
-  /* ── Mining Assistant widget (embedded iframe) ─────────────────────────────────
-     A second free-floating canvas widget hosting mining.html in an iframe. This shell owns its
-     geometry (position/scale/angle applied here), so the iframe just renders. The embedded page
-     reports its content size, so #miningFrame is resized to fit snugly (see setSize/host). */
-  #miningWidget { position: absolute; left: var(--mwx, 40px); top: var(--mwy, 60px); z-index: 20;
-    transform-origin: 0 0; /* top-left anchor for resize/scale */
-    transform: perspective(1700px) rotateY(var(--mwangle, -5deg)) scale(var(--mwscale, 1)); }
-  html.amd-lite #miningWidget { transform: scale(var(--mwscale, 1)); }
-  #miningFrame { display: block; width: 416px; height: 380px; border: 0; background: transparent; color-scheme: normal; }
-  /* Arrange-mode drag surface (also the drag shield over the iframe) + corner resize handle —
-     parent-owned; the embedded page's own move banner / handle stay inactive. */
-  #miningMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
+  /* ── Canvas widgets (embedded iframes) ────────────────────────────────────────
+     Every embedded widget — Mining, Notepad, Twitch Chat, SC Feed, Party, Battaglia, Web Page,
+     Binding Chart — is the same object: an iframe this canvas positions and sizes while the
+     embedded page just renders. These used to be eight hand-copied CSS blocks differing only in
+     their custom-property names; the per-widget values now come from the WIDGETS registry, which
+     writes --wx/--wy/--ww/--wh (and --wscale/--wangle for the scaled ones) onto each element.
+
+     Two shapes exist:
+      · BOX (default) — flat, and the corner drag grows the box so you see MORE content. Right for
+        anything text-bearing (notes, chat, tables), where a perspective tilt hurts readability.
+      · SCALED (.scaled, Mining only) — tilted + zoomed as one unit, because its content is a
+        fixed-size readout rather than a scrollable document. Its iframe is also sized snugly to
+        its content by the embedded page (host.setSize writes inline width/height, which wins
+        over the vars below). */
+  .widget { position: absolute; left: var(--wx, 40px); top: var(--wy, 60px); z-index: var(--wz, 20); }
+  .widget > iframe { display: block; width: var(--ww, 340px); height: var(--wh, 380px); border: 0;
+    background: transparent; color-scheme: normal; }
+  .widget.scaled { transform-origin: 0 0; /* top-left anchor for resize/scale */
+    transform: perspective(1700px) rotateY(var(--wangle, -5deg)) scale(var(--wscale, 1)); }
+  html.amd-lite .widget.scaled { transform: scale(var(--wscale, 1)); }
+
+  /* Arrange-mode drag surface (also the drag shield over the iframe, which would otherwise
+     swallow the pointer) + corner resize handle — both parent-owned, so an embedded page's own
+     move banner / handle stay inactive. */
+  .wmove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
     align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #miningWidget.moving #miningMove { display: flex; }
-  #miningResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
+  .widget.moving .wmove { display: flex; }
+  .wresize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
     z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
     background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #miningWidget.moving #miningResize { display: grid; }
-  #miningResize svg { width: 12px; height: 12px; display: block; }
+  .widget.moving .wresize { display: grid; }
+  .wresize svg { width: 12px; height: 12px; display: block; }
 
-  /* ── Notepad widget (embedded iframe) ──────────────────────────────────────────
-     Local-only scratch notes. Same canvas-widget pattern as Mining, but flat (no
-     perspective tilt — text stays readable) and box-resized (drag the corner to grow
-     the box and see more text), not scale-zoomed. Geometry lives here; the iframe just
-     renders notepad.html?embedded=1 and persists notes via /api/notes itself. */
-  #notepadWidget { position: absolute; left: var(--nwx, 480px); top: var(--nwy, 60px); z-index: 20; }
-  #notepadFrame { display: block; width: var(--nww, 320px); height: var(--nwh, 380px); border: 0;
-    background: transparent; color-scheme: normal; }
-  #notepadMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #notepadWidget.moving #notepadMove { display: flex; }
-  #notepadResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #notepadWidget.moving #notepadResize { display: grid; }
-  #notepadResize svg { width: 12px; height: 12px; display: block; }
-
-  /* ── Twitch Chat widget (embedded iframe) ──────────────────────────────────────
-     Read-only live chat for any channel. Same flat, box-resized pattern as the Notepad
-     (chat text must stay readable, and growing the box shows more messages). */
-  #twitchWidget { position: absolute; left: var(--twx, 860px); top: var(--twy, 60px); z-index: 20; }
-  #twitchFrame { display: block; width: var(--tww, 340px); height: var(--twh, 460px); border: 0;
-    background: transparent; color-scheme: normal; }
-  #twitchMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #twitchWidget.moving #twitchMove { display: flex; }
-  #twitchResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #twitchWidget.moving #twitchResize { display: grid; }
-  #twitchResize svg { width: 12px; height: 12px; display: block; }
-
-  /* ── SC Feed widget (embedded iframe) ──────────────────────────────────────────
-     A NOTIFIER, not a panel: normally invisible, fades in when SC Feed has news, fades
-     itself out again. The iframe stays mounted (it's the thing doing the polling), so the
-     widget box is always present — the shell only treats it as clickable while the card is
-     up (`.live`) or while arranging, which is what keeps an idle feed from eating clicks. */
-  #scfeedWidget { position: absolute; left: var(--sfx, 480px); top: var(--sfy, 560px); z-index: 21;
-    pointer-events: none; }
-  #scfeedWidget.live, #scfeedWidget.moving { pointer-events: auto; }
-  #scfeedFrame { display: block; width: var(--sfw, 340px); height: var(--sfh, 140px); border: 0;
-    background: transparent; color-scheme: normal; }
-  /* Arrange mode: SC Feed is invisible in normal play, so it gets an explicit labelled DROP ZONE
-     (dashed frame + "news pops up here") — otherwise there's no way to tell where a story will
-     appear, or that the widget exists at all. The other widgets are always on screen and don't
-     need this. Sized to the widget box, so what you frame is what you'll get. */
-  #scfeedWidget.moving::before { content: ""; position: absolute; inset: -3px; z-index: 49;
+  /* NOTIFIER widgets (SC Feed) are invisible until they have something to say. The iframe stays
+     mounted — it's the thing doing the polling — so the box is always present; the shell only
+     treats it as clickable while a card is up (`.live`) or while arranging. That's what keeps an
+     idle feed from eating a click meant for the game. */
+  .widget.notifier { pointer-events: none; }
+  .widget.notifier.live, .widget.notifier.moving { pointer-events: auto; }
+  /* Being invisible in normal play, a notifier has no discoverable location — so arrange mode
+     draws it an explicit labelled DROP ZONE sized to the widget box: what you frame is what
+     you'll get. The always-on-screen widgets don't need this. */
+  .widget.notifier.moving::before { content: ""; position: absolute; inset: -3px; z-index: 49;
     border: 2px dashed rgba(var(--accent-rgb), 0.75); border-radius: 14px; pointer-events: none;
     background: rgba(var(--accent-rgb), 0.06); }
-  #scfeedMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: flex-end; justify-content: center; padding-bottom: 6px; background: transparent; }
-  #scfeedWidget.moving #scfeedMove { display: flex; }
-  #scfeedResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #scfeedWidget.moving #scfeedResize { display: grid; }
-  #scfeedResize svg { width: 12px; height: 12px; display: block; }
-
-  /* -- Party widget (embedded iframe) --------------------------------------------
-     Roster + reward split. Flat + box-resized like the Notepad (it's a table of text
-     fields, so readability beats a perspective tilt). */
-  #partyWidget { position: absolute; left: var(--pwx, 860px); top: var(--pwy, 560px); z-index: 20; }
-  #partyFrame { display: block; width: var(--pww, 340px); height: var(--pwh, 400px); border: 0;
-    background: transparent; color-scheme: normal; }
-  #partyMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #partyWidget.moving #partyMove { display: flex; }
-  #partyResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #partyWidget.moving #partyResize { display: grid; }
-  #partyResize svg { width: 12px; height: 12px; display: block; }
-
-  /* -- Battaglia grind widget (embedded iframe) ----------------------------------
-     Reputation track for a mission giver. Flat + box-resized like the Notepad. */
-  #battagliaWidget { position: absolute; left: var(--bwx, 40px); top: var(--bwy, 560px); z-index: 20; }
-  #battagliaFrame { display: block; width: var(--bww, 360px); height: var(--bwh, 470px); border: 0;
-    background: transparent; color-scheme: normal; }
-  #battagliaMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #battagliaWidget.moving #battagliaMove { display: flex; }
-  #battagliaResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #battagliaWidget.moving #battagliaResize { display: grid; }
-  #battagliaResize svg { width: 12px; height: 12px; display: block; }
-  /* -- Web Page widget (embedded iframe) -- */
-  #vwWidget { position: absolute; left: var(--vwx, 480px); top: var(--vwy, 120px); z-index: 20; }
-  #vwFrame { display: block; width: var(--vww, 420px); height: var(--vwh, 520px); border: 0;
-    background: transparent; color-scheme: normal; }
-  #vwMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #vwWidget.moving #vwMove { display: flex; }
-  #vwResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #vwWidget.moving #vwResize { display: grid; }
-  #vwResize svg { width: 12px; height: 12px; display: block; }
-  /* -- Binding Chart widget (embedded iframe) -- */
-  #bcWidget { position: absolute; left: var(--bcx, 120px); top: var(--bcy, 120px); z-index: 20; }
-  #bcFrame { display: block; width: var(--bcw, 620px); height: var(--bch, 340px); border: 0;
-    background: transparent; color-scheme: normal; }
-  #bcMove { display: none; position: absolute; inset: 0; z-index: 50; cursor: move;
-    align-items: center; justify-content: center; background: rgba(var(--accent-rgb), 0.12); }
-  #bcWidget.moving #bcMove { display: flex; }
-  #bcResize { display: none; position: absolute; right: -7px; bottom: -7px; width: 22px; height: 22px;
-    z-index: 51; cursor: nwse-resize; border-radius: 4px; border: 1px solid var(--handle);
-    background: rgba(8, 17, 26, 0.92); color: var(--handle); place-items: center; }
-  #bcWidget.moving #bcResize { display: grid; }
-  #bcResize svg { width: 12px; height: 12px; display: block; }
+  .widget.notifier .wmove { align-items: flex-end; padding-bottom: 6px; background: transparent; }
 
   /* ── Global overlay-app chrome: a screen-anchored cog (top-right) that opens the in-overlay
        settings hub — one place for widget on/off, global appearance, and arrange. Lives in the
@@ -1138,65 +1054,13 @@
   <!-- Full-screen arrange-mode indicator (shell only). Click-through except its banner. -->
   <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div></div>
 
-  <!-- Mining Assistant widget — hosted as a same-origin iframe so its audio/SSE/render code
-       stays intact, while THIS canvas owns its position/scale/angle, drag/resize, and cursor
-       hit-testing (one window → no cross-window z-order bugs). Created lazily (only when mining
-       is enabled — see ensureMiningFrame) and sized snugly to its content by the embedded page. -->
-  <div id="miningWidget" style="display:none">
-    <iframe id="miningFrame" title="Mining Assistant" allow="autoplay" scrolling="no"></iframe>
-    <div id="miningMove"><div class="movebox">⠿ Drag to move · corner to resize<button type="button" id="miningMoveDone">Done</button></div></div>
-    <div id="miningResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-
-  <!-- Notepad widget — same-origin iframe (notepad.html?embedded=1). THIS canvas owns its
-       position/size, drag/resize, and cursor hit-testing; the iframe just renders + saves notes. -->
-  <div id="notepadWidget" style="display:none">
-    <iframe id="notepadFrame" title="Notepad" scrolling="no"></iframe>
-    <div id="notepadMove"><div class="movebox">⠿ Drag to move · corner to resize<button type="button" id="notepadMoveDone">Done</button></div></div>
-    <div id="notepadResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-
-  <!-- Twitch Chat widget — same-origin iframe (twitchchat.html?embedded=1), which in turn embeds
-       Twitch's own chat iframe. THIS canvas owns its position/size, drag/resize, and hit-testing. -->
-  <div id="twitchWidget" style="display:none">
-    <iframe id="twitchFrame" title="Twitch Chat" scrolling="no"></iframe>
-    <div id="twitchMove"><div class="movebox">⠿ Drag to move · corner to resize<button type="button" id="twitchMoveDone">Done</button></div></div>
-    <div id="twitchResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-
-  <!-- SC Feed widget — same-origin iframe (scfeed.html?embedded=1). Mounted (and polling) the
-       whole time it's enabled, but only VISIBLE + clickable when it has news to show. -->
-  <div id="scfeedWidget" style="display:none">
-    <iframe id="scfeedFrame" title="SC Feed" scrolling="no"></iframe>
-    <div id="scfeedMove"><div class="movebox">📰 SC Feed news pops up here · drag to move · corner to resize<button type="button" id="scfeedMoveDone">Done</button></div></div>
-    <div id="scfeedResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-
-  <!-- Party widget - same-origin iframe (party.html?embedded=1). Roster + reward split. -->
-  <div id="partyWidget" style="display:none">
-    <iframe id="partyFrame" title="Party split" scrolling="no"></iframe>
-    <div id="partyMove"><div class="movebox">&#10287; Drag to move &middot; corner to resize<button type="button" id="partyMoveDone">Done</button></div></div>
-    <div id="partyResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-
-  <!-- Battaglia grind widget - same-origin iframe (battaglia.html?embedded=1). -->
-  <div id="battagliaWidget" style="display:none">
-    <iframe id="battagliaFrame" title="Battaglia track" scrolling="no"></iframe>
-    <div id="battagliaMove"><div class="movebox">&#10287; Drag to move &middot; corner to resize<button type="button" id="battagliaMoveDone">Done</button></div></div>
-    <div id="battagliaResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-  <!-- Web Page widget - same-origin iframe. -->
-  <div id="vwWidget" style="display:none">
-    <iframe id="vwFrame" title="Web Page" scrolling="no"></iframe>
-    <div id="vwMove"><div class="movebox">&#10287; Drag to move &middot; corner to resize<button type="button" id="vwMoveDone">Done</button></div></div>
-    <div id="vwResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
-  <!-- Binding Chart widget - same-origin iframe. -->
-  <div id="bcWidget" style="display:none">
-    <iframe id="bcFrame" title="Binding Chart" scrolling="no"></iframe>
-    <div id="bcMove"><div class="movebox">&#10287; Drag to move &middot; corner to resize<button type="button" id="bcMoveDone">Done</button></div></div>
-    <div id="bcResize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
-  </div>
+  <!-- Every embedded widget lives here, generated from the WIDGETS registry (see buildWidgetEls).
+       Each is a same-origin iframe so the embedded page's own audio/SSE/render code stays intact,
+       while THIS canvas owns its position/size, drag/resize and cursor hit-testing (one window →
+       no cross-window z-order bugs). Frames are created lazily — see ensureFrame — because loading
+       one starts whatever that page does. They were eight hand-copied blocks differing only in
+       ids and a label; a registry means adding a widget is one table entry, not thirteen hookups. -->
+  <div id="widgets"></div>
 
   <!-- Patch notes: a center-screen modal shown once per version on launch (must be closed). -->
   <div id="whatsnew">
@@ -1306,13 +1170,7 @@
     const root = document.documentElement;
     const qTheme = new URLSearchParams(location.search).get("theme");
     root.setAttribute("data-theme", qTheme || PREFS.theme || "mobiglas");
-    if (typeof syncNotepadTheme === "function") syncNotepadTheme(); // retint the embedded notepad iframe (same-origin)
-    if (typeof syncTwitchTheme === "function") syncTwitchTheme();   // …and the embedded Twitch Chat iframe
-    if (typeof syncScFeedTheme === "function") syncScFeedTheme();   // …and the embedded SC Feed iframe
-    if (typeof syncPartyTheme === "function") syncPartyTheme();     // ...and the embedded Party iframe
-    if (typeof syncBattagliaTheme === "function") syncBattagliaTheme(); // ...and the embedded Battaglia iframe
-    if (typeof syncWebViewTheme === "function") syncWebViewTheme();
-    if (typeof syncBindingChartTheme === "function") syncBindingChartTheme();
+    if (typeof syncAllWidgetThemes === "function") syncAllWidgetThemes(); // retint every embedded widget iframe (same-origin)
     // Server-resolved entitlement + trial state (a ?premium/?demo query pins them for previews).
     const q2 = new URLSearchParams(location.search);
     if (!q2.has("premium")) root.classList.toggle("premium", !!PREFS.premium);
@@ -1982,726 +1840,295 @@
     window.addEventListener("pointerup", up);
   }
 
-  // ── Mining Assistant widget (embedded iframe hosted on this canvas) ────────────
-  // We own its geometry (x/y/scale/angle → CSS vars on #miningWidget) and its drag/resize; the
-  // iframe (mining.html?embedded=1) renders + plays audio + streams SSE and talks back same-origin
-  // via window.__miningHost. Visibility is driven by the shell (main.cjs) — see onMiningVisible —
-  // so the tray, hotkey, hub toggle, and suppress-gated auto-show stay one source of truth.
-  const MINING_DEFAULT_ANGLE = -5;
-  let mwidget = { x: null, y: null, scale: null, angle: null, visible: false };
-  let miningFrameArmed = false; // the iframe's src is set (SSE live) — even while hidden, so it can self-pop
-  function miningScale() { return mwidget.scale != null ? mwidget.scale : Math.max(50, Math.min(200, Number(PREFS.overlayScale) || 100)) / 100; }
-  function applyMiningFrame() {
-    const w = $("miningWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (mwidget.x != null) w.style.setProperty("--mwx", (mwidget.x + ox) + "px");
-    if (mwidget.y != null) w.style.setProperty("--mwy", (mwidget.y + oy) + "px");
-    w.style.setProperty("--mwscale", miningScale());
-    w.style.setProperty("--mwangle", (mwidget.angle != null ? mwidget.angle : MINING_DEFAULT_ANGLE) + "deg");
-  }
-  function defaultMiningPos() { mwidget.x = 40; mwidget.y = 60; } // primary-relative; applyMiningFrame() adds the primary offset
-  function persistMiningWidget() { window.overlayApi?.saveWidget?.("mining", { x: mwidget.x, y: mwidget.y, scale: mwidget.scale, angle: mwidget.angle }); }
-  // Create the iframe (idempotent). Loading it starts its SSE + arms the OCR reader, so only do it
-  // when mining is shown OR auto-show is on (armed hidden, waiting to self-pop on a scan).
-  function ensureMiningFrame() {
-    if (miningFrameArmed) return;
-    const f = $("miningFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/mining.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    miningFrameArmed = true;
-  }
-  function setMiningVisible(on) {
-    // Keep the embedded page's inert flag in step with its visibility, so a hidden-but-armed
-    // widget never makes noise (it stays subscribed only so auto-show can pop it).
-    try { $("miningFrame")?.contentWindow?.__miningSetHidden?.(!on); } catch { /* iframe not ready */ }
-    const w = $("miningWidget"); if (!w) return;
-    mwidget.visible = !!on;
-    if (on) { ensureMiningFrame(); w.style.display = ""; applyMiningFrame(); }
-    else { w.style.display = "none"; w.classList.remove("moving"); }
-  }
-  // Same-origin bridge the embedded mining page calls via window.parent.__miningHost.
-  window.__miningHost = {
-    ready: () => applyMiningFrame(),
-    summonCog: () => summonGlobalCog(),
-    setModal: (on) => window.overlayApi?.setModal?.(!!on),
-    requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
-    getAngle: () => (mwidget.angle != null ? mwidget.angle : MINING_DEFAULT_ANGLE),
-    setAngle: (deg) => { mwidget.angle = Number(deg); applyMiningFrame(); },
-    persist: () => persistMiningWidget(),
-    setSize: (wpx, hpx) => { const f = $("miningFrame"); if (!f) return; if (wpx) f.style.width = wpx + "px"; if (hpx) f.style.height = hpx + "px"; },
-  };
-  // Shell (main.cjs) drives visibility: {on:true} show · {on:false,arm:true} load hidden for
-  // auto-show · {on:false} hide. One source of truth for tray/hotkey/hub/auto-show.
-  window.overlayApi?.onMiningVisible?.((s) => {
-    if (!s) return;
-    if (s.on) setMiningVisible(true);
-    else { if (s.arm) ensureMiningFrame(); setMiningVisible(false); }
-  });
+  // ══ Canvas widgets ═══════════════════════════════════════════════════════════════════════
+  // Every embedded widget is the same object: an iframe on THIS canvas whose geometry this shell
+  // owns (one window → no cross-window z-order bugs), whose visibility the shell (main.cjs)
+  // drives — so tray, hotkey, hub toggle and auto-show stay ONE source of truth — and whose
+  // layout persists to widgets.json under `key`.
+  //
+  // This was eight hand-copied blocks that differed only in their variable names, so adding a
+  // widget meant thirteen separate hookups and grouping them would have meant knowing eight sets
+  // of ids. Only the GENUINE differences live in the table now; the generic machinery below is
+  // written once.
+  //
+  //   key       widgets.json key + the shell visibility channel it answers to
+  //   page      embedded page, loaded as /<page>?embedded=1&theme=…
+  //   title     iframe title / the name this widget goes by in the UI
+  //   def       default resting spot — PRIMARY-relative; applyFrame() adds the canvas offset
+  //   size      default box size, plus the clamps its corner drag honours
+  //   shape     "box" (flat; the corner drag GROWS it to show more — right for anything
+  //             text-bearing) or "scaled" (tilt + zoom as one unit — Mining's fixed-size readout)
+  //   notifier  invisible until it has something to say; gets a labelled drop zone in arrange
+  //   focusFn   contentWindow fn focusing its text field, for the shared in-game typing grab
+  //   host      extra members merged onto the same-origin bridge the embedded page calls
+  //   onShow / onHide   side effects when visibility flips
+  //
+  // Note the resize clamps are per-widget and deliberately NOT normalised: only Web Page and
+  // Binding Chart were raised to 6000×3000 (they hold a whole website / a dense chart); the rest
+  // keep the tighter caps they shipped with.
+  const WIDGETS = [
+    {
+      key: "mining", page: "mining.html", title: "Mining Assistant",
+      shape: "scaled", angle: -5, allow: "autoplay",
+      def: { x: 40, y: 60 }, size: { w: 416, h: 380 },
+      // A hidden-but-ARMED mining widget stays subscribed so auto-show can pop it on a scan — so
+      // it has to be TOLD it's hidden or it announces from off-screen. The rule for every widget:
+      // invisible means no sound and no work beyond whatever is needed to un-hide itself.
+      onShow: (w) => { try { frameWin(w)?.__miningSetHidden?.(false); } catch { /* not ready */ } },
+      onHide: (w) => { try { frameWin(w)?.__miningSetHidden?.(true); } catch { /* not ready */ } },
+      host: (w) => ({
+        setModal: (on) => window.overlayApi?.setModal?.(!!on),
+        requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
+        getAngle: () => (w.s.angle != null ? w.s.angle : w.angle),
+        setAngle: (deg) => { w.s.angle = Number(deg); applyFrame(w); },
+        // The embedded page measures its own content and sizes the frame snugly. Inline
+        // width/height wins over the CSS vars, which is what keeps it fitted.
+        setSize: (wpx, hpx) => { const f = frameEl(w); if (!f) return; if (wpx) f.style.width = wpx + "px"; if (hpx) f.style.height = hpx + "px"; },
+      }),
+    },
+    {
+      key: "notepad", page: "notepad.html", title: "Notepad",
+      def: { x: 480, y: 60 }, size: { w: 320, h: 380, minW: 220, maxW: 900, minH: 160, maxH: 900 },
+      focusFn: "__notepadFocus",
+      // Don't strand the keyboard grab: hiding mid-typing would leave the interact key suspended.
+      onHide: (w) => { try { frameWin(w)?.__notepadExitTyping?.(); } catch { /* iframe gone */ } },
+    },
+    {
+      key: "twitchChat", page: "twitchchat.html", title: "Twitch Chat",
+      def: { x: 860, y: 60 }, size: { w: 340, h: 460, minW: 260, maxW: 900, minH: 220, maxH: 1100 },
+      focusFn: "__twitchChatFocus",
+    },
+    {
+      key: "scFeed", page: "scfeed.html", title: "SC Feed",
+      notifier: true, z: 21,
+      def: { x: 480, y: 560 }, size: { w: 340, h: 140, minW: 240, maxW: 760, minH: 110, maxH: 420 },
+      moveLabel: "📰 SC Feed news pops up here · drag to move · corner to resize",
+      host: (w) => ({
+        // The card faded in/out — flip the interactive-region flag with it, so an idle feed can
+        // never swallow a click meant for the game.
+        active: (on) => { const el = wEl(w); if (el) el.classList.toggle("live", !!on); },
+        openUrl: (url) => window.overlayApi?.openUrl?.(url),
+        pickTone: () => window.overlayApi?.scFeedPickTone?.(),   // native dialog lives in the shell
+        clearTone: () => window.overlayApi?.scFeedClearTone?.(),
+      }),
+      onHide: (w) => { wEl(w)?.classList.remove("live"); },
+    },
+    {
+      key: "party", page: "party.html", title: "Party split",
+      def: { x: 860, y: 560 }, size: { w: 340, h: 400, minW: 280, maxW: 760, minH: 200, maxH: 900 },
+      focusFn: "__partyFocus",
+      host: () => ({
+        // Reveal the saved-splits folder so a crew can open the plain-text copies outside the app.
+        openFolder: () => window.overlayApi?.openDataFolder?.("party-sessions"),
+      }),
+      onHide: (w) => { try { frameWin(w)?.__partyExitTyping?.(); } catch { /* iframe gone */ } },
+    },
+    {
+      key: "battaglia", page: "battaglia.html", title: "Battaglia track",
+      def: { x: 40, y: 560 }, size: { w: 360, h: 470, minW: 300, maxW: 760, minH: 240, maxH: 900 },
+    },
+    {
+      key: "webView", page: "webview.html", title: "Web Page",
+      def: { x: 480, y: 120 }, size: { w: 420, h: 520, minW: 260, maxW: 6000, minH: 200, maxH: 3000 },
+      focusFn: "__webViewFocus",
+      // A page that refuses to be framed gets an "Open in browser" escape hatch instead.
+      host: () => ({ openUrl: (u) => window.overlayApi?.openUrl?.(u) }),
+    },
+    {
+      key: "bindingChart", page: "bindingwidget.html", title: "Binding Chart",
+      def: { x: 120, y: 120 }, size: { w: 620, h: 340, minW: 260, maxW: 6000, minH: 160, maxH: 3000 },
+      // Re-read the PNG each time it's summoned, so a re-exported chart appears without a restart.
+      onShow: (w) => { try { frameWin(w)?.__bindingReload?.(); } catch { /* not loaded yet */ } },
+    },
+  ];
 
-  if (CANVAS) {
-    // Load this widget's saved layout (shares widgets.json under key "mining").
-    (async () => {
-      let msaved = null;
-      try { msaved = (await window.overlayApi?.getWidgets?.())?.["mining"] || null; } catch { /* none */ }
-      const q = new URLSearchParams(location.search);
-      if (q.has("mwx") || q.has("mwy") || q.has("mwscale") || q.has("mwangle")) {
-        msaved = { ...(msaved || {}) };
-        if (q.has("mwx")) msaved.x = +q.get("mwx");
-        if (q.has("mwy")) msaved.y = +q.get("mwy");
-        if (q.has("mwscale")) msaved.scale = +q.get("mwscale");
-        if (q.has("mwangle")) msaved.angle = +q.get("mwangle");
-      }
-      if (msaved) mwidget = { ...mwidget, ...msaved };
-      if (mwidget.x == null || mwidget.y == null) defaultMiningPos();
-      applyMiningFrame();
-      if (q.has("mining")) { setMiningVisible(true); } // headless-test the mining widget
-    })();
-    // Move + resize the mining widget (arrange mode). The move banner doubles as a drag shield
-    // over the iframe (which would otherwise swallow the pointer).
-    $("miningMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#miningMoveDone") || e.target.closest("#miningResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = mwidget.x, oy = mwidget.y;
-      dragPointer((ev) => { mwidget.x = ox + (ev.clientX - sx); mwidget.y = oy + (ev.clientY - sy); applyMiningFrame(); }, persistMiningWidget);
-    });
-    $("miningResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, os = miningScale();
-      dragPointer((ev) => { mwidget.scale = Math.max(0.5, Math.min(2.5, os + (ev.clientX - sx) / 380)); applyMiningFrame(); }, persistMiningWidget);
-    });
-    $("miningMoveDone").addEventListener("click", () => window.overlayApi.endMove());
+  // Runtime state hangs off each entry as `.s` so it never collides with the config above.
+  const WBY = {};
+  for (const w of WIDGETS) {
+    w.s = { x: null, y: null, w: null, h: null, scale: null, angle: null, visible: false };
+    w.armed = false; // iframe src is set (page live) — true even while hidden, for auto-show
+    WBY[w.key] = w;
   }
 
-  // ── Notepad widget (embedded iframe hosted on this canvas) ─────────────────────
-  // We own its geometry (x/y/w/h → CSS vars on #notepadWidget) and its drag/resize; the iframe
-  // (notepad.html?embedded=1) renders + persists notes via /api/notes and talks back same-origin
-  // via window.__notepadHost. Visibility is driven by the shell (main.cjs) — see onNotepadVisible —
-  // so the tray and hub toggle stay one source of truth. Flat + box-resized (not tilted/scaled like
-  // mining) so note text stays readable and the box can grow to show more.
-  let nwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let notepadFrameArmed = false;
-  function applyNotepadFrame() {
-    const w = $("notepadWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (nwidget.x != null) w.style.setProperty("--nwx", (nwidget.x + ox) + "px");
-    if (nwidget.y != null) w.style.setProperty("--nwy", (nwidget.y + oy) + "px");
-    if (nwidget.w != null) w.style.setProperty("--nww", nwidget.w + "px");
-    if (nwidget.h != null) w.style.setProperty("--nwh", nwidget.h + "px");
+  const wEl = (w) => $("w-" + w.key);
+  const frameEl = (w) => $("wf-" + w.key);
+  const frameWin = (w) => { try { return frameEl(w)?.contentWindow || null; } catch { return null; } };
+  const wScale = (w) => (w.s.scale != null ? w.s.scale : Math.max(50, Math.min(200, Number(PREFS.overlayScale) || 100)) / 100);
+
+  // Generate every widget's markup into #widgets (see the container in the body).
+  function buildWidgetEls() {
+    const host = $("widgets"); if (!host) return;
+    host.innerHTML = WIDGETS.map((w) => {
+      const cls = "widget" + (w.shape === "scaled" ? " scaled" : "") + (w.notifier ? " notifier" : "");
+      const style = "display:none" + (w.z ? ";--wz:" + w.z : "");
+      const allow = w.allow ? ' allow="' + escapeAttr(w.allow) + '"' : "";
+      const label = w.moveLabel || "⠿ Drag to move · corner to resize";
+      return '<div class="' + cls + '" id="w-' + w.key + '" style="' + style + '">'
+        + '<iframe id="wf-' + w.key + '" title="' + escapeAttr(w.title) + '"' + allow + ' scrolling="no"></iframe>'
+        + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
+        + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
+        + '</div>';
+    }).join("");
   }
-  function defaultNotepadPos() { nwidget.x = 480; nwidget.y = 60; } // primary-relative; applyNotepadFrame() adds the offset
-  function persistNotepadWidget() { window.overlayApi?.saveWidget?.("notepad", { x: nwidget.x, y: nwidget.y, w: nwidget.w, h: nwidget.h }); }
-  function ensureNotepadFrame() {
-    if (notepadFrameArmed) return;
-    const f = $("notepadFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/notepad.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    notepadFrameArmed = true;
-  }
-  function setNotepadVisible(on) {
-    const w = $("notepadWidget"); if (!w) return;
-    nwidget.visible = !!on;
-    if (on) { ensureNotepadFrame(); w.style.display = ""; applyNotepadFrame(); }
-    else {
-      try { $("notepadFrame")?.contentWindow?.__notepadExitTyping?.(); } catch { /* iframe gone */ } // don't leave typing mode stranded
-      w.style.display = "none"; w.classList.remove("moving");
+  buildWidgetEls();
+
+  // Position/size a widget. x/y are PRIMARY-relative; the primary's offset within the (possibly
+  // multi-monitor) canvas is added here, so an existing layout stays put and a leftward drag can
+  // carry onto another monitor.
+  function applyFrame(w) {
+    const el = wEl(w); if (!el) return;
+    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0;
+    if (w.s.x != null) el.style.setProperty("--wx", (w.s.x + ox) + "px");
+    if (w.s.y != null) el.style.setProperty("--wy", (w.s.y + oy) + "px");
+    if (w.shape === "scaled") {
+      el.style.setProperty("--wscale", wScale(w));
+      el.style.setProperty("--wangle", (w.s.angle != null ? w.s.angle : w.angle) + "deg");
+    } else {
+      el.style.setProperty("--ww", (w.s.w != null ? w.s.w : w.size.w) + "px");
+      el.style.setProperty("--wh", (w.s.h != null ? w.s.h : w.size.h) + "px");
     }
   }
-  // Keep the embedded notepad's theme in sync when the overlay retints (same-origin; no SSE).
-  function syncNotepadTheme() {
-    if (!notepadFrameArmed) return;
-    const f = $("notepadFrame"); if (!f) return;
+  function applyAllFrames() { for (const w of WIDGETS) applyFrame(w); }
+
+  function persistW(w) {
+    const layout = w.shape === "scaled"
+      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle }
+      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h };
+    window.overlayApi?.saveWidget?.(w.key, layout);
+  }
+
+  // Create the iframe (idempotent). Loading it starts whatever the page does — SSE, polling,
+  // audio — so only arm it when the widget is shown, or when the shell asks for it to be armed
+  // hidden (mining's auto-show).
+  function ensureFrame(w) {
+    if (w.armed) return;
+    const f = frameEl(w); if (!f) return;
+    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
+    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
+    f.src = "/" + w.page + "?embedded=1&theme=" + encodeURIComponent(theme) + lite;
+    w.armed = true;
+  }
+
+  function setWidgetVisible(w, on) {
+    const el = wEl(w); if (!el) return;
+    w.s.visible = !!on;
+    if (on) {
+      ensureFrame(w);
+      el.style.display = "";
+      applyFrame(w);
+      w.onShow?.(w);
+    } else {
+      w.onHide?.(w);
+      el.style.display = "none";
+      el.classList.remove("moving");
+    }
+  }
+
+  // Keep an embedded page's theme in sync when the overlay retints (same-origin; no SSE needed).
+  // It applies ?theme= at load, so a not-yet-ready iframe is already correct.
+  function syncWidgetTheme(w) {
+    if (!w.armed) return;
+    const f = frameEl(w); if (!f) return;
     try {
       const doc = f.contentDocument;
       const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
       if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet — it applies ?theme= at load, so it's already correct */ }
+    } catch { /* iframe not ready yet */ }
   }
-  // Same-origin bridge the embedded notepad page calls via window.parent.__notepadHost.
-  window.__notepadHost = {
-    ready: () => { applyNotepadFrame(); syncNotepadTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistNotepadWidget(),
-    // Typing mode: the shell grabs keyboard focus + suspends the interact key so the note field
-    // can be typed into in-game (see main.cjs). editStart/editEnd toggle it.
-    editStart: () => { textFocusTarget = "notepad"; window.overlayApi?.notepadEditing?.(true); },
-    editEnd: () => window.overlayApi?.notepadEditing?.(false),
-  };
-  window.overlayApi?.onNotepadVisible?.((s) => { if (s) setNotepadVisible(!!s.on); });
+  function syncAllWidgetThemes() { for (const w of WIDGETS) syncWidgetTheme(w); }
+
+  // Same-origin bridges: every embedded page calls window.parent.__<key>Host. The common members
+  // are identical for all of them, so only the extras come from the table.
+  for (const w of WIDGETS) {
+    const base = {
+      ready: () => { applyFrame(w); syncWidgetTheme(w); },
+      summonCog: () => summonGlobalCog(),
+      persist: () => persistW(w),
+    };
+    // Text fields share ONE keyboard grab with the shell; textFocusTarget routes the focus signal
+    // back to whichever widget asked for it.
+    if (w.focusFn) {
+      base.editStart = () => { textFocusTarget = w.key; window.overlayApi?.notepadEditing?.(true); };
+      base.editEnd = () => window.overlayApi?.notepadEditing?.(false);
+    }
+    window["__" + w.key + "Host"] = { ...base, ...(w.host ? w.host(w) : {}) };
+  }
+
   // Which widget asked for the keyboard grab — the shell's focus signal is one channel shared by
-  // every widget with a text field (Notepad, Twitch Chat), so route it to the one that asked.
+  // every widget with a text field, so route it to the one that asked.
   let textFocusTarget = "notepad";
   // The shell says the (held) interact key is released → safe to focus the text field now.
   window.overlayApi?.onNotepadFocus?.(() => {
     try {
-      if (textFocusTarget === "twitch") $("twitchFrame")?.contentWindow?.__twitchChatFocus?.();
-      else if (textFocusTarget === "party") $("partyFrame")?.contentWindow?.__partyFocus?.();
-      else if (textFocusTarget === "webView") $("vwFrame")?.contentWindow?.__webViewFocus?.();
-      else $("notepadFrame")?.contentWindow?.__notepadFocus?.();
+      const w = WBY[textFocusTarget];
+      if (w?.focusFn) frameWin(w)?.[w.focusFn]?.();
+      else frameWin(WBY.notepad)?.__notepadFocus?.(); // widgets without their own field fall back
     } catch { /* iframe gone */ }
   });
 
-  if (CANVAS) {
-    // Load this widget's saved layout (shares widgets.json under key "notepad").
-    (async () => {
-      let nsaved = null;
-      try { nsaved = (await window.overlayApi?.getWidgets?.())?.["notepad"] || null; } catch { /* none */ }
-      const q = new URLSearchParams(location.search);
-      if (q.has("nwx") || q.has("nwy") || q.has("nww") || q.has("nwh")) {
-        nsaved = { ...(nsaved || {}) };
-        if (q.has("nwx")) nsaved.x = +q.get("nwx");
-        if (q.has("nwy")) nsaved.y = +q.get("nwy");
-        if (q.has("nww")) nsaved.w = +q.get("nww");
-        if (q.has("nwh")) nsaved.h = +q.get("nwh");
-      }
-      if (nsaved) nwidget = { ...nwidget, ...nsaved };
-      if (nwidget.x == null || nwidget.y == null) defaultNotepadPos();
-      applyNotepadFrame();
-      if (q.has("notepad")) setNotepadVisible(true); // headless-test the notepad widget
-    })();
-    // Move + resize (arrange mode). The move banner doubles as a drag shield over the iframe.
-    $("notepadMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#notepadMoveDone") || e.target.closest("#notepadResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = nwidget.x, oy = nwidget.y;
-      dragPointer((ev) => { nwidget.x = ox + (ev.clientX - sx); nwidget.y = oy + (ev.clientY - sy); applyNotepadFrame(); }, persistNotepadWidget);
+  // Shell (main.cjs) drives visibility on a per-widget channel: {on:true} show ·
+  // {on:false,arm:true} load hidden so it can pop itself later · {on:false} hide.
+  for (const w of WIDGETS) {
+    const chan = "on" + w.key.charAt(0).toUpperCase() + w.key.slice(1) + "Visible";
+    window.overlayApi?.[chan]?.((s) => {
+      if (!s) return;
+      if (s.on) setWidgetVisible(w, true);
+      else { if (s.arm) ensureFrame(w); setWidgetVisible(w, false); }
     });
-    $("notepadResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = nwidget.w != null ? nwidget.w : ($("notepadFrame").offsetWidth || 320);
-      const oh = nwidget.h != null ? nwidget.h : ($("notepadFrame").offsetHeight || 380);
-      dragPointer((ev) => {
-        nwidget.w = Math.max(220, Math.min(900, ow + (ev.clientX - sx)));
-        nwidget.h = Math.max(160, Math.min(900, oh + (ev.clientY - sy)));
-        applyNotepadFrame();
-      }, persistNotepadWidget);
-    });
-    $("notepadMoveDone").addEventListener("click", () => window.overlayApi.endMove());
   }
+  // Re-read the chart PNG whenever the shell asks (a re-exported chart shows up without a restart).
+  window.overlayApi?.onBindingChartReload?.(() => { try { frameWin(WBY.bindingChart)?.__bindingReload?.(); } catch { /* not loaded */ } });
 
-  // ── Twitch Chat widget (embedded iframe hosted on this canvas) ─────────────────
-  // Same shape as the Notepad: this canvas owns geometry + drag/resize; the iframe
-  // (twitchchat.html?embedded=1) owns the channel picker and embeds Twitch's chat.
-  let twwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let twitchFrameArmed = false;
-  function applyTwitchFrame() {
-    const w = $("twitchWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (twwidget.x != null) w.style.setProperty("--twx", (twwidget.x + ox) + "px");
-    if (twwidget.y != null) w.style.setProperty("--twy", (twwidget.y + oy) + "px");
-    if (twwidget.w != null) w.style.setProperty("--tww", twwidget.w + "px");
-    if (twwidget.h != null) w.style.setProperty("--twh", twwidget.h + "px");
-  }
-  function defaultTwitchPos() { twwidget.x = 860; twwidget.y = 60; } // primary-relative; applyTwitchFrame() adds the offset
-  function persistTwitchWidget() { window.overlayApi?.saveWidget?.("twitchChat", { x: twwidget.x, y: twwidget.y, w: twwidget.w, h: twwidget.h }); }
-  function ensureTwitchFrame() {
-    if (twitchFrameArmed) return;
-    const f = $("twitchFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/twitchchat.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    twitchFrameArmed = true;
-  }
-  function setTwitchVisible(on) {
-    const w = $("twitchWidget"); if (!w) return;
-    twwidget.visible = !!on;
-    if (on) { ensureTwitchFrame(); w.style.display = ""; applyTwitchFrame(); }
-    else {
-      try { $("twitchFrame")?.contentWindow?.__twitchChatExitTyping?.(); } catch { /* iframe gone */ } // don't strand the keyboard grab
-      w.style.display = "none"; w.classList.remove("moving");
+  if (CANVAS) {
+    // Load saved layouts (all widgets share widgets.json, keyed by `key`), then wire drag/resize.
+    (async () => {
+      let all = null;
+      try { all = await window.overlayApi?.getWidgets?.(); } catch { /* none saved yet */ }
+      const q = new URLSearchParams(location.search);
+      for (const w of WIDGETS) {
+        const saved = (all && all[w.key]) || null;
+        if (saved) w.s = { ...w.s, ...saved };
+        if (w.s.x == null || w.s.y == null) { w.s.x = w.def.x; w.s.y = w.def.y; }
+        applyFrame(w);
+        if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
+      }
+    })();
+
+    for (const w of WIDGETS) {
+      const el = wEl(w); if (!el) continue;
+      // The move banner doubles as a drag shield over the iframe, which would otherwise swallow
+      // the pointer.
+      el.querySelector(".wmove")?.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".wdone") || e.target.closest(".wresize")) return;
+        e.preventDefault();
+        const sx = e.clientX, sy = e.clientY, ox = w.s.x, oy = w.s.y;
+        dragPointer((ev) => { w.s.x = ox + (ev.clientX - sx); w.s.y = oy + (ev.clientY - sy); applyFrame(w); }, () => persistW(w));
+      });
+      el.querySelector(".wresize")?.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const sx = e.clientX, sy = e.clientY;
+        if (w.shape === "scaled") {
+          const os = wScale(w);
+          dragPointer((ev) => { w.s.scale = Math.max(0.5, Math.min(2.5, os + (ev.clientX - sx) / 380)); applyFrame(w); }, () => persistW(w));
+        } else {
+          const f = frameEl(w);
+          const ow = w.s.w != null ? w.s.w : (f?.offsetWidth || w.size.w);
+          const oh = w.s.h != null ? w.s.h : (f?.offsetHeight || w.size.h);
+          const z = w.size;
+          dragPointer((ev) => {
+            w.s.w = Math.max(z.minW, Math.min(z.maxW, ow + (ev.clientX - sx)));
+            w.s.h = Math.max(z.minH, Math.min(z.maxH, oh + (ev.clientY - sy)));
+            applyFrame(w);
+          }, () => persistW(w));
+        }
+      });
+      el.querySelector(".wdone")?.addEventListener("click", () => window.overlayApi.endMove());
     }
-  }
-  // Keep the embedded page's theme in sync when the overlay retints (same-origin; no SSE).
-  function syncTwitchTheme() {
-    if (!twitchFrameArmed) return;
-    const f = $("twitchFrame"); if (!f) return;
-    try {
-      const doc = f.contentDocument;
-      const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
-      if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet — it applies ?theme= at load, so it's already correct */ }
-  }
-  // Same-origin bridge the embedded page calls via window.parent.__twitchChatHost.
-  window.__twitchChatHost = {
-    ready: () => { applyTwitchFrame(); syncTwitchTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistTwitchWidget(),
-    // Channel field shares the Notepad's keyboard grab; textFocusTarget routes the focus signal.
-    editStart: () => { textFocusTarget = "twitch"; window.overlayApi?.notepadEditing?.(true); },
-    editEnd: () => window.overlayApi?.notepadEditing?.(false),
-  };
-  window.overlayApi?.onTwitchChatVisible?.((s) => { if (s) setTwitchVisible(!!s.on); });
-
-  if (CANVAS) {
-    // Load this widget's saved layout (shares widgets.json under key "twitchChat").
-    (async () => {
-      let tsaved = null;
-      try { tsaved = (await window.overlayApi?.getWidgets?.())?.["twitchChat"] || null; } catch { /* none */ }
-      const q = new URLSearchParams(location.search);
-      if (q.has("twx") || q.has("twy") || q.has("tww") || q.has("twh")) {
-        tsaved = { ...(tsaved || {}) };
-        if (q.has("twx")) tsaved.x = +q.get("twx");
-        if (q.has("twy")) tsaved.y = +q.get("twy");
-        if (q.has("tww")) tsaved.w = +q.get("tww");
-        if (q.has("twh")) tsaved.h = +q.get("twh");
-      }
-      if (tsaved) twwidget = { ...twwidget, ...tsaved };
-      if (twwidget.x == null || twwidget.y == null) defaultTwitchPos();
-      applyTwitchFrame();
-      if (q.has("twitch")) setTwitchVisible(true); // headless-test the Twitch Chat widget
-    })();
-    // Move + resize (arrange mode). The move banner doubles as a drag shield over the iframe.
-    $("twitchMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#twitchMoveDone") || e.target.closest("#twitchResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = twwidget.x, oy = twwidget.y;
-      dragPointer((ev) => { twwidget.x = ox + (ev.clientX - sx); twwidget.y = oy + (ev.clientY - sy); applyTwitchFrame(); }, persistTwitchWidget);
-    });
-    $("twitchResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = twwidget.w != null ? twwidget.w : ($("twitchFrame").offsetWidth || 340);
-      const oh = twwidget.h != null ? twwidget.h : ($("twitchFrame").offsetHeight || 460);
-      dragPointer((ev) => {
-        twwidget.w = Math.max(260, Math.min(900, ow + (ev.clientX - sx)));
-        twwidget.h = Math.max(220, Math.min(1100, oh + (ev.clientY - sy)));
-        applyTwitchFrame();
-      }, persistTwitchWidget);
-    });
-    $("twitchMoveDone").addEventListener("click", () => window.overlayApi.endMove());
-  }
-
-  // ── SC Feed widget (embedded iframe hosted on this canvas) ────────────────────
-  // Notifier, not a panel: the iframe polls /api/scfeed and fades a card in on new news. This
-  // canvas owns geometry + drag/resize as usual, plus the `.live` flag that decides whether the
-  // widget counts as an interactive region (see the RSEL list) — an idle SC Feed must stay fully
-  // click-through so it can't intercept a click meant for the game.
-  let sfwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let scfeedFrameArmed = false;
-  function applyScFeedFrame() {
-    const w = $("scfeedWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (sfwidget.x != null) w.style.setProperty("--sfx", (sfwidget.x + ox) + "px");
-    if (sfwidget.y != null) w.style.setProperty("--sfy", (sfwidget.y + oy) + "px");
-    if (sfwidget.w != null) w.style.setProperty("--sfw", sfwidget.w + "px");
-    if (sfwidget.h != null) w.style.setProperty("--sfh", sfwidget.h + "px");
-  }
-  function defaultScFeedPos() { sfwidget.x = 480; sfwidget.y = 560; } // primary-relative; applyScFeedFrame() adds the offset
-  function persistScFeedWidget() { window.overlayApi?.saveWidget?.("scFeed", { x: sfwidget.x, y: sfwidget.y, w: sfwidget.w, h: sfwidget.h }); }
-  function ensureScFeedFrame() {
-    if (scfeedFrameArmed) return;
-    const f = $("scfeedFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/scfeed.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    scfeedFrameArmed = true;
-  }
-  function setScFeedVisible(on) {
-    const w = $("scfeedWidget"); if (!w) return;
-    sfwidget.visible = !!on;
-    if (on) { ensureScFeedFrame(); w.style.display = ""; applyScFeedFrame(); }
-    else { w.style.display = "none"; w.classList.remove("moving", "live"); }
-  }
-  // Keep the embedded page's theme in sync when the overlay retints (same-origin; no SSE).
-  function syncScFeedTheme() {
-    if (!scfeedFrameArmed) return;
-    const f = $("scfeedFrame"); if (!f) return;
-    try {
-      const doc = f.contentDocument;
-      const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
-      if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet — it applies ?theme= at load, so it's already correct */ }
-  }
-  // Same-origin bridge the embedded page calls via window.parent.__scFeedHost.
-  window.__scFeedHost = {
-    ready: () => { applyScFeedFrame(); syncScFeedTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistScFeedWidget(),
-    // The card faded in/out — flip the interactive-region flag with it.
-    active: (on) => { const w = $("scfeedWidget"); if (w) w.classList.toggle("live", !!on); },
-    openUrl: (url) => window.overlayApi?.openUrl?.(url),
-    // Custom alert WAV (native dialog lives in the shell).
-    pickTone: () => window.overlayApi?.scFeedPickTone?.(),
-    clearTone: () => window.overlayApi?.scFeedClearTone?.(),
-  };
-  window.overlayApi?.onScFeedVisible?.((s) => { if (s) setScFeedVisible(!!s.on); });
-
-  if (CANVAS) {
-    // Load this widget's saved layout (shares widgets.json under key "scFeed").
-    (async () => {
-      let ssaved = null;
-      try { ssaved = (await window.overlayApi?.getWidgets?.())?.["scFeed"] || null; } catch { /* none */ }
-      const q = new URLSearchParams(location.search);
-      if (q.has("sfx") || q.has("sfy") || q.has("sfw") || q.has("sfh")) {
-        ssaved = { ...(ssaved || {}) };
-        if (q.has("sfx")) ssaved.x = +q.get("sfx");
-        if (q.has("sfy")) ssaved.y = +q.get("sfy");
-        if (q.has("sfw")) ssaved.w = +q.get("sfw");
-        if (q.has("sfh")) ssaved.h = +q.get("sfh");
-      }
-      if (ssaved) sfwidget = { ...sfwidget, ...ssaved };
-      if (sfwidget.x == null || sfwidget.y == null) defaultScFeedPos();
-      applyScFeedFrame();
-      if (q.has("scfeed")) { setScFeedVisible(true); scFeedPreview(true); } // headless-test the SC Feed card
-    })();
-    // Move + resize (arrange mode). The move banner doubles as a drag shield over the iframe.
-    $("scfeedMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#scfeedMoveDone") || e.target.closest("#scfeedResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = sfwidget.x, oy = sfwidget.y;
-      dragPointer((ev) => { sfwidget.x = ox + (ev.clientX - sx); sfwidget.y = oy + (ev.clientY - sy); applyScFeedFrame(); }, persistScFeedWidget);
-    });
-    $("scfeedResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = sfwidget.w != null ? sfwidget.w : ($("scfeedFrame").offsetWidth || 340);
-      const oh = sfwidget.h != null ? sfwidget.h : ($("scfeedFrame").offsetHeight || 140);
-      dragPointer((ev) => {
-        sfwidget.w = Math.max(240, Math.min(760, ow + (ev.clientX - sx)));
-        sfwidget.h = Math.max(110, Math.min(420, oh + (ev.clientY - sy)));
-        applyScFeedFrame();
-      }, persistScFeedWidget);
-    });
-    $("scfeedMoveDone").addEventListener("click", () => window.overlayApi.endMove());
-  }
-  // -- Party widget (embedded iframe hosted on this canvas) ----------------------
-  // Roster + reward split; same geometry/drag ownership as the Notepad. Its name fields share
-  // the Notepad's keyboard grab (textFocusTarget routes the shell's focus signal).
-  let pwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let partyFrameArmed = false;
-  function applyPartyFrame() {
-    const w = $("partyWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (pwidget.x != null) w.style.setProperty("--pwx", (pwidget.x + ox) + "px");
-    if (pwidget.y != null) w.style.setProperty("--pwy", (pwidget.y + oy) + "px");
-    if (pwidget.w != null) w.style.setProperty("--pww", pwidget.w + "px");
-    if (pwidget.h != null) w.style.setProperty("--pwh", pwidget.h + "px");
-  }
-  function defaultPartyPos() { pwidget.x = 860; pwidget.y = 560; } // primary-relative; applyPartyFrame() adds the offset
-  function persistPartyWidget() { window.overlayApi?.saveWidget?.("party", { x: pwidget.x, y: pwidget.y, w: pwidget.w, h: pwidget.h }); }
-  function ensurePartyFrame() {
-    if (partyFrameArmed) return;
-    const f = $("partyFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/party.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    partyFrameArmed = true;
-  }
-  function setPartyVisible(on) {
-    const w = $("partyWidget"); if (!w) return;
-    pwidget.visible = !!on;
-    if (on) { ensurePartyFrame(); w.style.display = ""; applyPartyFrame(); }
-    else {
-      try { $("partyFrame")?.contentWindow?.__partyExitTyping?.(); } catch { /* iframe gone */ } // don't strand the keyboard grab
-      w.style.display = "none"; w.classList.remove("moving");
-    }
-  }
-  // Keep the embedded page's theme in sync when the overlay retints (same-origin; no SSE).
-  function syncPartyTheme() {
-    if (!partyFrameArmed) return;
-    const f = $("partyFrame"); if (!f) return;
-    try {
-      const doc = f.contentDocument;
-      const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
-      if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet - it applies ?theme= at load, so it's already correct */ }
-  }
-  // Same-origin bridge the embedded page calls via window.parent.__partyHost.
-  window.__partyHost = {
-    ready: () => { applyPartyFrame(); syncPartyTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistPartyWidget(),
-    editStart: () => { textFocusTarget = "party"; window.overlayApi?.notepadEditing?.(true); },
-    editEnd: () => window.overlayApi?.notepadEditing?.(false),
-    // Reveal the saved-splits folder so a crew can open the plain-text copies outside the app.
-    openFolder: () => window.overlayApi?.openDataFolder?.("party-sessions"),
-  };
-  window.overlayApi?.onPartyVisible?.((s) => { if (s) setPartyVisible(!!s.on); });
-
-  if (CANVAS) {
-    // Load this widget's saved layout (shares widgets.json under key "party").
-    (async () => {
-      let psaved = null;
-      try { psaved = (await window.overlayApi?.getWidgets?.())?.["party"] || null; } catch { /* none */ }
-      const q = new URLSearchParams(location.search);
-      if (q.has("pwx") || q.has("pwy") || q.has("pww") || q.has("pwh")) {
-        psaved = { ...(psaved || {}) };
-        if (q.has("pwx")) psaved.x = +q.get("pwx");
-        if (q.has("pwy")) psaved.y = +q.get("pwy");
-        if (q.has("pww")) psaved.w = +q.get("pww");
-        if (q.has("pwh")) psaved.h = +q.get("pwh");
-      }
-      if (psaved) pwidget = { ...pwidget, ...psaved };
-      if (pwidget.x == null || pwidget.y == null) defaultPartyPos();
-      applyPartyFrame();
-      if (q.has("party")) setPartyVisible(true); // headless-test the Party widget
-    })();
-    // Move + resize (arrange mode). The move banner doubles as a drag shield over the iframe.
-    $("partyMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#partyMoveDone") || e.target.closest("#partyResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = pwidget.x, oy = pwidget.y;
-      dragPointer((ev) => { pwidget.x = ox + (ev.clientX - sx); pwidget.y = oy + (ev.clientY - sy); applyPartyFrame(); }, persistPartyWidget);
-    });
-    $("partyResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = pwidget.w != null ? pwidget.w : ($("partyFrame").offsetWidth || 340);
-      const oh = pwidget.h != null ? pwidget.h : ($("partyFrame").offsetHeight || 400);
-      dragPointer((ev) => {
-        pwidget.w = Math.max(280, Math.min(760, ow + (ev.clientX - sx)));
-        pwidget.h = Math.max(200, Math.min(900, oh + (ev.clientY - sy)));
-        applyPartyFrame();
-      }, persistPartyWidget);
-    });
-    $("partyMoveDone").addEventListener("click", () => window.overlayApi.endMove());
-  }
-
-  // -- Battaglia grind widget (embedded iframe hosted on this canvas) ------------
-  // Reputation track for a mission giver; same geometry/drag ownership as the Notepad.
-  let bwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let battagliaFrameArmed = false;
-  function applyBattagliaFrame() {
-    const w = $("battagliaWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (bwidget.x != null) w.style.setProperty("--bwx", (bwidget.x + ox) + "px");
-    if (bwidget.y != null) w.style.setProperty("--bwy", (bwidget.y + oy) + "px");
-    if (bwidget.w != null) w.style.setProperty("--bww", bwidget.w + "px");
-    if (bwidget.h != null) w.style.setProperty("--bwh", bwidget.h + "px");
-  }
-  function defaultBattagliaPos() { bwidget.x = 40; bwidget.y = 560; } // primary-relative; applyBattagliaFrame() adds the offset
-  function persistBattagliaWidget() { window.overlayApi?.saveWidget?.("battaglia", { x: bwidget.x, y: bwidget.y, w: bwidget.w, h: bwidget.h }); }
-  function ensureBattagliaFrame() {
-    if (battagliaFrameArmed) return;
-    const f = $("battagliaFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/battaglia.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    battagliaFrameArmed = true;
-  }
-  function setBattagliaVisible(on) {
-    const w = $("battagliaWidget"); if (!w) return;
-    bwidget.visible = !!on;
-    if (on) { ensureBattagliaFrame(); w.style.display = ""; applyBattagliaFrame(); }
-    else { w.style.display = "none"; w.classList.remove("moving"); }
-  }
-  // Keep the embedded page's theme in sync when the overlay retints (same-origin; no SSE).
-  function syncBattagliaTheme() {
-    if (!battagliaFrameArmed) return;
-    const f = $("battagliaFrame"); if (!f) return;
-    try {
-      const doc = f.contentDocument;
-      const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
-      if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet - it applies ?theme= at load, so it's already correct */ }
-  }
-  // Same-origin bridge the embedded page calls via window.parent.__battagliaHost.
-  window.__battagliaHost = {
-    ready: () => { applyBattagliaFrame(); syncBattagliaTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistBattagliaWidget(),
-  };
-  window.overlayApi?.onBattagliaVisible?.((s) => { if (s) setBattagliaVisible(!!s.on); });
-
-  if (CANVAS) {
-    // Load this widget's saved layout (shares widgets.json under key "battaglia").
-    (async () => {
-      let bsaved = null;
-      try { bsaved = (await window.overlayApi?.getWidgets?.())?.["battaglia"] || null; } catch { /* none */ }
-      const q = new URLSearchParams(location.search);
-      if (q.has("bwx") || q.has("bwy") || q.has("bww") || q.has("bwh")) {
-        bsaved = { ...(bsaved || {}) };
-        if (q.has("bwx")) bsaved.x = +q.get("bwx");
-        if (q.has("bwy")) bsaved.y = +q.get("bwy");
-        if (q.has("bww")) bsaved.w = +q.get("bww");
-        if (q.has("bwh")) bsaved.h = +q.get("bwh");
-      }
-      if (bsaved) bwidget = { ...bwidget, ...bsaved };
-      if (bwidget.x == null || bwidget.y == null) defaultBattagliaPos();
-      applyBattagliaFrame();
-      if (q.has("battaglia")) setBattagliaVisible(true); // headless-test the Battaglia widget
-    })();
-    // Move + resize (arrange mode). The move banner doubles as a drag shield over the iframe.
-    $("battagliaMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#battagliaMoveDone") || e.target.closest("#battagliaResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = bwidget.x, oy = bwidget.y;
-      dragPointer((ev) => { bwidget.x = ox + (ev.clientX - sx); bwidget.y = oy + (ev.clientY - sy); applyBattagliaFrame(); }, persistBattagliaWidget);
-    });
-    $("battagliaResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = bwidget.w != null ? bwidget.w : ($("battagliaFrame").offsetWidth || 360);
-      const oh = bwidget.h != null ? bwidget.h : ($("battagliaFrame").offsetHeight || 470);
-      dragPointer((ev) => {
-        bwidget.w = Math.max(300, Math.min(760, ow + (ev.clientX - sx)));
-        bwidget.h = Math.max(240, Math.min(900, oh + (ev.clientY - sy)));
-        applyBattagliaFrame();
-      }, persistBattagliaWidget);
-    });
-    $("battagliaMoveDone").addEventListener("click", () => window.overlayApi.endMove());
-  }
-
-
-  // -- Web Page widget (embedded iframe hosted on this canvas) --
-  let vwwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let vwFrameArmed = false;
-  function applyWebViewFrame() {
-    const w = $("vwWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (vwwidget.x != null) w.style.setProperty("--vwx", (vwwidget.x + ox) + "px");
-    if (vwwidget.y != null) w.style.setProperty("--vwy", (vwwidget.y + oy) + "px");
-    if (vwwidget.w != null) w.style.setProperty("--vww", vwwidget.w + "px");
-    if (vwwidget.h != null) w.style.setProperty("--vwh", vwwidget.h + "px");
-  }
-  function defaultWebViewPos() { vwwidget.x = 480; vwwidget.y = 120; }
-  function persistWebViewWidget() { window.overlayApi?.saveWidget?.("webView", { x: vwwidget.x, y: vwwidget.y, w: vwwidget.w, h: vwwidget.h }); }
-  function ensureWebViewFrame() {
-    if (vwFrameArmed) return;
-    const f = $("vwFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/webview.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    vwFrameArmed = true;
-  }
-  function setWebViewVisible(on) {
-    const w = $("vwWidget"); if (!w) return;
-    vwwidget.visible = !!on;
-    if (on) { ensureWebViewFrame(); w.style.display = ""; applyWebViewFrame(); }
-    else { w.style.display = "none"; w.classList.remove("moving"); }
-  }
-  function syncWebViewTheme() {
-    if (!vwFrameArmed) return;
-    const f = $("vwFrame"); if (!f) return;
-    try {
-      const doc = f.contentDocument;
-      const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
-      if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet - it applies ?theme= at load */ }
-  }
-  window.__webViewHost = {
-    ready: () => { applyWebViewFrame(); syncWebViewTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistWebViewWidget(),
-    // A page that refuses to be framed gets an "Open in browser" escape hatch instead.
-    openUrl: (u) => window.overlayApi?.openUrl?.(u),
-    editStart: () => { textFocusTarget = "webView"; window.overlayApi?.notepadEditing?.(true); },
-    editEnd: () => window.overlayApi?.notepadEditing?.(false),
-  };
-  window.overlayApi?.onWebViewVisible?.((s) => { if (s) setWebViewVisible(!!s.on); });
-
-  if (CANVAS) {
-    (async () => {
-      let sv = null;
-      try { sv = (await window.overlayApi?.getWidgets?.())?.["webView"] || null; } catch { /* none */ }
-      if (sv) vwwidget = { ...vwwidget, ...sv };
-      if (vwwidget.x == null || vwwidget.y == null) defaultWebViewPos();
-      applyWebViewFrame();
-      if (new URLSearchParams(location.search).has("webview")) setWebViewVisible(true); // headless test
-    })();
-    $("vwMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#vwMoveDone") || e.target.closest("#vwResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = vwwidget.x, oy = vwwidget.y;
-      dragPointer((ev) => { vwwidget.x = ox + (ev.clientX - sx); vwwidget.y = oy + (ev.clientY - sy); applyWebViewFrame(); }, persistWebViewWidget);
-    });
-    $("vwResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = vwwidget.w != null ? vwwidget.w : ($("vwFrame").offsetWidth || 420);
-      const oh = vwwidget.h != null ? vwwidget.h : ($("vwFrame").offsetHeight || 520);
-      dragPointer((ev) => {
-        vwwidget.w = Math.max(260, Math.min(6000, ow + (ev.clientX - sx)));
-        vwwidget.h = Math.max(200, Math.min(3000, oh + (ev.clientY - sy)));
-        applyWebViewFrame();
-      }, persistWebViewWidget);
-    });
-    $("vwMoveDone").addEventListener("click", () => window.overlayApi.endMove());
-  }
-
-  // -- Binding Chart widget (embedded iframe hosted on this canvas) --
-  let bcwidget = { x: null, y: null, w: null, h: null, visible: false };
-  let bcFrameArmed = false;
-  function applyBindingChartFrame() {
-    const w = $("bcWidget"); if (!w) return;
-    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0; // primary-relative + primary's canvas offset
-    if (bcwidget.x != null) w.style.setProperty("--bcx", (bcwidget.x + ox) + "px");
-    if (bcwidget.y != null) w.style.setProperty("--bcy", (bcwidget.y + oy) + "px");
-    if (bcwidget.w != null) w.style.setProperty("--bcw", bcwidget.w + "px");
-    if (bcwidget.h != null) w.style.setProperty("--bch", bcwidget.h + "px");
-  }
-  function defaultBindingChartPos() { bcwidget.x = 120; bcwidget.y = 120; }
-  function persistBindingChartWidget() { window.overlayApi?.saveWidget?.("bindingChart", { x: bcwidget.x, y: bcwidget.y, w: bcwidget.w, h: bcwidget.h }); }
-  function ensureBindingChartFrame() {
-    if (bcFrameArmed) return;
-    const f = $("bcFrame"); if (!f) return;
-    const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
-    const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
-    f.src = "/bindingwidget.html?embedded=1&theme=" + encodeURIComponent(theme) + lite;
-    bcFrameArmed = true;
-  }
-  function setBindingChartVisible(on) {
-    const w = $("bcWidget"); if (!w) return;
-    bcwidget.visible = !!on;
-    if (on) { ensureBindingChartFrame(); w.style.display = ""; applyBindingChartFrame();
-      try { $("bcFrame").contentWindow.__bindingReload?.(); } catch { /* not loaded yet */ } }
-    else { w.style.display = "none"; w.classList.remove("moving"); }
-  }
-  function syncBindingChartTheme() {
-    if (!bcFrameArmed) return;
-    const f = $("bcFrame"); if (!f) return;
-    try {
-      const doc = f.contentDocument;
-      const theme = document.documentElement.getAttribute("data-theme") || "mobiglas";
-      if (doc && doc.documentElement) doc.documentElement.setAttribute("data-theme", theme);
-    } catch { /* iframe not ready yet - it applies ?theme= at load */ }
-  }
-  window.__bindingChartHost = {
-    ready: () => { applyBindingChartFrame(); syncBindingChartTheme(); },
-    summonCog: () => summonGlobalCog(),
-    persist: () => persistBindingChartWidget(),
-    editStart: () => { textFocusTarget = "bindingChart"; window.overlayApi?.notepadEditing?.(true); },
-    editEnd: () => window.overlayApi?.notepadEditing?.(false),
-  };
-  window.overlayApi?.onBindingChartVisible?.((s) => { if (s) setBindingChartVisible(!!s.on); });
-  // Re-read the chart PNG whenever the shell summons the widget (a re-exported chart shows up
-  // without a restart).
-  window.overlayApi?.onBindingChartReload?.(() => { try { $("bcFrame")?.contentWindow?.__bindingReload?.(); } catch { /* not loaded */ } });
-
-  if (CANVAS) {
-    (async () => {
-      let sv = null;
-      try { sv = (await window.overlayApi?.getWidgets?.())?.["bindingChart"] || null; } catch { /* none */ }
-      if (sv) bcwidget = { ...bcwidget, ...sv };
-      if (bcwidget.x == null || bcwidget.y == null) defaultBindingChartPos();
-      applyBindingChartFrame();
-      if (new URLSearchParams(location.search).has("bindingchart")) setBindingChartVisible(true); // headless test
-    })();
-    $("bcMove").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#bcMoveDone") || e.target.closest("#bcResize")) return;
-      e.preventDefault();
-      const sx = e.clientX, sy = e.clientY, ox = bcwidget.x, oy = bcwidget.y;
-      dragPointer((ev) => { bcwidget.x = ox + (ev.clientX - sx); bcwidget.y = oy + (ev.clientY - sy); applyBindingChartFrame(); }, persistBindingChartWidget);
-    });
-    $("bcResize").addEventListener("pointerdown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sx = e.clientX, sy = e.clientY;
-      const ow = bcwidget.w != null ? bcwidget.w : ($("bcFrame").offsetWidth || 620);
-      const oh = bcwidget.h != null ? bcwidget.h : ($("bcFrame").offsetHeight || 340);
-      dragPointer((ev) => {
-        bcwidget.w = Math.max(260, Math.min(6000, ow + (ev.clientX - sx)));
-        bcwidget.h = Math.max(160, Math.min(3000, oh + (ev.clientY - sy)));
-        applyBindingChartFrame();
-      }, persistBindingChartWidget);
-    });
-    $("bcMoveDone").addEventListener("click", () => window.overlayApi.endMove());
   }
 
   // Arrange mode holds a sample card up so an idle (invisible) SC Feed can still be positioned.
   function scFeedPreview(on) {
-    try { $("scfeedFrame")?.contentWindow?.__scFeedPreview?.(on); } catch { /* iframe not ready */ }
+    try { frameWin(WBY.scFeed)?.__scFeedPreview?.(on); } catch { /* iframe not ready */ }
   }
 
   if (CANVAS) {
@@ -2723,20 +2150,14 @@
       if (saved) widget = { ...widget, ...saved };
       if (widget.x == null || widget.y == null) defaultWidgetPos();
       applyWidget();
-      applyMiningFrame(); // re-apply with the now-loaded canvas offset (mining inits in a separate async block)
-      applyTwitchFrame(); // …same for Twitch Chat (also inits in its own async block)
-      applyScFeedFrame(); // …and SC Feed
-      applyPartyFrame();  // ...and Party
-      applyBattagliaFrame(); // ...and Battaglia
-      applyWebViewFrame();
-      applyBindingChartFrame();
+      applyAllFrames(); // re-apply every widget with the now-loaded canvas offset (they init in their own async block)
       if (widget.visible === false) { bpHidden = true; document.body.classList.add("bp-hidden"); } // restore hidden state
       if (q.has("arrange")) { // headless-test the arrange chrome (incl. any widget also shown via its own flag)
         $("panel").classList.add("moving"); document.body.classList.add("arranging");
-        for (const id of ["miningWidget", "notepadWidget", "twitchWidget", "scfeedWidget", "partyWidget", "battagliaWidget", "vwWidget", "bcWidget"]) {
-          const el = $(id); if (el && el.style.display !== "none") el.classList.add("moving");
+        for (const w of WIDGETS) {
+          const el = wEl(w); if (el && el.style.display !== "none") el.classList.add("moving");
         }
-        if ($("scfeedWidget")?.classList.contains("moving")) scFeedPreview(true);
+        if (wEl(WBY.scFeed)?.classList.contains("moving")) scFeedPreview(true);
       }
       if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
       if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><ul><li>Newest note one</li><li>Newest note two</li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li>Older note</li></ul></div>'; $("whatsnew").classList.add("show"); } // headless-test the patch-notes modal
@@ -2839,29 +2260,13 @@
       if (on) summonGlobalCog(); // arranging is an interaction too
       panel.classList.toggle("moving", on);
       document.body.classList.toggle("arranging", on);
-      // The mining widget joins arrange mode too (only when it's actually shown).
-      const mw = $("miningWidget");
-      if (mw) mw.classList.toggle("moving", on && mw.style.display !== "none");
-      // The notepad widget joins arrange mode too (only when it's actually shown).
-      const nw = $("notepadWidget");
-      if (nw) nw.classList.toggle("moving", on && nw.style.display !== "none");
-      // …and the Twitch Chat widget.
-      const tw = $("twitchWidget");
-      if (tw) tw.classList.toggle("moving", on && tw.style.display !== "none");
-      // SC Feed is invisible unless it has news, so arrange mode holds a sample card up to drag.
-      for (const id of ["vwWidget", "bcWidget"]) {
-        const el = $(id);
-        if (el) el.classList.toggle("moving", on && el.style.display !== "none");
-      }
-      const bw = $("battagliaWidget");
-      if (bw) bw.classList.toggle("moving", on && bw.style.display !== "none");
-      const pw = $("partyWidget");
-      if (pw) pw.classList.toggle("moving", on && pw.style.display !== "none");
-      const sf = $("scfeedWidget");
-      if (sf) {
-        const shown = on && sf.style.display !== "none";
-        sf.classList.toggle("moving", shown);
-        scFeedPreview(shown);
+      // Every shown widget joins arrange mode. SC Feed is invisible unless it has news, so it
+      // also gets a sample card held up — otherwise there'd be nothing to aim its drop zone at.
+      for (const w of WIDGETS) {
+        const el = wEl(w); if (!el) continue;
+        const shown = on && el.style.display !== "none";
+        el.classList.toggle("moving", shown);
+        if (w.notifier) scFeedPreview(shown);
       }
     });
     $("grip").addEventListener("click", () => window.overlayApi.beginMove?.());
@@ -2878,9 +2283,12 @@
     // cursor against them — REPLACES forward:true mouse-forwarding (which stuttered the whole
     // cursor when elevated). Inactive elements are display:none → 0-size → filtered out.
     if (window.overlayApi.reportRegions) {
-      // #miningWidget: its iframe is sized snugly to the mining panel by the embedded page, so its
-      // rect ≈ the visible widget. display:none (hidden) → 0-size → filtered out below.
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, #miningWidget, #notepadWidget, #twitchWidget, #partyWidget, #battagliaWidget, #vwWidget, #bcWidget, #scfeedWidget.live, #scfeedWidget.moving";
+      // `.widget` covers every registry widget at once (a hidden one is display:none → 0-size →
+      // filtered out below). Mining's iframe is sized snugly to its panel by the embedded page,
+      // so its rect ≈ the visible widget. NOTIFIERS are deliberately excluded from the blanket
+      // rule and matched only while a card is up (.live) or being arranged — an idle SC Feed must
+      // never eat a click meant for the game.
+      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {
