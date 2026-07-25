@@ -302,7 +302,10 @@ function applyMouse() {
   // until you closed the menu. An open menu is already reported as an interactive REGION (see the
   // RSEL list in missions.html), so pollCursor's hit-test covers it; all `modalOpen` needs to do
   // is bypass hold-to-interact, so a modal stays clickable without holding the interact key.
-  const canHover = holdMode ? (holdInteract || notepadEditing || modalOpen) : true;
+  // Arrange mode is for MOVING and RESIZING widgets, so it must never require holding the
+  // interact key — you'd be holding a key with one hand to drag with the other. The hold only
+  // ever gates reaching INTO a widget's content (Sub, 2026-07-25).
+  const canHover = holdMode ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
   const interactive = dragging || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }

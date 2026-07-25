@@ -474,10 +474,10 @@
      never slides behind it. */
   .wh-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 3px;
     overflow: hidden; padding-left: 26px; }
-  .wh-id { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+  /* The widget's NAME lives in its own page header, so the bar doesn't repeat it. The only time
+     the bar names anything is when widgets are stacked — then the tabs do it. */
+  .wh-id { display: none; }
   .wh-tabs { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; }
-  /* A grouped widget shows its stack's TABS in place of its own name — the tabs already name it. */
-  .widget.grouped .wh-id { display: none; }
   .wh-right { flex: none; display: flex; align-items: center; gap: 4px; }
   .whead .dia { width: 6px; height: 6px; flex: none; background: var(--cyan-bright);
     transform: rotate(45deg); box-shadow: 0 0 8px var(--cyan); }
@@ -492,8 +492,10 @@
   /* The per-widget cog opens THAT widget's own settings, so it only exists when the embedded page
      actually exposes some (__widgetSettings). Global settings live on the global cog and the tray
      — this button must never quietly stand in for them. */
-  .wh-cog { display: none; }
-  .widget.has-settings .wh-cog, #panel .wh-cog { display: block; }
+  .wh-cog { display: block; }
+  /* ...but the pass-through to the page's own panel only exists when there IS one. */
+  .wcfg-more { display: none; }
+  .widget.has-settings .wcfg-more, #panel .wcfg-more { display: block; }
 
   /* Per-widget settings popover, opened from the bar's cog. Every widget gets TEXT SIZE — the
      widgets are responsive (drag the corner for more ROOM), so how big the text is has to be a
@@ -630,7 +632,7 @@
   #cog.open { background: rgba(var(--accent-rgb), 0.26); border-color: var(--cyan); }
   #panel.moving .whood { display: none; }
 
-  #cogMenu { display: none; position: absolute; bottom: 36px; right: 6px; z-index: 31; width: 232px;
+  #cogMenu { display: none; position: absolute; bottom: 6px; right: 6px; z-index: 31; width: 232px;
     -webkit-app-region: no-drag; background: var(--menu-bg); border: 1px solid var(--border); border-radius: 4px;
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); padding: 6px 0 8px; }
   #cogMenu.open { display: block; }
@@ -2481,9 +2483,11 @@
         });
       };
       el.querySelector(".wmove")?.addEventListener("pointerdown", startDrag);
-      // The bar only drags while arranging — otherwise it's a normal button bar.
+      // The bar is a drag handle WHENEVER it's out, not just while arranging (Sub, 2026-07-25) —
+      // if it looks grabbable it should be grabbable. Clicks on its buttons and tabs still win,
+      // since those sit above it and stop the event.
       el.querySelector(".whead")?.addEventListener("pointerdown", (e) => {
-        if (!el.classList.contains("moving")) return;
+        if (e.target.closest(".wh-btn, .gtab, .wcfg")) return;
         startDrag(e);
       });
       el.querySelector(".wresize")?.addEventListener("pointerdown", (e) => {

@@ -232,7 +232,7 @@
     </div>
     <div class="head edit-only">
       <button id="backBtn" class="hbtn ghost" type="button">‹ Notes</button>
-      <button id="typeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus + free up the interact key so you can type in-game">✎ Type</button>
+      <button id="typeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus + free up the interact key so you can type in-game">✎ Type mode</button>
       <span id="savedTag" class="saved">Saved ✓</span>
       <button id="delBtn" class="hbtn danger" type="button" title="Delete this note">🗑</button>
     </div>
@@ -378,7 +378,7 @@
   function setTyping(on) {
     typing = !!on;
     const b = $("typeBtn");
-    b.textContent = typing ? "✓ Done" : "✎ Type";
+    b.textContent = typing ? "✓ Done" : "✎ Type mode";
     b.classList.toggle("active", typing);
     if (typing) {
       if (host()) host().editStart(); // parent grabs focus + suspends interact, then calls __notepadFocus

@@ -85,7 +85,7 @@
         <div class="lbl">Web page</div>
         <input id="urlInput" type="text" placeholder="e.g. subliminal.gg/blueprints" spellcheck="false" autocomplete="off" />
         <div class="row">
-          <button id="typeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type</button>
+          <button id="typeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type mode</button>
           <button id="goBtn" class="hbtn" type="button">Open</button>
         </div>
         <div class="quick" id="quick"></div>
@@ -198,7 +198,7 @@
   function setTyping(on) {
     typing = !!on;
     const b = $("typeBtn");
-    b.textContent = typing ? "✓ Done" : "✎ Type";
+    b.textContent = typing ? "✓ Done" : "✎ Type mode";
     b.classList.toggle("active", typing);
     if (typing) { if (host()) host().editStart(); else $("urlInput").focus(); }
     else { if (host()) host().editEnd(); const a = document.activeElement; if (a && a.blur) a.blur(); }

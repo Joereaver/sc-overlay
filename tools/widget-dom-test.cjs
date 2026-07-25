@@ -205,9 +205,10 @@ const CHROME = `(async () => {
   const hood = el(w).querySelector(".whood");
   const bar = el(w).querySelector(".whead");
   ok("every widget has a title bar", [...document.querySelectorAll(".widget")].every(e => e.querySelector(".whood > .whead")));
-  ok("bar carries title + move/reset/settings/close",
-     bar.querySelector(".wh-title") && bar.querySelectorAll(".wh-right .wh-btn").length === 4,
-     bar.querySelector(".wh-title") && bar.querySelector(".wh-title").textContent);
+  ok("bar carries move/reset/settings/close", bar.querySelectorAll(".wh-right .wh-btn").length === 4,
+     bar.querySelectorAll(".wh-right .wh-btn").length);
+  // The name lives in the page's own header; the bar only names things when widgets are stacked.
+  ok("bar does NOT repeat the widget name", getComputedStyle(bar.querySelector(".wh-id")).display === "none");
 
   // The hood hangs ABOVE the widget, so the bar can never cover content.
   const hr = hood.getBoundingClientRect();
@@ -286,11 +287,16 @@ const CHROME = `(async () => {
   // quietly stand in for global settings (those live on the global cog and the tray).
   for (let i = 0; i < 40 && !el(mw).classList.contains("has-settings"); i++) await sleep(50); // iframe load
   ok("Mining exposes its own settings", typeof document.getElementById("wf-mining").contentWindow.__widgetSettings === "function");
-  ok("Mining's cog is shown", el(mw).classList.contains("has-settings") && getComputedStyle(mbar.querySelector(".wh-cog")).display !== "none");
+  ok("Mining is detected as having its own settings", el(mw).classList.contains("has-settings"));
   const np = WBY.notepad;
-  ok("a widget with no settings hides its cog",
-     !el(np).classList.contains("has-settings") && getComputedStyle(el(np).querySelector(".wh-cog")).display === "none",
-     getComputedStyle(el(np).querySelector(".wh-cog")).display);
+  // EVERY widget has a cog now - it carries text size, which they all have. Only the pass-through
+  // to a page's own settings panel depends on that page having one.
+  ok("every widget has a cog", WIDGETS.every(x => getComputedStyle(el(x).querySelector(".wh-cog")).display !== "none"));
+  ok("pass-through to page settings only where the page has them",
+     getComputedStyle(el(mw).querySelector(".wcfg-more")).display !== "none" &&
+     getComputedStyle(el(np).querySelector(".wcfg-more")).display === "none",
+     "mining=" + getComputedStyle(el(mw).querySelector(".wcfg-more")).display +
+     " notepad=" + getComputedStyle(el(np).querySelector(".wcfg-more")).display);
 
   // ── the Blueprint panel carries the same bar ───────────────────────────────
   const bp = document.getElementById("panel");

@@ -236,10 +236,12 @@
      used to size its own frame from its content, which made it the odd one out and broke every
      stack it joined (a shared box has no single "content size"). Text size is a separate control
      now — see the bar's settings cog. */
-  body.embedded #panel { margin: 0; width: 100%; height: 100%; transform: none;
-    display: flex; flex-direction: column; overflow: hidden; }
-  /* Whatever runs out of room scrolls instead of being clipped. */
-  body.embedded #panel > .body, body.embedded #panel > .rows, body.embedded #panel > .content { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  body.embedded #panel { margin: 0; width: 100%; height: 100%; transform: none; overflow: auto; }
+  /* 🔑 The settings menu must NOT live inside that scrolling box, or it gets clipped away and the
+     cog looks dead — which is exactly what happened. In embedded mode it's re-parented to <body>
+     and sized to the widget, so it can overlay the content and scroll on its own. */
+  body.embedded #cogMenu { position: absolute; top: 8px; right: 8px;
+    max-height: calc(100% - 16px); overflow: auto; }
   html.amd-lite body.embedded #panel { transform: none !important; }
 
   /* Move/reposition mode: whole panel becomes a drag surface with a banner (identical to
@@ -868,6 +870,8 @@
     // parent can summon the global cog, and (b) tell the parent how tall we need to be — the
     // panel, plus the cog menu when it's open — so it sizes the iframe snugly (no clipped menu,
     // no dead interactive halo below the widget).
+    // Lift the settings menu out of the panel's scroll container (see the CSS note above).
+    { const m = $("cogMenu"); if (m) document.body.appendChild(m); }
     $("panel").addEventListener("pointerdown", () => host()?.summonCog?.());
     // NO self-sizing here any more. This widget used to measure its own content and push a frame
     // size to the parent, which is precisely what made it incompatible with grouping: a stack

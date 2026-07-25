@@ -161,7 +161,7 @@
     <div class="head">
       <span class="dia"></span>
       <span class="h-title">Party Split</span>
-      <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type</button>
+      <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type mode</button>
     </div>
 
     <div class="pot">
@@ -559,7 +559,7 @@
   function setTyping(on) {
     typing = !!on;
     const b = $("typeBtn");
-    b.textContent = typing ? "✓ Done" : "✎ Type";
+    b.textContent = typing ? "✓ Done" : "✎ Type mode";
     if (typing) { if (host()) host().editStart(); else focusFirst(); }
     else { if (host()) host().editEnd(); const a = document.activeElement; if (a && a.blur) a.blur(); }
   }

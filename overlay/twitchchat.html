@@ -125,10 +125,10 @@
       <div class="lbl">Twitch channel</div>
       <input id="chanInput" type="text" placeholder="e.g. subliminalstv" maxlength="40" spellcheck="false" autocomplete="off" />
       <div class="row">
-        <button id="typeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type</button>
+        <button id="typeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type mode</button>
         <button id="saveBtn" class="hbtn" type="button">Read chat</button>
       </div>
-      <div class="hint">Read any live channel's chat, styled to match the overlay. Use <b>✎ Type</b> to enter the name without alt-tabbing out of the game.</div>
+      <div class="hint">Read any live channel's chat, styled to match the overlay. Use <b>✎ Type mode</b> to enter the name without alt-tabbing out of the game.</div>
     </div>
   </div>
 
@@ -467,7 +467,7 @@
   function setTyping(on) {
     typing = !!on;
     const b = $("typeBtn");
-    b.textContent = typing ? "✓ Done" : "✎ Type";
+    b.textContent = typing ? "✓ Done" : "✎ Type mode";
     b.classList.toggle("active", typing);
     if (typing) { if (host()) host().editStart(); else focusField(); }
     else { if (host()) host().editEnd(); const a = document.activeElement; if (a && a.blur) a.blur(); }
