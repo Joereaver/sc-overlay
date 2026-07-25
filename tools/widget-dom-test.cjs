@@ -11,6 +11,12 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
 
+// Piping this run into `head`/`grep -m` closes stdout early, and the next console.log then throws
+// EPIPE — which Electron surfaces as a "JavaScript error in the main process" DIALOG, on top of
+// whatever the user was doing. Swallow it: a closed pipe means nobody is reading, not a failure.
+process.stdout.on("error", (e) => { if (e && e.code !== "EPIPE") throw e; });
+process.stderr.on("error", (e) => { if (e && e.code !== "EPIPE") throw e; });
+
 const PORT = process.env.OVERLAY_PORT || 8778;
 const URL = `http://localhost:${PORT}/missions.html?canvas=1&party&mining&notepad`;
 
