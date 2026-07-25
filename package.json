@@ -1,7 +1,7 @@
 {
   "name": "sc-log-watcher",
   "version": "0.1.33",
-  "description": "SubliminalsTV SC Blueprint Tracker — game.log watcher + overlay.",
+  "description": "SubliminalsTV SC Blueprint Tracker \u00e2\u20ac\u201d game.log watcher + overlay.",
   "type": "module",
   "main": "electron/main.cjs",
   "author": "SubliminalsTV",
@@ -14,6 +14,7 @@
     "missions-dump": "tsx src/missions-dump.ts",
     "missions-replay": "tsx src/missions-replay.ts",
     "screen-read-dump": "tsx src/screen-read-dump.ts",
+    "test:widgets": "electron tools/widget-dom-test.cjs",
     "standalone": "tsx src/standalone.ts",
     "overlay-app": "electron electron/main.cjs",
     "package": "node tools/package.mjs",

@@ -446,6 +446,30 @@
   .wh-btn:hover { background: rgba(var(--accent-rgb), 0.26); border-color: var(--cyan); }
   .wh-btn.wh-close:hover { background: rgba(255, 90, 90, 0.28); border-color: #ff8080; color: #ffd7d7; }
 
+  /* ── Widget groups: tab strip ────────────────────────────────────────────────
+     Drag a widget onto another's header to stack them as tabs in one frame (screen real estate —
+     Party split and the Mining Assistant go hand in hand). The strip sits at the BOTTOM of the
+     group box, deliberately: the Blueprint widget's manufacturer folder tab owns its top edge, so
+     a top strip would collide with it, and a bottom strip never hangs over empty canvas. */
+  .gtabs { position: absolute; left: var(--wx); top: var(--wy); width: var(--ww); z-index: 22;
+    display: flex; gap: 3px; padding: 3px; box-sizing: border-box; overflow: hidden;
+    background: linear-gradient(180deg, rgba(8, 17, 26, 0.72), rgba(8, 17, 26, 0.95));
+    border: 1px solid var(--border); border-top: 0; border-radius: 0 0 10px 10px; }
+  .gtab { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--cyan-dim); background: transparent;
+    border: 1px solid transparent; border-radius: 5px; padding: 4px 5px; cursor: pointer; }
+  .gtab:hover { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); }
+  .gtab.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.22); border-color: var(--cyan); }
+  .gtab.gdetach { flex: none; letter-spacing: 0; font-size: 11px; padding: 4px 7px; }
+
+  /* Drop target: the top strip of the widget you're dragging onto lights up, since the hover
+     header is suppressed while arranging and there'd otherwise be nothing to aim at. */
+  .widget.droptarget::after { content: "GROUP HERE"; position: absolute; left: 0; right: 0; top: 0;
+    height: 34px; z-index: 55; display: flex; align-items: center; justify-content: center;
+    font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.18em;
+    color: #04141b; background: rgba(var(--accent-rgb), 0.85); border-radius: 10px 10px 0 0; }
+
   /* NOTIFIER widgets (SC Feed) are invisible until they have something to say. The iframe stays
      mounted — it's the thing doing the polling — so the box is always present; the shell only
      treats it as clickable while a card is up (`.live`) or while arranging. That's what keeps an
@@ -1106,6 +1130,8 @@
        one starts whatever that page does. They were eight hand-copied blocks differing only in
        ids and a label; a registry means adding a widget is one table entry, not thirteen hookups. -->
   <div id="widgets"></div>
+  <!-- Tab strips for grouped widgets, one per group, positioned under the group's box. -->
+  <div id="wgroups"></div>
 
   <!-- Patch notes: a center-screen modal shown once per version on launch (must be closed). -->
   <div id="whatsnew">
@@ -1927,8 +1953,14 @@
         getAngle: () => (w.s.angle != null ? w.s.angle : w.angle),
         setAngle: (deg) => { w.s.angle = Number(deg); applyFrame(w); },
         // The embedded page measures its own content and sizes the frame snugly. Inline
-        // width/height wins over the CSS vars, which is what keeps it fitted.
-        setSize: (wpx, hpx) => { const f = frameEl(w); if (!f) return; if (wpx) f.style.width = wpx + "px"; if (hpx) f.style.height = hpx + "px"; },
+        // width/height wins over the CSS vars, which is what keeps it fitted. Ignored while
+        // GROUPED — there the stack's shared box wins, or this would fight it every tick.
+        setSize: (wpx, hpx) => {
+          if (groupOf(w)) return;
+          const f = frameEl(w); if (!f) return;
+          if (wpx) f.style.width = wpx + "px";
+          if (hpx) f.style.height = hpx + "px";
+        },
       }),
     },
     {
@@ -2026,20 +2058,157 @@
   // Position/size a widget. x/y are PRIMARY-relative; the primary's offset within the (possibly
   // multi-monitor) canvas is added here, so an existing layout stays put and a leftward drag can
   // carry onto another monitor.
+  // ── Widget groups ───────────────────────────────────────────────────────────────────────
+  // Drag a widget onto another's header and they stack as TABS in one frame.
+  //
+  // 🔑 A group NEVER reparents an iframe. Moving an <iframe> in the DOM reloads it, which would
+  // wipe Twitch chat scrollback, unsaved notes, and every live SSE/poll the embedded page holds.
+  // So a group is only: a shared box + exactly one member displayed. Same result, no reloads.
+  //
+  // Shape: `{ id, x, y, w, h, members: [key], active: key }`, persisted in widgets.json under the
+  // reserved "__groups" key (no widget uses it, and the loader reads widgets by their own key).
+  let GROUPS = [];
+  const groupOf = (w) => GROUPS.find((g) => g.members.includes(w.key)) || null;
+  const boxW = (w) => (w.s.w != null ? w.s.w : w.size.w);
+  const boxH = (w) => (w.s.h != null ? w.s.h : w.size.h);
+  function saveGroups() { window.overlayApi?.saveWidget?.("__groups", { list: GROUPS }); }
+
   function applyFrame(w) {
     const el = wEl(w); if (!el) return;
     const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0;
-    if (w.s.x != null) el.style.setProperty("--wx", (w.s.x + ox) + "px");
-    if (w.s.y != null) el.style.setProperty("--wy", (w.s.y + oy) + "px");
-    if (w.shape === "scaled") {
+    const g = groupOf(w);
+    const x = g ? g.x : w.s.x, y = g ? g.y : w.s.y;
+    if (x != null) el.style.setProperty("--wx", (x + ox) + "px");
+    if (y != null) el.style.setProperty("--wy", (y + oy) + "px");
+    // A scaled widget (Mining) drops to box shape while grouped, so every tab in a stack is the
+    // same size — its own setSize is ignored for the same reason (see the registry's host).
+    if (w.shape === "scaled" && !g) {
       el.style.setProperty("--wscale", wScale(w));
       el.style.setProperty("--wangle", (w.s.angle != null ? w.s.angle : w.angle) + "deg");
     } else {
-      el.style.setProperty("--ww", (w.s.w != null ? w.s.w : w.size.w) + "px");
-      el.style.setProperty("--wh", (w.s.h != null ? w.s.h : w.size.h) + "px");
+      el.style.setProperty("--ww", (g ? g.w : boxW(w)) + "px");
+      el.style.setProperty("--wh", (g ? g.h : boxH(w)) + "px");
+      if (g) { const f = frameEl(w); if (f) { f.style.width = ""; f.style.height = ""; } }
     }
+    el.classList.toggle("grouped", !!g);
+    el.classList.toggle("scaled", w.shape === "scaled" && !g);
   }
-  function applyAllFrames() { for (const w of WIDGETS) applyFrame(w); }
+  function applyAllFrames() { for (const w of WIDGETS) applyFrame(w); renderGroupTabs(); }
+  function applyGroup(g) { for (const k of g.members) { const w = WBY[k]; if (w) applyFrame(w); } renderGroupTabs(); }
+
+  // Only the active member of a group is displayed; the rest stay mounted but hidden.
+  function refreshGroupDisplay(g) {
+    for (const k of g.members) {
+      const w = WBY[k], el = wEl(w); if (!w || !el) continue;
+      el.style.display = (w.s.visible && g.active === k) ? "" : "none";
+    }
+    renderGroupTabs();
+  }
+
+  function renderGroupTabs() {
+    const host = $("wgroups"); if (!host) return;
+    const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0;
+    host.innerHTML = GROUPS.map((g) => {
+      // A group whose members are all closed shows no strip.
+      if (!g.members.some((k) => WBY[k]?.s.visible)) return "";
+      const tabs = g.members.map((k) => {
+        const w = WBY[k]; if (!w) return "";
+        return '<button type="button" class="gtab' + (g.active === k ? " on" : "") + '"'
+          + ' data-g="' + g.id + '" data-k="' + k + '">' + escapeHtml(w.title) + '</button>';
+      }).join("");
+      return '<div class="gtabs" style="--wx:' + (g.x + ox) + 'px;--wy:' + (g.y + oy + g.h) + 'px;--ww:' + g.w + 'px">'
+        + tabs
+        + '<button type="button" class="gtab gdetach" data-g="' + g.id + '" title="Pop the current tab out of this group">⧉</button>'
+        + '</div>';
+    }).join("");
+  }
+
+  // Merge `a` into whatever group `b` belongs to, creating one if `b` is still standalone.
+  function groupWidgets(a, b) {
+    if (!a || !b || a === b) return;
+    let g = groupOf(b);
+    if (!g) {
+      g = { id: "g" + Date.now().toString(36), x: b.s.x, y: b.s.y, w: boxW(b), h: boxH(b),
+            members: [b.key], active: b.key };
+      GROUPS.push(g);
+    }
+    const prev = groupOf(a);
+    if (prev && prev !== g) detachFromGroup(a, { keepPlace: true });
+    if (!g.members.includes(a.key)) g.members.push(a.key);
+    g.active = a.key; // the tab you just dropped is the one you want to be looking at
+    applyGroup(g);
+    refreshGroupDisplay(g);
+    saveGroups();
+  }
+
+  // Pop one widget out of its group. A group of one isn't a group, so it dissolves.
+  function detachFromGroup(w, opts) {
+    const g = groupOf(w); if (!g) return;
+    g.members = g.members.filter((k) => k !== w.key);
+    // Keep the group's size, but offset the position so the popped widget is visibly separate
+    // instead of landing exactly on top of the stack it just left.
+    const off = opts && opts.keepPlace ? 0 : 24;
+    w.s.x = g.x + off; w.s.y = g.y + off; w.s.w = g.w; w.s.h = g.h;
+    if (g.active === w.key) g.active = g.members[0] || null;
+    if (g.members.length < 2) {
+      // Drop the group BEFORE re-applying the survivor: applyFrame() reads groupOf(), so doing it
+      // the other way round leaves the last member still believing it's stacked.
+      const survivors = g.members.slice();
+      GROUPS = GROUPS.filter((x) => x !== g);
+      for (const k of survivors) {
+        const m = WBY[k]; if (!m) continue;
+        m.s.x = g.x; m.s.y = g.y; m.s.w = g.w; m.s.h = g.h;
+        persistW(m); applyFrame(m);
+        const el = wEl(m); if (el) el.style.display = m.s.visible ? "" : "none";
+      }
+    } else {
+      refreshGroupDisplay(g);
+    }
+    persistW(w); applyFrame(w);
+    const el = wEl(w); if (el) el.style.display = w.s.visible ? "" : "none";
+    renderGroupTabs();
+    saveGroups();
+  }
+
+  // Tab clicks (delegated — the strips are re-rendered constantly).
+  $("wgroups")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".gtab"); if (!btn) return;
+    e.stopPropagation();
+    const g = GROUPS.find((x) => x.id === btn.dataset.g); if (!g) return;
+    if (btn.classList.contains("gdetach")) {
+      const active = WBY[g.active]; if (active) detachFromGroup(active);
+      return;
+    }
+    const w = WBY[btn.dataset.k]; if (!w) return;
+    g.active = w.key;
+    if (!w.s.visible && window.overlayApi) { // clicking a closed tab reopens it, via the shell
+      const setter = "set" + w.key.charAt(0).toUpperCase() + w.key.slice(1);
+      window.overlayApi[setter]?.(true);
+    }
+    refreshGroupDisplay(g);
+    saveGroups();
+  });
+
+  // Which widget's top strip is under the cursor — the drop target while dragging.
+  const DROP_STRIP = 34;
+  function dropTargetAt(cx, cy, dragging) {
+    for (const t of WIDGETS) {
+      if (t === dragging) continue;
+      const el = wEl(t); if (!el || el.style.display === "none") continue;
+      const gt = groupOf(t), gd = groupOf(dragging);
+      if (gt && gd && gt === gd) continue; // already stacked together
+      const r = el.getBoundingClientRect();
+      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.top + DROP_STRIP) return t;
+    }
+    return null;
+  }
+  let dropHighlighted = null;
+  function highlightDrop(t) {
+    if (dropHighlighted === t) return;
+    if (dropHighlighted) wEl(dropHighlighted)?.classList.remove("droptarget");
+    dropHighlighted = t;
+    if (t) wEl(t)?.classList.add("droptarget");
+  }
 
   function persistW(w) {
     const layout = w.shape === "scaled"
@@ -2053,6 +2222,7 @@
   // dragged off-screen or resized badly. Nulling the size fields makes applyFrame fall back to
   // the registry defaults, and persistW writes the nulls through so the reset survives a restart.
   function resetWidget(w) {
+    if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
     w.s.x = w.def.x; w.s.y = w.def.y;
     w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null;
     const f = frameEl(w);
@@ -2090,16 +2260,22 @@
   function setWidgetVisible(w, on) {
     const el = wEl(w); if (!el) return;
     w.s.visible = !!on;
+    const g = groupOf(w);
     if (on) {
       ensureFrame(w);
+      if (g) { g.active = w.key; saveGroups(); } // turning one on brings its tab forward
       el.style.display = "";
       applyFrame(w);
       w.onShow?.(w);
+      if (g) refreshGroupDisplay(g);
     } else {
       w.onHide?.(w);
       el.style.display = "none";
       el.classList.remove("moving");
+      // Closing a tab leaves the stack, the way closing a browser tab does.
+      if (g) detachFromGroup(w);
     }
+    renderGroupTabs();
   }
 
   // Keep an embedded page's theme in sync when the overlay retints (same-origin; no SSE needed).
@@ -2166,6 +2342,13 @@
       let all = null;
       try { all = await window.overlayApi?.getWidgets?.(); } catch { /* none saved yet */ }
       const q = new URLSearchParams(location.search);
+      // Groups first, so applyFrame() below already knows which widgets share a box. Drop any
+      // member that no longer exists, and any group left with fewer than two.
+      const savedGroups = (all && all.__groups && Array.isArray(all.__groups.list)) ? all.__groups.list : [];
+      GROUPS = savedGroups
+        .map((g) => ({ ...g, members: (g.members || []).filter((k) => WBY[k]) }))
+        .filter((g) => g.members.length >= 2);
+      for (const g of GROUPS) if (!g.members.includes(g.active)) g.active = g.members[0];
       for (const w of WIDGETS) {
         const saved = (all && all[w.key]) || null;
         if (saved) w.s = { ...w.s, ...saved };
@@ -2173,6 +2356,7 @@
         applyFrame(w);
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
+      renderGroupTabs();
     })();
 
     for (const w of WIDGETS) {
@@ -2182,25 +2366,43 @@
       el.querySelector(".wmove")?.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".wdone") || e.target.closest(".wresize")) return;
         e.preventDefault();
-        const sx = e.clientX, sy = e.clientY, ox = w.s.x, oy = w.s.y;
-        dragPointer((ev) => { w.s.x = ox + (ev.clientX - sx); w.s.y = oy + (ev.clientY - sy); applyFrame(w); }, () => persistW(w));
+        // Dragging any member of a group moves the whole stack.
+        const g0 = groupOf(w);
+        const sx = e.clientX, sy = e.clientY;
+        const ox = g0 ? g0.x : w.s.x, oy = g0 ? g0.y : w.s.y;
+        let dropOn = null;
+        dragPointer((ev) => {
+          const nx = ox + (ev.clientX - sx), ny = oy + (ev.clientY - sy);
+          if (g0) { g0.x = nx; g0.y = ny; applyGroup(g0); }
+          else { w.s.x = nx; w.s.y = ny; applyFrame(w); renderGroupTabs(); }
+          dropOn = dropTargetAt(ev.clientX, ev.clientY, w);
+          highlightDrop(dropOn);
+        }, () => {
+          highlightDrop(null);
+          if (dropOn) groupWidgets(w, dropOn);      // dropped on another widget's header → stack
+          else if (g0) saveGroups();
+          else persistW(w);
+        });
       });
       el.querySelector(".wresize")?.addEventListener("pointerdown", (e) => {
         e.preventDefault(); e.stopPropagation();
         const sx = e.clientX, sy = e.clientY;
-        if (w.shape === "scaled") {
+        const g = groupOf(w);
+        if (w.shape === "scaled" && !g) {
           const os = wScale(w);
           dragPointer((ev) => { w.s.scale = Math.max(0.5, Math.min(2.5, os + (ev.clientX - sx) / 380)); applyFrame(w); }, () => persistW(w));
         } else {
           const f = frameEl(w);
-          const ow = w.s.w != null ? w.s.w : (f?.offsetWidth || w.size.w);
-          const oh = w.s.h != null ? w.s.h : (f?.offsetHeight || w.size.h);
+          const ow = g ? g.w : (w.s.w != null ? w.s.w : (f?.offsetWidth || w.size.w));
+          const oh = g ? g.h : (w.s.h != null ? w.s.h : (f?.offsetHeight || w.size.h));
           const z = w.size;
           dragPointer((ev) => {
-            w.s.w = Math.max(z.minW, Math.min(z.maxW, ow + (ev.clientX - sx)));
-            w.s.h = Math.max(z.minH, Math.min(z.maxH, oh + (ev.clientY - sy)));
-            applyFrame(w);
-          }, () => persistW(w));
+            const nw = Math.max(z.minW, Math.min(z.maxW, ow + (ev.clientX - sx)));
+            const nh = Math.max(z.minH, Math.min(z.maxH, oh + (ev.clientY - sy)));
+            // Resizing a grouped widget resizes the whole stack — the tabs share one box.
+            if (g) { g.w = nw; g.h = nh; applyGroup(g); }
+            else { w.s.w = nw; w.s.h = nh; applyFrame(w); }
+          }, () => { if (g) saveGroups(); else persistW(w); });
         }
       });
       el.querySelector(".wdone")?.addEventListener("click", () => window.overlayApi.endMove());
@@ -2389,7 +2591,7 @@
       // so its rect ≈ the visible widget. NOTIFIERS are deliberately excluded from the blanket
       // rule and matched only while a card is up (.live) or being arranged — an idle SC Feed must
       // never eat a click meant for the game.
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving";
+      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .gtabs";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {
