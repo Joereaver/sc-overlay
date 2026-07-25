@@ -13,7 +13,7 @@
 import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { parseMissionEvent, type MissionEvent } from "./missions-parser.js";
+import { parseMissionEvent, contractKeyOf, type MissionEvent } from "./missions-parser.js";
 import { categorize, type TabKey } from "./categories.js";
 import { parseLine } from "./parser.js";
 import { BlueprintDetailStore, type BlueprintDetail } from "./blueprint-detail.js";
@@ -74,6 +74,45 @@ export interface RepBar {
    *  empty "estimate unavailable" state instead of a misleading zero-progress bar. */
   noData: boolean;
 }
+/** One mission on a giver's grind track, as the Battaglia widget lists them. */
+export interface GrindMission {
+  key: string;
+  title: string;
+  /** Standing tier the giver requires before offering it (dataset `rank`), or null for intros. */
+  rank: number | null;
+  /** Rep this mission awards toward the giver's standing. */
+  rep: number;
+  /** How many times this mission has been COMPLETED (0 = never). The only honest signal that
+   *  its guaranteed items were actually received — the log never reports the items themselves. */
+  completed: number;
+  /** True when the count came from a TITLE match with no contract-key confirmation — another
+   *  mission shares this title, so "received" is a best guess rather than a fact. */
+  byTitleOnly: boolean;
+  /** Blueprints in its reward pool (a random one drops). */
+  poolCount: number;
+  /** Guaranteed physical items — ships and gear the log NEVER reports, so they're the reason
+   *  to chase a specific rank. */
+  items: { name: string; amount: number }[];
+}
+
+/** A mission giver's whole reputation track: the standing ladder, where you are on it, and
+ *  what each rank unlocks. Built for the Battaglia widget but keyed by giver, so it retires
+ *  by changing one constant rather than deleting a feature. */
+export interface GrindTrack {
+  faction: string;
+  scope: string;
+  /** Current standing (same witnessed-only estimate the mission drawer's rep bar uses). */
+  bar: RepBar | null;
+  ranks: { rank: number; name: string; minRep: number; missions: GrindMission[] }[];
+  /** Highest rank whose mission the giver has actually OFFERED you (from inferredRank — an
+   *  observed fact, unlike the rep estimate). -1 when nothing's been seen. */
+  reachedRank: number;
+  /** Missions with no rank gate (the intro chain) — always offered. */
+  intro: GrindMission[];
+  /** Every guaranteed item on the track, with the rank that gates it. Ships live here. */
+  rewards: { name: string; amount: number; rank: number | null; mission: string; received: boolean; unsure: boolean }[];
+}
+
 export interface DatasetMission {
   title: string;
   generatorClass: string;
@@ -309,6 +348,17 @@ interface Persisted {
   /** giver -> witnessed reputation total on their primary org scope (post-4.8 completions).
    *  A lower bound rebuilt by "Verify from logs"; older state files predate it. */
   repWitnessed?: Record<string, { scope: string; sum: number }>;
+  /** normalized mission TITLE -> how many times it's been completed. The log never reports a
+   *  mission's guaranteed physical rewards (ships, armour sets), but it DOES report the
+   *  completion — so a completed count is the only honest "you actually received this" signal.
+   *  Uncapped (unlike missionHistory, which is a rolling window) and rebuilt by Verify from logs. */
+  completedTitles?: Record<string, number>;
+  /** dataset mission KEY -> completion count. Titles COLLIDE (Battaglia's one-time intro missions
+   *  share their title with repeatable ranked ones — "Blackbox Retrieval" is both the intro that
+   *  grants the repeaters and a rank-2 job), so a title match can credit a reward you never got.
+   *  The contract key is unambiguous; it's only known when a marker fired, so titles remain the
+   *  fallback. */
+  completedKeys?: Record<string, number>;
 }
 
 /** Stored completed-mission record (newest first, capped). Deduped by missionId+at. */
@@ -534,6 +584,10 @@ export class MissionTracker extends EventEmitter {
    *  Live real-time completions add to it; verifyFromLogs rebuilds it authoritatively
    *  from every logbackup. See accrueRep / computeRepBar. */
   private repWitnessed = new Map<string, { scope: string; sum: number }>();
+  /** normalized mission title -> completion count (see Persisted.completedTitles). */
+  private completedTitles = new Map<string, number>();
+  /** dataset mission key -> completion count (see Persisted.completedKeys). */
+  private completedKeys = new Map<string, number>();
   /** normScreenTitle(mission title) -> the primary rep gain to credit when a mission with
    *  that title completes, or null when the title is ambiguous across givers/scopes. Built
    *  over ALL dataset missions (not just pooled ones), so combat/patrol/delivery missions
@@ -961,6 +1015,16 @@ export class MissionTracker extends EventEmitter {
       if (aUEC != null && dupe.aUEC == null) dupe.aUEC = aUEC;
       return;
     }
+    if (title) {
+      const k = normScreenTitle(title);
+      this.completedTitles.set(k, (this.completedTitles.get(k) ?? 0) + 1);
+    }
+    // Prefer the unambiguous contract key when this completion has one.
+    const ck = missionId ? this.missions.get(missionId)?.contractKey : undefined;
+    if (ck) {
+      const key = contractKeyOf(ck);
+      this.completedKeys.set(key, (this.completedKeys.get(key) ?? 0) + 1);
+    }
     this.missionHistory.push({ missionId: missionId ?? null, title: title ?? null, aUEC, at });
     this.missionHistory.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
     if (this.missionHistory.length > MISSION_HISTORY_MAX) this.missionHistory.length = MISSION_HISTORY_MAX;
@@ -1335,6 +1399,64 @@ export class MissionTracker extends EventEmitter {
     const pos = repLadderPosition(this.repScopes[primary.scope], this.repWitnessed.get(giver)?.sum ?? 0);
     if (!pos) return null;
     return { scope: primary.scope, faction: giver, ...pos };
+  }
+
+  /** Build a mission giver's full grind track: their standing ladder, your position on it, and
+   *  every mission/reward grouped by the rank that gates it. The dataset's per-mission `rank` is
+   *  the giver's standing tier, which lines up 1:1 with the rep scope's rank ladder — that's how
+   *  the rank-gated ships (Golem @3, Prospector @4, MOLE @5) are surfaced. Returns null when the
+   *  giver has no missions or no usable rep scope in the loaded dataset. */
+  giverTrack(giver: string): GrindTrack | null {
+    if (!this.dataset) return null;
+    const want = norm(giver);
+    const entries = Object.entries(this.dataset.missions).filter(([, m]) => m.giver && norm(m.giver) === want);
+    if (!entries.length) return null;
+
+    // The scope every mission on this track reports (they all share the giver's standing).
+    let scope = "";
+    for (const [, m] of entries) {
+      const pr = this.primaryRep(m);
+      if (pr) { scope = pr.scope; break; }
+    }
+    if (!scope) return null;
+
+    const toMission = ([key, m]: [string, DatasetMission]): GrindMission => ({
+      key,
+      title: m.title,
+      rank: typeof m.rank === "number" ? m.rank : null,
+      rep: this.primaryRep(m)?.amount ?? 0,
+      // Key match is authoritative. Fall back to the title ONLY when this mission's key has never
+      // been seen completed, and flag it so the UI can be honest about the ambiguity.
+      completed: this.completedKeys.get(key) ?? this.completedTitles.get(normScreenTitle(m.title)) ?? 0,
+      byTitleOnly: !this.completedKeys.has(key) && (this.completedTitles.get(normScreenTitle(m.title)) ?? 0) > 0,
+      poolCount: Object.values(m.pools ?? {}).reduce((s, p) => s + p.length, 0),
+      items: (m.items ?? []).map((i) => ({ name: i.name, amount: i.amount ?? 1 })),
+    });
+    const missions = entries.map(toMission);
+
+    const ladder = [...(this.repScopes[scope]?.ranks ?? [])].sort((a, b) => a.minRep - b.minRep);
+    const ranks = ladder.map((r, i) => ({
+      rank: i,
+      name: r.name,
+      minRep: r.minRep,
+      missions: missions.filter((m) => m.rank === i).sort((a, b) => b.rep - a.rep || a.title.localeCompare(b.title)),
+    }));
+
+    const rewards = missions
+      .flatMap((m) => m.items.map((it) => ({ ...it, rank: m.rank, mission: m.title, received: m.completed > 0, unsure: m.completed > 0 && m.byTitleOnly })))
+      .sort((a, b) => (a.rank ?? -1) - (b.rank ?? -1) || a.name.localeCompare(b.name));
+
+    const pos = repLadderPosition(this.repScopes[scope], this.repWitnessed.get(giver)?.sum ?? 0);
+    const canonical = entries[0][1].giver || giver; // dataset spelling wins; fall back to the query
+    return {
+      faction: canonical,
+      scope,
+      bar: pos ? { scope, faction: canonical, ...pos } : null,
+      ranks,
+      reachedRank: this.inferredRank.get(canonical) ?? this.inferredRank.get(giver) ?? -1,
+      intro: missions.filter((m) => m.rank == null).sort((a, b) => a.title.localeCompare(b.title)),
+      rewards,
+    };
   }
 
   /** Index pooled, titled missions by normalized title so a marker-less accept can
@@ -1731,6 +1853,8 @@ export class MissionTracker extends EventEmitter {
       this.guaranteedOwned = new Set(data.guaranteedOwned ?? []);
       this.inferredRank = new Map(Object.entries(data.inferredRank ?? {}));
       this.repWitnessed = new Map(Object.entries(data.repWitnessed ?? {}));
+      this.completedTitles = new Map(Object.entries(data.completedTitles ?? {}));
+      this.completedKeys = new Map(Object.entries(data.completedKeys ?? {}));
       this.missionHistory = (data.missionHistory ?? []).slice(0, MISSION_HISTORY_MAX);
     } catch {
       /* first run */
@@ -1744,6 +1868,8 @@ export class MissionTracker extends EventEmitter {
       guaranteedOwned: [...this.guaranteedOwned],
       inferredRank: Object.fromEntries(this.inferredRank),
       repWitnessed: Object.fromEntries(this.repWitnessed),
+      completedTitles: Object.fromEntries(this.completedTitles),
+      completedKeys: Object.fromEntries(this.completedKeys),
       observedAt: Object.fromEntries(this.observedAt),
       missionHistory: this.missionHistory,
     };

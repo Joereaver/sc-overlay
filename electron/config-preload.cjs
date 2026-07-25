@@ -5,6 +5,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("overlayConfig", {
   pickPng: () => ipcRenderer.invoke("pick-png"),
+  // Reveal one of the app's own data folders in Explorer (allow-listed in main.cjs).
+  openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
+  metrics: () => ipcRenderer.invoke("app:metrics"),
   // Native open-FILE dialog for the game.log path (passes the current value as the start dir).
   pickLog: (current) => ipcRenderer.invoke("pick-log", current),
   // Live-apply a captured hotkey (no restart). Returns {ok} / {ok:false,error}.

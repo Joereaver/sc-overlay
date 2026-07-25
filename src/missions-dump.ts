@@ -47,6 +47,10 @@ const fmt = (e: MissionEvent): string => {
       return `SESSION  (PU entered / server change)`;
     case "sessionEnd":
       return `SESSION  (left game — quit / disconnect)`;
+    case "partyMarker":
+      return `PARTY    marker ${e.markerId} ${e.present ? "in" : "out"} (entity ${e.entityId})`;
+    case "partyMemberName":
+      return `PARTY    marker ${e.markerId} = «${e.name}»`;
   }
 };
 

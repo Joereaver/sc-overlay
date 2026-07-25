@@ -42,6 +42,29 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // focus the field (the held interact key was released) so no stray character lands.
   notepadEditing: (on) => ipcRenderer.send("overlay:notepad-editing", !!on),
   onNotepadFocus: (cb) => ipcRenderer.on("overlay:notepad-focus", () => cb()),
+  // Twitch Chat widget: shell-owned visibility, same as the Notepad. Its channel field reuses the
+  // keyboard-grab above (the renderer routes the focus signal to whichever widget asked for it).
+  setTwitchChat: (on) => ipcRenderer.send("app:set-twitchchat", !!on),
+  onTwitchChatVisible: (cb) => ipcRenderer.on("overlay:twitchchat-visible", (_e, s) => cb(s)),
+  // SC Feed news notifier: shell-owned on/off (armed), same as the widgets above.
+  setScFeed: (on) => ipcRenderer.send("app:set-scfeed", !!on),
+  onScFeedVisible: (cb) => ipcRenderer.on("overlay:scfeed-visible", (_e, s) => cb(s)),
+  scFeedPickTone: () => ipcRenderer.invoke("scfeed:pick-tone"),
+  scFeedClearTone: () => ipcRenderer.invoke("scfeed:clear-tone"),
+  // Party split widget: shell-owned visibility; its name fields reuse the keyboard-grab above.
+  setParty: (on) => ipcRenderer.send("app:set-party", !!on),
+  onPartyVisible: (cb) => ipcRenderer.on("overlay:party-visible", (_e, s) => cb(s)),
+  // Battaglia grind tracker: shell-owned visibility, same as the widgets above.
+  setBattaglia: (on) => ipcRenderer.send("app:set-battaglia", !!on),
+  onBattagliaVisible: (cb) => ipcRenderer.on("overlay:battaglia-visible", (_e, s) => cb(s)),
+  // Reveal one of the app's own data folders in Explorer (allow-listed in main).
+  openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
+  // Web Page widget + the Binding Chart WIDGET (the full-screen binding overlay is separate).
+  setWebView: (on) => ipcRenderer.send("app:set-webview", !!on),
+  onWebViewVisible: (cb) => ipcRenderer.on("overlay:webview-visible", (_e, s) => cb(s)),
+  setBindingChart: (on) => ipcRenderer.send("app:set-bindingchart", !!on),
+  onBindingChartVisible: (cb) => ipcRenderer.on("overlay:bindingchart-visible", (_e, s) => cb(s)),
+  onBindingChartReload: (cb) => ipcRenderer.on("overlay:bindingchart-reload", () => cb()),
   widgetStates: () => ipcRenderer.invoke("app:widget-states"),
   onWidgetStates: (cb) => ipcRenderer.on("overlay:widget-states", (_e, s) => cb(s)),
   arrange: (on) => ipcRenderer.send(on ? "overlay:begin-move" : "overlay:end-move"),

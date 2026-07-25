@@ -13,6 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/widget-theme.css" />
 <style>
   /* Shares the Mission Control stream-overlay design language with the main HUD
      (missions.html): navy-teal translucent glass, cyan chrome, gold value accents,
@@ -204,9 +205,8 @@
     transform-origin: 60% center;
     overflow: hidden;
   }
-  /* CRT scanlines */
-  #panel::before { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
-    background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px); mix-blend-mode: screen; }
+  /* CRT scanlines (+ Esperia mesh, Origin stitching) come from the shared widget-theme.css
+     via .wpanel, so every widget carries the active theme's surface treatment. */
   /* visor sheen */
   #panel::after { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
     background: linear-gradient(180deg, var(--sheen), transparent 36%); }
@@ -400,7 +400,7 @@
 </style>
 </head>
 <body>
-<div id="panel">
+<div id="panel" class="wpanel">
   <img class="tape tl" alt="" src="tape-m-tl.webp">
   <img class="tape br" alt="" src="tape-m-br.webp">
   <img class="bolt tl" alt="" src="anvil-bolt-tl.webp">
@@ -484,6 +484,12 @@
     if (!voiceOn()) return;
     try { const u = new SpeechSynthesisUtterance(text); u.rate = 1.02; u.volume = getVol(); speechSynthesis.cancel(); speechSynthesis.speak(u); } catch {}
   }
+  // Set by the parent canvas whenever the widget is shown/hidden. Hidden => no audio, no speech.
+  let hiddenMode = false;
+  window.__miningSetHidden = (on) => {
+    hiddenMode = !!on;
+    if (hiddenMode) { try { speechSynthesis.cancel(); } catch { /* none */ } }
+  };
   let actx = null, master = null;
   // A Web-Audio context created outside a user gesture starts "suspended" (silent). Create
   // it lazily and resume it here + on first interaction so alert tones always sound.
@@ -747,10 +753,20 @@
   // "every" announce mode. Debris (no table match) flashes + says "Debris" so it's clear the
   // scan registered — without the target chime, so debris and a target hit stay distinct.
   function onNewScan(sc) {
-    maybeAutoShow();                 // any new scan means the player is mining/scanning
+    // 🔑 While the widget is HIDDEN (armed for auto-show) it must be silent. It stays subscribed
+    // to the event stream purely so auto-show can pop it — announcing from an invisible widget is
+    // what made "debris" speak when the Mining Assistant wasn't even open.
+    if (hiddenMode) { if (sc.matches.length) maybeAutoShow(); return; }
     const el = $("scanNow");
     const flash = () => { el.classList.remove("hit"); void el.offsetWidth; el.classList.add("hit"); };
-    if (!sc.matches.length) { flash(); speak("Debris"); return; }
+    // 🔑 A number that matches NOTHING in the rock table is "debris" — but it's just as likely to
+    // be an unrelated number the OCR picked up off the HUD, which is why the widget was popping
+    // itself up when the player wasn't scanning at all. So debris must NEVER trigger auto-show;
+    // only a signature that actually resolves to a known ore is good enough evidence that the
+    // player is really scanning. (Revisit once the orange scan-glyph pixel check lands — that
+    // will confirm a real scan and debris can pop again.)
+    if (!sc.matches.length) { flash(); speakClips(["n_debris"], "Debris"); return; }
+    maybeAutoShow();                 // a REAL ore signature => the player is genuinely scanning
     const isTarget = sc.matches.some((m) => targetSet.has(m.name));
     if (isTarget) { flash(); chime(); }
     const mode = localStorage.getItem("miningSpeakMode") || "target";
@@ -903,7 +919,12 @@
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.kind === "state") applyState(msg.view);
       else if (msg.kind === "appearance") applyMiningAppearance(msg);
-      else if (msg.kind === "refinery-done") { alarm(); speakRefineryDone(msg.job.material, msg.job.station); }
+      else if (msg.kind === "refinery-done") {
+        // A finished refinery job is worth popping the widget for, but a HIDDEN widget stays quiet
+        // until it's actually on screen.
+        if (hiddenMode) { maybeAutoShow(); }
+        else { alarm(); speakRefineryDone(msg.job.material, msg.job.station); }
+      }
       // scanner alerts (target-hit) are handled client-side in onNewScan so they respect
       // the announce-mode toggle; the server still emits target-hit but we drive off state.
     };

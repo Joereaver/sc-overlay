@@ -12,6 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/widget-theme.css" />
 <style>
   /* Shares the Mission Control stream-overlay design language with the main HUD (missions.html)
      and the Mining Assistant (mining.html): navy-teal translucent glass, cyan chrome, gold value
@@ -152,9 +153,8 @@
   }
   html.amd-lite #panel { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--panel-solid) !important; }
   /* Faint CRT scanlines + visor sheen, matching the HUD (decorative, non-interactive). */
-  #panel::before { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
-    background: repeating-linear-gradient(0deg, transparent 0 2px, var(--scan) 2px 3px); opacity: 0.5; }
-  html.amd-lite #panel::before { display: none; }
+  /* CRT scanlines (+ Esperia mesh, Origin stitching) come from the shared widget-theme.css
+     via .wpanel, so every widget carries the active theme's surface treatment. */
   body.embedded { overflow: visible; background: transparent; }
   body.embedded #panel { width: 100%; height: 100%; margin: 0; }
 
@@ -219,7 +219,8 @@
 </style>
 </head>
 <body>
-  <div id="panel">
+  <!-- `selectable`: the Notepad is the one widget where copying text out is the whole point. -->
+  <div id="panel" class="wpanel selectable">
     <div class="head list-only">
       <span class="dia"></span>
       <span class="h-title">Notepad</span>

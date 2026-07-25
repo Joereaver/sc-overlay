@@ -8,6 +8,7 @@ import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
 import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
+import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
 import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
@@ -94,6 +95,45 @@ interface Config {
   notepadOpen: boolean;
   /** Notepad text-size multiplier (0.8–2.0) so notes stay readable on 1080p → 4K panels. */
   notepadFontScale: number;
+  /** Twitch channel whose live chat the Twitch Chat widget shows (login name, no @ or URL).
+   *  Defaults to subliminalstv; empty = the widget shows its channel-picker instead. */
+  twitchChannel: string;
+  /** Remembers whether the Twitch Chat widget was left open, so it's restored on launch. */
+  twitchChatOpen: boolean;
+  /** Twitch Chat text-size multiplier (0.8-2.0) so chat stays readable on 1080p -> 4K panels. */
+  twitchChatFontScale: number;
+  /** Twitch application client id, used for the device-code login that enables SENDING chat.
+   *  A Twitch client id is public by design (it ships in every web client) — it is NOT a secret;
+   *  the user token it mints is, and that lives in twitchUserToken. Reading chat needs neither. */
+  twitchClientId: string;
+  /** OAuth user token (scope chat:edit) from the device-code flow. Empty = read-only chat. */
+  twitchUserToken: string;
+  /** The signed-in Twitch login that token belongs to — IRC needs it as the NICK when sending. */
+  twitchUserLogin: string;
+  /** Remembers whether the SC Feed widget was left armed, so it's restored on launch. */
+  scFeedOpen: boolean;
+  /** Where a SC Feed card's click goes: "site" opens sc-feed.subliminal.gg (default - the feed
+   *  is the product), "source" opens the story's own URL (Spectrum, YouTube, Reddit...). */
+  scFeedLinkTarget: "site" | "source";
+  /** Speak new headlines in HAL's voice ("New news from Pipeline"). Off by default. */
+  scFeedVoice: boolean;
+  /** Play the alert tone when a headline arrives. */
+  scFeedSound: boolean;
+  /** SC Feed alert volume, 0-1. */
+  scFeedVolume: number;
+  /** Path to a user-chosen WAV for the SC Feed alert (empty = the built-in tone). */
+  scFeedTone: string;
+  /** Remembers whether the Party widget was left open, so it's restored on launch. */
+  partyOpen: boolean;
+  /** Remembers whether the Battaglia grind widget was left open, so it's restored on launch. */
+  battagliaOpen: boolean;
+  /** Remembers whether the Web Page widget was left open, so it's restored on launch. */
+  webViewOpen: boolean;
+  /** URL shown by the Web Page widget (http/https only). Empty = it shows its address picker. */
+  webViewUrl: string;
+  /** Remembers whether the Binding Chart WIDGET was left open (distinct from the full-screen
+   *  binding overlay, which stays on its own hotkey). */
+  bindingChartOpen: boolean;
   /** Path to a user-chosen WAV to use as the alert tone (empty = built-in synth tone). */
   miningTone: string;
   /** GPU hardware acceleration for the Electron overlay. OFF by default — it composites
@@ -174,6 +214,23 @@ const DEFAULTS: Config = {
   miningOpen: false,
   notepadOpen: false,
   notepadFontScale: 1,
+  twitchChannel: "subliminalstv", // default channel — users can point it anywhere
+  twitchChatOpen: false,
+  twitchChatFontScale: 1,
+  twitchClientId: "44srrs673ypzr1e1y8izcfbbirkmso", // Sub's registered Twitch app
+  twitchUserToken: "",
+  twitchUserLogin: "",
+  scFeedOpen: false,
+  scFeedLinkTarget: "site",
+  scFeedVoice: false,
+  scFeedSound: true,
+  scFeedVolume: 0.6,
+  scFeedTone: "",
+  partyOpen: false,
+  battagliaOpen: false,
+  webViewOpen: false,
+  webViewUrl: "",
+  bindingChartOpen: false,
   miningTone: "",
   hwAccel: false,
   amdCompat: false,
@@ -520,6 +577,10 @@ const economy = new MiningEconomyStore(dataDir);
 }
 
 // ── Mining Assistant (signature scanner + refinery timer) ────────────────────
+// Party roster + reward split. The log can only COUNT party members (and name them late,
+// on despawn), so the roster is manual — see src/party.ts for the full finding.
+const party = new PartyTracker(join(userDir, "party.json"), join(userDir, "party-sessions"));
+
 const mining = new MiningTracker({ dataDir, stateDir: userDir });
 const miningClients = new Set<ServerResponse>();
 function miningSend(msg: unknown): void {
@@ -560,6 +621,47 @@ async function pollTwitchLive(): Promise<void> {
 }
 void pollTwitchLive();
 setInterval(() => void pollTwitchLive(), TWITCH_POLL_MS).unref?.();
+
+// ── SC Feed (OmniFeed) proxy ─────────────────────────────────────────────────
+// The SC Feed widget shows the same unified stream as sc-feed.subliminal.gg's OmniFeed. We
+// proxy it through the sidecar rather than fetching from the overlay page: it sidesteps CORS,
+// and the upstream payload is ~280KB of full channel objects — flattening to the newest few
+// headlines here keeps the widget's poll cheap. Cached so several open surfaces (overlay +
+// OBS browser-source) share one upstream request.
+interface FeedItem { id: string; title: string; source: string; url: string; at: string; tag?: string }
+const SCFEED_URL = "https://sc-feed.subliminal.gg/api/sc-feed";
+const SCFEED_TTL_MS = 60_000;
+const SCFEED_MAX = 40;
+let scFeedCache: { at: number; items: FeedItem[] } = { at: 0, items: [] };
+async function scFeedItems(): Promise<FeedItem[]> {
+  if (Date.now() - scFeedCache.at < SCFEED_TTL_MS) return scFeedCache.items;
+  try {
+    const r = await fetch(SCFEED_URL, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return scFeedCache.items; // keep the last good list on a bad response
+    const channels = (await r.json()) as Array<{
+      id?: string; label?: string; messages?: Array<{ id?: string; title?: string; url?: string; timestamp?: string; tag?: string }>;
+    }>;
+    const items: FeedItem[] = [];
+    for (const c of Array.isArray(channels) ? channels : []) {
+      for (const m of c.messages ?? []) {
+        if (!m?.id || !m.title || !m.timestamp) continue;
+        items.push({
+          id: `${c.id ?? "?"}:${m.id}`,
+          title: m.title,
+          source: c.label || c.id || "SC Feed",
+          url: m.url || "https://sc-feed.subliminal.gg",
+          at: m.timestamp,
+          ...(m.tag ? { tag: m.tag } : {}),
+        });
+      }
+    }
+    items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    scFeedCache = { at: Date.now(), items: items.slice(0, SCFEED_MAX) };
+  } catch {
+    /* network hiccup — serve the last good list (possibly empty) */
+  }
+  return scFeedCache.items;
+}
 
 // Subscriber-skin entitlement: poll subliminal.gg with the device token to learn whether the
 // linked account is an ACTIVE Twitch subscriber. That server-resolved result (not the local
@@ -615,6 +717,7 @@ function syncFull(): void {
 function seedTrackerFromLog(): void {
   try {
     const text = readFileSync(config.logPath, "utf8");
+    party.setSelf(ownHandleFromLog(text)); // you're always in your own party — pre-fill the roster
     // Also seed the CURRENT ship (last board still in effect) so theme="auto" matches on a cold
     // start while already seated — the watcher only tails NEW lines, so it wouldn't otherwise see it.
     let seedMfr: string | null = null, seedShip: string | null = null;
@@ -622,7 +725,7 @@ function seedTrackerFromLog(): void {
       if (!line) continue;
       tracker.detectPatch(line);
       const ev = parseMissionEvent(parseLine(line));
-      if (ev) tracker.apply(ev);
+      if (ev) { tracker.apply(ev); party.apply(ev); }
       const chan = shipChannelEvent(line);
       if (chan) {
         if (chan.action === "enter" && chan.manufacturer) { seedMfr = chan.manufacturer; seedShip = chan.ship; }
@@ -647,7 +750,7 @@ function startWatcher(): void {
     // Feed the mission/blueprint tracker on every line (independent of ship auto-switch).
     tracker.detectPatch(e.raw);
     const me = parseMissionEvent(e);
-    if (me) tracker.apply(me);
+    if (me) { tracker.apply(me); party.apply(me); }
 
     // Theme auto-switch: track the manufacturer of the ship we're in; re-broadcast so the
     // overlay retints live when theme="auto". Independent of the erkul loadout autoSwitch.
@@ -970,10 +1073,12 @@ const server = createServer(async (req, res) => {
     );
     // Never echo the raw token back to the page — only a truncated preview so the settings
     // page can show "the key is in" (scbp_1a2b…wxyz) without exposing the full secret.
-    const { syncToken, ...rest } = config;
+    // Never echo real secrets back to a page. The Twitch USER TOKEN is one (it can post as the
+    // user); the client id is not (it's public by design and the widget needs it to start login).
+    const { syncToken, twitchUserToken, ...rest } = config;
     const syncTokenPreview = syncToken ? `${syncToken.slice(0, 9)}…${syncToken.slice(-4)}` : "";
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ...rest, premium: entitled(), hasSyncToken: !!syncToken, syncTokenPreview, resolved: urls, lanHost, port: PORT }));
+    res.end(JSON.stringify({ ...rest, premium: entitled(), hasSyncToken: !!syncToken, syncTokenPreview, hasTwitchLogin: !!twitchUserToken, resolved: urls, lanHost, port: PORT }));
     return;
   }
 
@@ -1014,7 +1119,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // Serve the user's chosen binding-chart PNG (for binding.html). 404 when unset/missing.
+  // Serve the user's chosen binding-chart PNG (for the Binding Chart widget). 404 when unset/missing.
   if ((url === "/api/binding-image" || url?.startsWith("/api/binding-image?")) && req.method === "GET") {
     try {
       if (config.bindingPng && existsSync(config.bindingPng)) {
@@ -1054,6 +1159,37 @@ const server = createServer(async (req, res) => {
     if (typeof body.notepadOpen === "boolean") config.notepadOpen = body.notepadOpen;
     if (typeof body.notepadFontScale === "number" && isFinite(body.notepadFontScale))
       config.notepadFontScale = Math.max(0.8, Math.min(2, body.notepadFontScale));
+    // Twitch login names are alphanumeric + underscore; store lowercase (the embed is case-insensitive).
+    if (typeof body.twitchChannel === "string") {
+      const ch = body.twitchChannel.trim();
+      if (!ch || /^[A-Za-z0-9_]{2,40}$/.test(ch)) config.twitchChannel = ch.toLowerCase();
+    }
+    if (typeof body.twitchChatOpen === "boolean") config.twitchChatOpen = body.twitchChatOpen;
+    if (typeof body.twitchChatFontScale === "number" && isFinite(body.twitchChatFontScale))
+      config.twitchChatFontScale = Math.max(0.8, Math.min(2, body.twitchChatFontScale));
+    if (typeof body.twitchClientId === "string") config.twitchClientId = body.twitchClientId.trim();
+    if (typeof body.scFeedOpen === "boolean") config.scFeedOpen = body.scFeedOpen;
+    if (body.scFeedLinkTarget === "site" || body.scFeedLinkTarget === "source") config.scFeedLinkTarget = body.scFeedLinkTarget;
+    if (typeof body.scFeedVoice === "boolean") config.scFeedVoice = body.scFeedVoice;
+    if (typeof body.scFeedSound === "boolean") config.scFeedSound = body.scFeedSound;
+    if (typeof body.scFeedVolume === "number" && isFinite(body.scFeedVolume))
+      config.scFeedVolume = Math.max(0, Math.min(1, body.scFeedVolume));
+    if (typeof body.scFeedTone === "string") config.scFeedTone = body.scFeedTone;
+    if (typeof body.partyOpen === "boolean") config.partyOpen = body.partyOpen;
+    if (typeof body.battagliaOpen === "boolean") config.battagliaOpen = body.battagliaOpen;
+    if (typeof body.webViewOpen === "boolean") config.webViewOpen = body.webViewOpen;
+    // http/https only — this string ends up as an iframe src.
+    if (typeof body.webViewUrl === "string") {
+      const raw = body.webViewUrl.trim();
+      if (!raw) config.webViewUrl = "";
+      else {
+        try {
+          const u = new URL(raw);
+          if (u.protocol === "http:" || u.protocol === "https:") config.webViewUrl = u.toString();
+        } catch { /* keep the previous value on an unparseable URL */ }
+      }
+    }
+    if (typeof body.bindingChartOpen === "boolean") config.bindingChartOpen = body.bindingChartOpen;
     if (typeof body.miningTone === "string") config.miningTone = body.miningTone;
     // GPU accel is read by electron/main.cjs at startup; persist here, restart applies it.
     if (typeof body.hwAccel === "boolean") config.hwAccel = body.hwAccel;
@@ -1110,6 +1246,148 @@ const server = createServer(async (req, res) => {
     const ok = typeof body.url === "string" ? await setActive(body.url, "manual") : false;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok, active: config.activeUrl }));
+    return;
+  }
+
+  // A mission giver's grind track (the Battaglia widget): standing ladder, your position on it,
+  // and what each rank unlocks. ?giver= overrides the default so the widget can retire/retarget
+  // without a code change when 4.10 lands.
+  if (url === "/api/grind-track" && req.method === "GET") {
+    const giver = new URL(req.url ?? "", "http://x").searchParams.get("giver")?.trim() || "Recco Battaglia";
+    const track = tracker.giverTrack(giver);
+    res.writeHead(track ? 200 : 404, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(track ?? { error: "unknown_giver", giver }));
+    return;
+  }
+
+  // Sell-price summary for an ore/commodity (low / average / high across every terminal that
+  // buys it). Sourced from the BUNDLED commodity data - no UEX call, works offline.
+  if (url === "/api/commodity-price" && req.method === "GET") {
+    const want = (new URL(req.url ?? "", "http://x").searchParams.get("name") ?? "").trim().toLowerCase();
+    const all = Object.values(economy.commodities()) as Array<{ name?: string; kind?: string | null; bestSell?: number | null; prices?: Array<{ sell?: number | null; terminal?: string | null }> }>;
+    // Exact name first, then the refined/ore variants people actually type ("aluminum" should
+    // find "Aluminum", not "Aluminum (Ore)" or a MineableRock_ entity).
+    const norm = (n: string) => n.toLowerCase().replace(/\s*\(.*\)\s*/g, "").trim();
+    const named = all.filter((c) => c.name && c.kind !== "mineable");
+    const match =
+      named.find((c) => c.name!.toLowerCase() === want) ??
+      named.find((c) => norm(c.name!) === want) ??
+      named.find((c) => norm(c.name!).startsWith(want) && want.length >= 3) ??
+      null;
+    if (!match) {
+      res.writeHead(404, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ error: "unknown_commodity", name: want }));
+      return;
+    }
+    const sells = (match.prices ?? []).map((p) => Number(p.sell) || 0).filter((v) => v > 0);
+    const summary = sells.length
+      ? {
+          low: Math.min(...sells),
+          avg: Math.round(sells.reduce((a, b) => a + b, 0) / sells.length),
+          high: Math.max(...sells),
+          quotes: sells.length,
+        }
+      : { low: null, avg: null, high: null, quotes: 0 };
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ name: match.name, best: match.bestSell ?? null, ...summary }));
+    return;
+  }
+
+  // Will this URL actually load in an iframe? A page can refuse via X-Frame-Options or a CSP
+  // frame-ancestors directive, and the browser gives the embedder NO usable error — you just get a
+  // blank box. So check server-side first and say so plainly.
+  // 🔑 Follow redirects and read the FINAL response's headers: www.erkul.games 301s to
+  // erkul.games, and only the destination carries `X-Frame-Options: DENY` — reading the redirect's
+  // headers is exactly how this was misdiagnosed as "erkul allows framing".
+  if (url === "/api/can-embed" && req.method === "GET") {
+    const target = (new URL(req.url ?? "", "http://x").searchParams.get("url") ?? "").trim();
+    let embeddable = true, reason = "", finalUrl = target;
+    try {
+      const u = new URL(target);
+      if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("bad protocol");
+      const r = await fetch(u, {
+        redirect: "follow",
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36" },
+        signal: AbortSignal.timeout(8000),
+      });
+      finalUrl = r.url || target;
+      const xfo = (r.headers.get("x-frame-options") ?? "").toLowerCase();
+      const csp = (r.headers.get("content-security-policy") ?? "").toLowerCase();
+      const fa = csp.match(/frame-ancestors([^;]*)/)?.[1] ?? "";
+      if (xfo.includes("deny")) { embeddable = false; reason = "sends X-Frame-Options: DENY"; }
+      else if (xfo.includes("sameorigin")) { embeddable = false; reason = "sends X-Frame-Options: SAMEORIGIN"; }
+      else if (fa && (fa.includes("'none'") || (!fa.includes("*") && !fa.includes("http")))) {
+        embeddable = false; reason = "its security policy blocks embedding (frame-ancestors)";
+      }
+    } catch {
+      // Unreachable or timed out — let the iframe try anyway rather than blocking on a bad check.
+      reason = "";
+    }
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ embeddable, reason, finalUrl }));
+    return;
+  }
+
+  // Party roster: members + their % cut, plus the live detected party size and the handles
+  // harvested from the log for autocomplete. POST replaces the whole member list.
+  if (url === "/api/party" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(party.view()));
+    return;
+  }
+  // Saved splits. A crew often can't settle up until the ore is refined and sold, which may be
+  // days and several sessions later — so a split has to be storable and recoverable. Each save
+  // also writes a plain-text twin they can read without the app (see PartyTracker.renderText).
+  if (url === "/api/party/sessions" && req.method === "POST") {
+    const body = await readBody(req);
+    const saved = await party.saveSession(body);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, session: saved, folder: party.sessionFolder(), view: party.view() }));
+    return;
+  }
+  if (url === "/api/party/session" && req.method === "GET") {
+    const id = new URL(req.url ?? "", "http://x").searchParams.get("id") ?? "";
+    const s = party.getSession(id);
+    res.writeHead(s ? 200 : 404, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(s ?? { error: "not_found" }));
+    return;
+  }
+  if (url === "/api/party/session" && req.method === "DELETE") {
+    const id = new URL(req.url ?? "", "http://x").searchParams.get("id") ?? "";
+    await party.deleteSession(id);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, view: party.view() }));
+    return;
+  }
+
+  if (url === "/api/party" && req.method === "POST") {
+    const body = await readBody(req);
+    party.setMembers(body?.members);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(party.view()));
+    return;
+  }
+
+  // SC Feed alert tone: the user's WAV if they picked one, else 404 so the widget falls back
+  // to its built-in synth tone (mirrors /api/mining/tone).
+  if (url === "/api/scfeed/tone" && req.method === "GET") {
+    try {
+      if (config.scFeedTone && existsSync(config.scFeedTone)) {
+        res.writeHead(200, { "Content-Type": "audio/wav", "Cache-Control": "no-store" });
+        res.end(readFileSync(config.scFeedTone));
+        return;
+      }
+    } catch { /* fall through */ }
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "no_tone" }));
+    return;
+  }
+
+  // SC Feed (OmniFeed) headlines for the SC Feed widget — proxied + flattened, see scFeedItems().
+  if (url === "/api/scfeed" && req.method === "GET") {
+    const items = await scFeedItems();
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ items, fetchedAt: new Date(scFeedCache.at).toISOString() }));
     return;
   }
 

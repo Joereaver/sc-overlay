@@ -139,6 +139,23 @@
   .hkrow .hkbtn { margin-left: auto; }
   .hkrow .hint { flex-basis: 100%; width: 100%; margin-top: 0; }
   .hkrow .hint:empty { display: none; }
+
+  /* Performance readout (Settings -> Performance & fixes -> Measure now). */
+  #perfOut { margin-top: 10px; }
+  .perfhead, .perfsub { font-weight: 700; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: #9a8c78; margin: 0 0 5px; }
+  .perfsub { margin-top: 14px; }
+  .perftbl { border-collapse: collapse; width: 100%; max-width: 520px; font-size: 13px; }
+  .perftbl td { padding: 5px 10px 5px 0; border-bottom: 1px solid rgba(255, 178, 49, 0.12); }
+  .perftbl tr.tot td { font-weight: 700; color: var(--text); }
+  .perftbl td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; width: 82px; }
+  .perftbl td.dim { color: #9a8c78; width: 58px; font-weight: 500; }
+  .perftbl td.barcell { width: 130px; }
+  .perftbl .barfill { height: 8px; border-radius: 4px; background: #ffb231; min-width: 2px; }
+  .perfnote { margin-top: 9px; font-size: 12px; line-height: 1.5; color: #9a8c78; max-width: 520px; }
+  /* The Performance & fixes card ran together as one wall of text — give each row a divider. */
+  .card .hkrow + .hkrow { border-top: 1px solid rgba(255, 178, 49, 0.12); padding-top: 12px; margin-top: 12px; }
+  .card .setrow + .setrow { border-top: 1px solid rgba(255, 178, 49, 0.10); padding-top: 10px; margin-top: 10px; }
 </style>
 <script>
   // Auto-scale the whole settings UI to the display so 1080p AND 4K are readable out of the box.
@@ -200,10 +217,10 @@
   </div>
 
   <div class="card">
-    <div class="label">Overlay extras</div>
+    <div class="label">Widgets &amp; interaction</div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="miningAutoShow" /> Pop the Mining Assistant open when I'm scanning or refining</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Shows the Mining Assistant on its own when the scanner or Refinement Center is detected. If you close it, it stays away for a bit before it can pop again.</span></span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Shows the Mining Assistant on its own when the scanner or Refinement Center is detected. Only a signature matching a known ore counts — debris and stray numbers won't pop it open. If you close it, it stays away for a bit before it can pop again.</span></span>
     </div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="holdToInteract" onchange="onHoldModeToggle()" /> Only let me click the overlay while I hold a key</label>
@@ -211,14 +228,14 @@
     </div>
     <div class="setrow">
       <div class="opt" style="flex-direction:column; align-items:stretch; gap:8px;">
-        <span>Binding-chart overlay</span>
+        <span>Binding chart</span>
         <div class="add" style="margin-top:0">
-          <input type="text" id="bindingPng" placeholder="no PNG chosen — pick one to enable" readonly />
+          <input type="text" id="bindingPng" placeholder="no PNG chosen — pick one to fill the Binding Chart widget" readonly />
           <button onclick="chooseBinding()">Choose PNG…</button>
           <button class="danger" onclick="clearBinding()" title="Remove">✕</button>
         </div>
       </div>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Pick a PNG (transparency supported — e.g. a joystick binding chart) and toggle it full-screen over the game with the binding hotkey (set under Hotkeys). Click-through, won't interfere.</span></span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Pick a PNG (transparency supported — e.g. a joystick binding chart) and it fills the Binding Chart widget, which you place and size like any other. Toggle it with the binding hotkey (set under Hotkeys) or from the tray.</span></span>
     </div>
   </div>
 
@@ -283,6 +300,18 @@
 
   <div class="card">
     <div class="cardhead">
+      <div class="label">Your files</div>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Saved party splits live in your Windows app-data folder (the app can't write next to its own program files — Windows makes that read-only). Each save also writes <code>index.html</code>: double-click it and every split opens in your browser with a proper table.</span></span>
+    </div>
+    <div class="hkrow">
+      <span class="hklabel">Saved party splits</span>
+      <button type="button" id="openPartyFolder" class="hkbtn">↗ Open folder</button>
+      <div class="hint">Holds a <code>.json</code>, a plain-text <code>.txt</code>, and an <code>index.html</code> you can open in any browser.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead">
       <div class="label">Hotkeys</div>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Click a button then press your combo. Use Ctrl/Alt/Shift + a key, or a bare <code>F3</code> / <code>F13–F24</code> (those are free in Star Citizen; F4–F12 are taken). Applies immediately, no restart.</span></span>
     </div>
@@ -322,6 +351,12 @@
     <div class="label">Performance &amp; fixes</div>
     <label class="opt" id="overlayShowRow" style="display:none"><input type="checkbox" id="overlayShow" /> Show the in-game overlay</label>
     <div class="hint" id="overlayShowHint" style="display:none">Turn off if the overlay crashes your game — tracking + sync keep running without it.</div>
+    <div class="hkrow">
+      <span class="hklabel">Performance</span>
+      <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
+      <div class="hint">What this app is costing your PC right now. Widgets that pull live content (Twitch chat, a web page) cost far more than the text-only ones.</div>
+      <div id="perfOut"></div>
+    </div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="amdCompat" /> AMD compatibility mode</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">On an AMD GPU and the game crashes (Vulkan &ldquo;device lost&rdquo;) when the overlay is up? Turn this on — it forces the overlay off the GPU with a simpler no-blur panel. Requires restarting the app.</span></span>
@@ -834,6 +869,100 @@
 
   // Info-icon pin: click the (i) to keep its tooltip open; click elsewhere to close.
   document.addEventListener("click",(e)=>{const info=e.target.closest(".info");document.querySelectorAll(".info.pinned").forEach(el=>{if(el!==info)el.classList.remove("pinned");});if(info){info.classList.toggle("pinned");e.stopPropagation();}});
+</script>
+<script>
+  // "Open folder" for the saved party splits (see the Your files card).
+  document.getElementById("openPartyFolder")?.addEventListener("click", () => {
+    window.overlayConfig?.openDataFolder?.("party-sessions");
+  });
+  // Performance readout. Every percentage is a share of the WHOLE SYSTEM (total installed RAM,
+  // all CPU cores) — not a share of our own usage, which would tell you nothing about impact.
+  const PROC_NAMES = {
+    Browser: "App core",
+    Tab: "Overlay + widgets",
+    GPU: "Graphics (GPU process)",
+    Utility: "Background helper",
+    Zygote: "Background helper",
+    Sandbox: "Background helper",
+  };
+  document.getElementById("perfBtn")?.addEventListener("click", async () => {
+    const out = document.getElementById("perfOut");
+    out.textContent = "Measuring…";
+    const m = await window.overlayConfig?.metrics?.();
+    if (!m) { out.textContent = "Not available."; return; }
+    const merged = new Map();
+    for (const r of m.rows) {
+      const k = PROC_NAMES[r.type] || r.type;
+      const cur = merged.get(k) || { mb: 0, n: 0 };
+      cur.mb += r.mb; cur.n += 1;
+      merged.set(k, cur);
+    }
+    const rows = [...merged.entries()].sort((a, b) => b[1].mb - a[1].mb);
+    const sysPct = (mb) => m.systemMb ? (mb / m.systemMb) * 100 : 0;
+    const fmtMb = (mb) => mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : mb + " MB";
+    const fmtPct = (p) => (p < 0.1 ? "<0.1" : p.toFixed(1)) + "%";
+    out.innerHTML = "";
+
+    const head = document.createElement("div");
+    head.className = "perfhead";
+    head.textContent = "Total impact on your PC";
+    out.appendChild(head);
+
+    const tbl = document.createElement("table");
+    tbl.className = "perftbl";
+    const row = (label, value, pct, strong) => {
+      const tr = document.createElement("tr");
+      if (strong) tr.className = "tot";
+      const td = (t, cls) => { const c = document.createElement("td"); c.textContent = t; if (cls) c.className = cls; return c; };
+      tr.append(td(label), td(value, "num"), td(pct, "num dim"));
+      const bar = document.createElement("td");
+      bar.className = "barcell";
+      const fill = document.createElement("div");
+      fill.className = "barfill";
+      // Scale the bar so a genuinely small footprint still reads as a sliver, not an empty cell.
+      fill.style.width = Math.max(1, Math.min(100, parseFloat(pct) || 0)) + "%";
+      bar.appendChild(fill);
+      tr.appendChild(bar);
+      tbl.appendChild(tr);
+      return tr;
+    };
+    row("CPU (all " + m.cores + " cores)", m.cpuPct + "%", fmtPct(m.cpuPct), true);
+    row("Memory (of " + (m.systemMb / 1024).toFixed(0) + " GB installed)", fmtMb(m.totalMb), fmtPct(sysPct(m.totalMb)), true);
+    out.appendChild(tbl);
+
+    const sub = document.createElement("div");
+    sub.className = "perfsub";
+    sub.textContent = "Where that memory goes";
+    out.appendChild(sub);
+
+    const tbl2 = document.createElement("table");
+    tbl2.className = "perftbl";
+    for (const [name, v] of rows) {
+      const p = sysPct(v.mb);
+      const tr = document.createElement("tr");
+      const td = (t, cls) => { const c = document.createElement("td"); c.textContent = t; if (cls) c.className = cls; return c; };
+      tr.append(
+        td(name + (v.n > 1 ? " ×" + v.n : "")),
+        td(fmtMb(v.mb), "num"),
+        td(fmtPct(p), "num dim"),
+      );
+      const bar = document.createElement("td");
+      bar.className = "barcell";
+      const fill = document.createElement("div");
+      fill.className = "barfill";
+      fill.style.width = Math.max(1, Math.min(100, p)) + "%";
+      bar.appendChild(fill);
+      tr.appendChild(bar);
+      tbl2.appendChild(tr);
+    }
+    out.appendChild(tbl2);
+
+    const note = document.createElement("div");
+    note.className = "perfnote";
+    note.textContent = "Percentages are of your whole system. “Graphics” is the memory used by the "
+      + "graphics process — not how busy your GPU is.";
+    out.appendChild(note);
+  });
 </script>
 </body>
 </html>

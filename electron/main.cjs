@@ -110,6 +110,12 @@ let dragging = false; // an active drag/resize gesture on THIS window — force 
 // per-widget layout, drag, and cursor hit-testing (one window → no cross-window z-order bugs).
 let miningVisible = false; // is the in-canvas mining widget currently shown
 let notepadVisible = false; // is the in-canvas notepad widget currently shown
+let twitchChatVisible = false; // is the in-canvas Twitch Chat widget currently shown
+let scFeedVisible = false; // is the in-canvas SC Feed notifier armed (it only SHOWS when there's news)
+let partyVisible = false; // is the in-canvas Party split widget currently shown
+let battagliaVisible = false; // is the in-canvas Battaglia grind tracker currently shown
+let webViewVisible = false; // is the in-canvas Web Page widget currently shown
+let bindingChartVisible = false; // is the in-canvas Binding Chart WIDGET shown (not the full-screen overlay)
 let miningArm = false;      // load the mining iframe hidden at startup (auto-show waiting to pop)
 let miningAutoSuppress = 0; // auto-show is suppressed until this timestamp (set on a manual hide)
 let overlayEnabled = true; // master switch — false = HUD window destroyed, tracking still runs
@@ -181,7 +187,6 @@ function fullDisplayBounds() { return virtualDesktopBounds(); }
 // Re-fit every canvas window when the monitor layout changes (plugged/unplugged/rearranged).
 function refitCanvasWindows() {
   try { if (overlay && !overlay.isDestroyed()) overlay.setBounds(fullDisplayBounds()); } catch { /* ignore */ }
-  try { if (bindingWin && !bindingWin.isDestroyed()) bindingWin.setBounds(primaryBounds()); } catch { /* ignore */ }
 }
 
 // The overlay is a FULL-SCREEN transparent canvas that hosts free-floating widgets (the Blueprint
@@ -223,6 +228,12 @@ function createOverlay() {
     try { overlay.setBounds(bounds); } catch { /* re-assert the full span past any creation-time clamp */ }
     sendMiningVisible(miningVisible ? { on: true } : { on: false, arm: miningArm });
     sendNotepadVisible({ on: notepadVisible });
+    sendTwitchChatVisible({ on: twitchChatVisible });
+    sendScFeedVisible({ on: scFeedVisible });
+    sendPartyVisible({ on: partyVisible });
+    sendBattagliaVisible({ on: battagliaVisible });
+    sendWebViewVisible({ on: webViewVisible });
+    sendBindingChartVisible({ on: bindingChartVisible });
     pushWidgetStates();
   });
   applyMouse();
@@ -286,8 +297,13 @@ function applyMouse() {
   // While editing a note, the notepad widget stays clickable without holding the interact key
   // (so you can reach Done / the fields), but the rest of the canvas stays click-through so the
   // game still gets clicks outside it — hence canHover, not a whole-window force.
-  const canHover = holdMode ? (holdInteract || notepadEditing) : true;
-  const interactive = dragging || modalOpen || (hovering && canHover);
+  // 🔑 modalOpen must NOT force the WHOLE canvas interactive. It used to, which meant leaving any
+  // widget's cog menu open made the entire screen swallow clicks — the game stopped responding
+  // until you closed the menu. An open menu is already reported as an interactive REGION (see the
+  // RSEL list in missions.html), so pollCursor's hit-test covers it; all `modalOpen` needs to do
+  // is bypass hold-to-interact, so a modal stays clickable without holding the interact key.
+  const canHover = holdMode ? (holdInteract || notepadEditing || modalOpen) : true;
+  const interactive = dragging || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }
 
@@ -315,33 +331,10 @@ function pollCursor() {
 }
 function startMousePoll() { if (!mousePoll) mousePoll = setInterval(pollCursor, 30); }
 
-// ── binding-chart PNG overlay ─────────────────────────────────────────────────
-// A separate full-screen, transparent, always-click-through window that shows a
-// user-chosen PNG (e.g. a joystick binding chart), toggled by a global hotkey. It's
-// reference-only, so it never takes focus or eats clicks.
-let bindingWin = null;
-function createBinding() {
-  const bounds = primaryBounds(); // gameplay reference overlay — primary display only
-  bindingWin = new BrowserWindow({
-    x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
-    frame: false, transparent: true, resizable: false, movable: false, skipTaskbar: true,
-    alwaysOnTop: true, hasShadow: false, fullscreenable: false, focusable: false, show: false,
-    webPreferences: { contextIsolation: true },
-  });
-  bindingWin.setAlwaysOnTop(true, "screen-saver");
-  bindingWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  bindingWin.setIgnoreMouseEvents(true); // always click-through, reference-only (no forward hook needed)
-  bindingWin.loadURL(`http://localhost:${PORT}/binding.html`);
-  bindingWin.on("closed", () => { bindingWin = null; });
-}
-function toggleBinding() {
-  if (!bindingWin) createBinding();
-  if (bindingWin.isVisible()) { bindingWin.hide(); return; }
-  // Bump the page hash so it re-fetches the image (picks up a changed PNG), then show
-  // WITHOUT stealing focus from the game.
-  bindingWin.webContents.executeJavaScript(`location.hash = "s" + Date.now();`).catch(() => {});
-  bindingWin.showInactive();
-}
+// The binding chart is now a normal canvas WIDGET (overlay/bindingwidget.html) rather than a
+// separate full-screen click-through window — you place and size it like everything else, and the
+// binding hotkey toggles that widget. The old full-screen window was removed 2026-07-24: it
+// rendered ON TOP of the widget and blocked it.
 
 // Patch the sidecar config over HTTP (the config lives in the sidecar process).
 async function postConfig(patch) {
@@ -363,7 +356,7 @@ function sendMiningVisible(state) {
 }
 // Push widget on/off state to the in-overlay hub checkboxes (kept in sync with the tray).
 function pushWidgetStates() {
-  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible }); }
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }); }
   catch { /* renderer gone */ }
 }
 // The Notepad widget is a plain in-canvas iframe (no auto-show / SSE), so its visibility is a
@@ -384,6 +377,95 @@ function setNotepadVisible(on) {
   refreshTray();
 }
 function toggleNotepad() { setNotepadVisible(!notepadVisible); }
+// The Twitch Chat widget is another plain in-canvas iframe — same shell-owned visibility flag as
+// the Notepad. (Its channel field shares the Notepad's keyboard-grab; the renderer drops typing
+// mode when the widget hides, so nothing can strand the interact-key suspension.)
+function sendTwitchChatVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:twitchchat-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setTwitchChatVisible(on) {
+  twitchChatVisible = !!on;
+  sendTwitchChatVisible({ on: twitchChatVisible });
+  postConfig({ twitchChatOpen: twitchChatVisible }); // remember open/closed for next launch
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleTwitchChat() { setTwitchChatVisible(!twitchChatVisible); }
+// SC Feed news notifier — same shell-owned flag. "Visible" here means ARMED: the widget mounts
+// and polls, but only paints when there's a new story (then fades itself out again).
+function sendScFeedVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:scfeed-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setScFeedVisible(on) {
+  scFeedVisible = !!on;
+  sendScFeedVisible({ on: scFeedVisible });
+  postConfig({ scFeedOpen: scFeedVisible }); // remember on/off for next launch
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleScFeed() { setScFeedVisible(!scFeedVisible); }
+// Party split widget — plain in-canvas iframe, same shell-owned visibility as the Notepad.
+function sendPartyVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:party-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setPartyVisible(on) {
+  partyVisible = !!on;
+  sendPartyVisible({ on: partyVisible });
+  postConfig({ partyOpen: partyVisible }); // remember open/closed for next launch
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleParty() { setPartyVisible(!partyVisible); }
+// Battaglia grind tracker - same shell-owned visibility as the widgets above. Retires when the
+// giver does (4.10): drop this block, its config flag, and overlay/battaglia.html.
+function sendBattagliaVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:battaglia-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setBattagliaVisible(on) {
+  battagliaVisible = !!on;
+  sendBattagliaVisible({ on: battagliaVisible });
+  postConfig({ battagliaOpen: battagliaVisible }); // remember open/closed for next launch
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleBattaglia() { setBattagliaVisible(!battagliaVisible); }
+// Web Page widget - any http(s) page the user pins to the canvas.
+function sendWebViewVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:webview-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setWebViewVisible(on) {
+  webViewVisible = !!on;
+  sendWebViewVisible({ on: webViewVisible });
+  postConfig({ webViewOpen: webViewVisible });
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleWebView() { setWebViewVisible(!webViewVisible); }
+// Binding Chart widget — the placeable, sizeable panel that REPLACED the old full-screen
+// click-through binding window. The binding hotkey toggles this.
+function sendBindingChartVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:bindingchart-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setBindingChartVisible(on) {
+  bindingChartVisible = !!on;
+  // Re-read the PNG each time it's summoned so a re-exported chart shows up without a restart
+  // (the retired full-screen window bumped a location hash for the same reason).
+  if (bindingChartVisible) {
+    try { overlay && !overlay.isDestroyed() && overlay.webContents.send("overlay:bindingchart-reload"); }
+    catch { /* renderer gone */ }
+  }
+  sendBindingChartVisible({ on: bindingChartVisible });
+  postConfig({ bindingChartOpen: bindingChartVisible });
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleBindingChart() { setBindingChartVisible(!bindingChartVisible); }
 function setMiningVisible(on, opts) {
   opts = opts || {};
   on = !!on;
@@ -426,7 +508,7 @@ function registerBindingHotkey(accel) {
   if (bindingAccel) hotkeys.unregister(bindingAccel);
   bindingAccel = null;
   if (!accel || typeof accel !== "string") return { ok: true };
-  const r = hotkeys.register(accel, toggleBinding);
+  const r = hotkeys.register(accel, toggleBindingChart);
   if (r.ok) bindingAccel = accel;
   return r;
 }
@@ -756,17 +838,22 @@ function refreshTray() {
             { label: "Reset overlay layout (recover lost widgets)", click: resetWidgetLayout }]
         : [{ label: "Overlay off — tracking still running", enabled: false }]),
       { type: "separator" },
-      { label: "Mining Assistant", click: toggleMining },
+      // Widgets — every one a checkbox under a heading, so it's obvious the menu toggles them
+      // on and off rather than "opening" something.
+      { label: "Widgets", enabled: false },
+      { label: "Mining Assistant", type: "checkbox", checked: miningVisible, click: toggleMining },
       { label: "Notepad", type: "checkbox", checked: notepadVisible, click: toggleNotepad },
-      {
-        label: "Binding chart overlay",
-        type: "checkbox",
-        checked: !!(bindingWin && bindingWin.isVisible()),
-        click: () => { toggleBinding(); refreshTray(); },
-      },
+      { label: "Twitch Chat", type: "checkbox", checked: twitchChatVisible, click: toggleTwitchChat },
+      { label: "SC Feed news", type: "checkbox", checked: scFeedVisible, click: toggleScFeed },
+      { label: "Party split", type: "checkbox", checked: partyVisible, click: toggleParty },
+      { label: "Battaglia track", type: "checkbox", checked: battagliaVisible, click: toggleBattaglia },
+      { label: "Web page", type: "checkbox", checked: webViewVisible, click: toggleWebView },
+      { label: "Binding chart", type: "checkbox", checked: bindingChartVisible, click: toggleBindingChart },
+      { type: "separator" },
+      { label: "Tools", enabled: false },
       { label: "Refresh missions (re-read log)", click: refreshMissions },
       { label: "Verify from logs", click: verifyFromLogs },
-      { label: "Open config…", click: openConfig },
+      { label: "Settings…", click: openConfig },
       ...(cachedElevated === false
         ? [{ label: "Restart as administrator (for in-game hotkeys)", click: restartAsAdmin }]
         : []),
@@ -862,6 +949,12 @@ if (!app.requestSingleInstanceLock()) {
       miningVisible = c.miningOpen === true;
       miningArm = !miningVisible && c.miningAutoShow === true;
       notepadVisible = c.notepadOpen === true;
+      twitchChatVisible = c.twitchChatOpen === true;
+      scFeedVisible = c.scFeedOpen === true;
+      partyVisible = c.partyOpen === true;
+      battagliaVisible = c.battagliaOpen === true;
+      webViewVisible = c.webViewOpen === true;
+      bindingChartVisible = c.bindingChartOpen === true;
     } catch { /* default off */ }
     // Keep capture gating aligned on launch: closed mining widget => no mining scan.
     postConfig({ miningAssistant: miningVisible });
@@ -1010,12 +1103,66 @@ if (!app.requestSingleInstanceLock()) {
   // Binding chart is hotkey-only (never kept on). Both widgets now live in the one overlay
   // renderer, so mining is a shell-owned visibility flag (setMiningVisible) rather than a window.
   // (sendMiningVisible / pushWidgetStates / setMiningVisible are defined at module scope above.)
-  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible }));
+  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {
     if (on) { miningAutoSuppress = 0; setMiningVisible(true); }
     else setMiningVisible(false, { manual: true });
   });
   ipcMain.on("app:set-notepad", (_e, on) => setNotepadVisible(!!on));
+  ipcMain.on("app:set-twitchchat", (_e, on) => setTwitchChatVisible(!!on));
+  ipcMain.on("app:set-scfeed", (_e, on) => setScFeedVisible(!!on));
+  ipcMain.on("app:set-party", (_e, on) => setPartyVisible(!!on));
+  ipcMain.on("app:set-battaglia", (_e, on) => setBattagliaVisible(!!on));
+  // SC Feed alert tone picker, mirroring mining:pick-tone (renderers can't open OS dialogs).
+  ipcMain.handle("scfeed:pick-tone", async () => {
+    const r = await dialog.showOpenDialog(overlay ?? undefined, {
+      title: "Choose an SC Feed alert WAV",
+      filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      properties: ["openFile"],
+    });
+    if (r.canceled || !r.filePaths.length) return false;
+    await postConfig({ scFeedTone: r.filePaths[0] });
+    return true;
+  });
+  ipcMain.handle("scfeed:clear-tone", async () => { await postConfig({ scFeedTone: "" }); return true; });
+  ipcMain.on("app:set-webview", (_e, on) => setWebViewVisible(!!on));
+  ipcMain.on("app:set-bindingchart", (_e, on) => setBindingChartVisible(!!on));
+  // Reveal one of our own data folders in Explorer (the Party widget's saved splits). Restricted
+  // to a known allow-list of subfolders so a renderer can never ask the shell to open a path.
+  // Performance readout: Electron's own per-process CPU + memory, so "how much is this costing
+  // my PC" is answerable in the app instead of via Task Manager guesswork.
+  ipcMain.handle("app:metrics", () => {
+    const os = require("node:os");
+    let cpu = 0, mem = 0;
+    const rows = [];
+    for (const m of app.getAppMetrics()) {
+      const mb = Math.round((m.memory?.workingSetSize ?? 0) / 1024);
+      // Electron reports CPU as a share of ONE core.
+      const pc = m.cpu?.percentCPUUsage ?? 0;
+      cpu += pc; mem += mb;
+      rows.push({ type: m.type, mb, pc });
+    }
+    rows.sort((a, b) => b.mb - a.mb);
+    const cores = os.cpus().length;
+    return {
+      totalMb: mem,
+      // Share of the WHOLE cpu, which is what a player cares about.
+      cpuPct: Math.round((cpu / cores) * 10) / 10,
+      cores,
+      // Total installed RAM, so every memory figure can be expressed as a share of the SYSTEM
+      // rather than a share of our own usage (which says nothing about impact).
+      systemMb: Math.round(os.totalmem() / 1048576),
+      rows,
+    };
+  });
+  ipcMain.on("app:open-data-folder", (_e, which) => {
+    const dirs = { "party-sessions": "party-sessions", "fab-captures": "fab-captures" };
+    const sub = dirs[String(which)];
+    if (!sub) return;
+    const dir = path.join(process.env.APPDATA || process.env.HOME || ".", "sc-blueprint-tracker", sub);
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
+    shell.openPath(dir);
+  });
 
   // Tray app — keep running when the overlay window is closed.
   app.on("window-all-closed", (e) => {

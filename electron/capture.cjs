@@ -227,7 +227,17 @@ function startFabCapture({ port, configDir, onStatus }) {
   let seededPending = false;  // have we reconciled the local capture folder vs the site's have-list?
   let remoteHave = null;      // set of items the site already has (dedup)
   let remoteHaveAt = 0;       // when remoteHave was last fetched
+  // If the site rejects the sync token (401), pause upload retries until the token changes.
+  let blockedToken = "";
+  let authNotifiedToken = "";
   const REMOTE_TTL_MS = 3 * 60_000; // re-fetch the site's have-list this often
+
+  const clearTokenBlockIfChanged = (token) => {
+    if (blockedToken && token && token !== blockedToken) {
+      blockedToken = "";
+      authNotifiedToken = "";
+    }
+  };
 
   // What does the site already have? Skip capturing those. Re-fetched every REMOTE_TTL_MS so a
   // server-side delete/replace (or a failed upload) becomes capturable again WITHOUT restarting.
@@ -252,14 +262,24 @@ function startFabCapture({ port, configDir, onStatus }) {
         body: jpeg,
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
-      if (r.ok) { uploaded.add(item); remoteHave?.add(item); return true; }
+      if (r.ok) { uploaded.add(item); remoteHave?.add(item); return "ok"; }
+      if (r.status === 401) {
+        blockedToken = token;
+        if (authNotifiedToken !== token) {
+          authNotifiedToken = token;
+          emitEvent({ state: "auth", reason: "invalid_token" });
+        }
+        console.error(`[fab-capture] upload ${item} -> HTTP 401 (invalid sync token)`);
+        return "auth";
+      }
       console.error(`[fab-capture] upload ${item} -> HTTP ${r.status}`);
     } catch (e) { console.error("[fab-capture] upload error:", e && e.message); }
-    return false;
+    return "retry";
   }
 
   async function tick() {
     const cfg = readConfig(configDir);
+    clearTokenBlockIfChanged(cfg.syncToken || "");
     // Two independent opt-ins share one screen-read: image capture and pinned-mission OCR.
     // Either one arms the loop; each read is then gated by its own flag below.
     const fab = cfg.fabCapture === true;
@@ -371,21 +391,35 @@ function startFabCapture({ port, configDir, onStatus }) {
         fs.mkdirSync(shotsDir, { recursive: true });
         fs.writeFileSync(path.join(shotsDir, `${item}.jpg`), shot.toJPEG(85));
         let uploadedOk = false;
+        let authFail = false;
         if (cfg.syncToken) {
-          // Share the one capture across every sibling that still lacks it (name collision).
-          const oks = await Promise.all(missing.map((t) => upload(t, jpeg, cfg.syncToken)));
-          uploadedOk = oks.every(Boolean);
-          // Any sibling whose upload didn't land: keep the local JPEG and QUEUE it. The drain loop
-          // retries from disk until the server has it, so a transient failure (or a wedge) can't
-          // leave a captured item silently unshared — and the user isn't told "done" when it isn't.
-          missing.forEach((t, i) => { if (!oks[i]) pendingUploads.set(t, read.name); });
+          if (blockedToken && cfg.syncToken === blockedToken) {
+            authFail = true;
+            if (authNotifiedToken !== cfg.syncToken) {
+              authNotifiedToken = cfg.syncToken;
+              emitEvent({ state: "auth", reason: "invalid_token" });
+            }
+            // Token is known bad; queue locally and wait for a re-link rather than hammering.
+            missing.forEach((t) => pendingUploads.set(t, read.name));
+          } else {
+            // Share the one capture across every sibling that still lacks it (name collision).
+            const oks = await Promise.all(missing.map((t) => upload(t, jpeg, cfg.syncToken)));
+            uploadedOk = oks.every((v) => v === "ok");
+            authFail = oks.some((v) => v === "auth");
+            // Any sibling whose upload didn't land: keep the local JPEG and QUEUE it. The drain loop
+            // retries from disk until the server has it, so a transient failure (or a wedge) can't
+            // leave a captured item silently unshared — and the user isn't told "done" when it isn't.
+            missing.forEach((t, i) => { if (oks[i] !== "ok") pendingUploads.set(t, read.name); });
+          }
           const label = missing.length > 1 ? `${read.name} (${missing.length} sizes)` : `${read.name} (${item})`;
-          console.log(`[fab-capture] ${uploadedOk ? "uploaded" : "upload failed — queued for retry"} ${label}`);
+          if (authFail) console.log(`[fab-capture] sync token invalid — queued locally until relink (${label})`);
+          else console.log(`[fab-capture] ${uploadedOk ? "uploaded" : "upload failed — queued for retry"} ${label}`);
         } else {
           console.log(`[fab-capture] saved ${read.name} (${item}) — no sync token, not uploaded`);
         }
         // uploaded:true  => confirmed on the site. queued:true => saved + retrying (NOT done yet).
         emitEvent({ state: "captured", name: read.name, uploaded: uploadedOk, queued: !uploadedOk && !!cfg.syncToken });
+        if (authFail) emitEvent({ state: "auth", reason: "invalid_token" });
       } else if (read.kind === "fabricator" && fab) {
         // In the kiosk with image capture on, but the item name didn't resolve to a known
         // blueprint (still rendering in, or an item not in our dataset) — so there's nothing
@@ -428,7 +462,9 @@ function startFabCapture({ port, configDir, onStatus }) {
   // by a past failure/wedge self-heal on the next launch instead of being silently lost.
   async function drainPending() {
     const cfg = readConfig(configDir);
+    clearTokenBlockIfChanged(cfg.syncToken || "");
     if (cfg.fabCapture !== true || !cfg.syncToken) return; // needs opt-in + a token to upload
+    if (blockedToken && cfg.syncToken === blockedToken) return; // known bad token; wait for re-link
     if (drainBusy) return;
     drainBusy = true;
     try {
@@ -449,10 +485,13 @@ function startFabCapture({ port, configDir, onStatus }) {
         let jpeg;
         try { jpeg = fs.readFileSync(path.join(captureDir, `${it}.jpg`)); }
         catch { pendingUploads.delete(it); continue; } // local file gone — nothing to retry
-        if (await upload(it, jpeg, cfg.syncToken)) {
+        const st = await upload(it, jpeg, cfg.syncToken);
+        if (st === "ok") {
           pendingUploads.delete(it);
           emitEvent({ state: "shared", name, pending: pendingUploads.size });
           console.log(`[fab-capture] retry uploaded ${name || it} (${pendingUploads.size} still pending)`);
+        } else if (st === "auth") {
+          return; // token invalid: stop retry churn until token changes
         }
       }
     } catch (e) {

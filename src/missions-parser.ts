@@ -56,7 +56,14 @@ export type MissionEvent =
   | { kind: "sessionStart"; ts: string | null }
   /** Left the game — quit to menu, disconnect, or full client exit. Mission state
    *  is per-connection, so the overlay should stop showing the old shard's missions. */
-  | { kind: "sessionEnd"; ts: string | null };
+  | { kind: "sessionEnd"; ts: string | null }
+  /** A party member's map marker streamed in/out. This is the ONLY live party signal the log
+   *  gives — it tells you HOW MANY people are in your party (and nearby), never who. */
+  | { kind: "partyMarker"; ts: string | null; markerId: string; entityId: string; present: boolean }
+  /** A party member's marker detaching names the player it belonged to. It's the one line that
+   *  ties a marker to a HANDLE — but it only fires when they despawn, so names arrive late (or
+   *  not at all). Harvested purely to offer name suggestions for the manual party roster. */
+  | { kind: "partyMemberName"; ts: string | null; markerId: string; name: string };
 
 const UUID = "[0-9a-fA-F-]{36}";
 
@@ -94,12 +101,34 @@ const RE = {
   // UpdateActiveObjective / EndMission generic id pulls
   anyMissionId: new RegExp(`[Mm]ission[_ ]?[Ii]d[:\\s]*\\[?(${UUID})\\]?`),
   anyObjectiveId: new RegExp(`[Oo]bjective[_ ]?[Ii]d[:\\s]*\\[?([0-9a-fA-F-]{8,})\\]?`),
+  // Party markers: "Streamed in party marker id 4949777878066. TrackedEntityId: 201990706945"
+  partyMarker: /party marker id\s+(\d+)\.\s*TrackedEntityId:\s*(\d+)/i,
+  // The marker's detach line is the only place a party member's HANDLE appears:
+  // "force detaching ENTITY ATTACHMENT id = <marker> name = "PartyMemberMarker_<marker>"
+  //  to unblock removal of parent id = <entity> name = "<handle>""
+  // 🔑 Anchor on "force detaching ENTITY ATTACHMENT". The same PartyMemberMarker_ id also shows up
+  // in a "moving zone hosted child" line whose parent is a STREAMING ZONE, not the player — a
+  // looser match harvests "StreamingSOC_hangar_lrgtop_001_orison" as a party member's name.
+  partyMemberName: /force detaching ENTITY ATTACHMENT id\s*=\s*\d+\s*name\s*=\s*"PartyMemberMarker_(\d+)"[\s\S]*?parent id\s*=\s*\d+\s*name\s*=\s*"([^"]+)"/,
 };
 
 export function parseMissionEvent(e: LogEvent): MissionEvent | null {
   const tag = e.eventTag;
   const m = e.message;
+
+  // The party-marker detach line is a "[net][bind]CEntity::…" line with NO <EventTag>, so it has
+  // to be matched on the message before the tag switch (which bails on an untagged line).
+  const pn = m.match(RE.partyMemberName);
+  if (pn) return { kind: "partyMemberName", ts: e.timestamp, markerId: pn[1], name: pn[2] };
+
   if (!tag) return null;
+
+  // "<CPartyMarkerComponent RWES>" (streamed in) / "<CPartyMarkerComponent UFES>" (streamed out).
+  if (tag.startsWith("CPartyMarkerComponent")) {
+    const pm = m.match(RE.partyMarker);
+    if (!pm) return null;
+    return { kind: "partyMarker", ts: e.timestamp, markerId: pm[1], entityId: pm[2], present: /streamed in/i.test(m) };
+  }
 
   switch (tag) {
     case "SHUDEvent_OnNotification": {
