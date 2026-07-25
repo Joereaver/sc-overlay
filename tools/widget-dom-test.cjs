@@ -561,6 +561,120 @@ const RESTORE = `(async () => {
   return out;
 })()`;
 
+// ── Suite 7: dragging + reset ─────────────────────────────────────────────────
+// Sub's report: "when I move the cursor near another box, the one I'm dragging freezes, then
+// jumps to catch up." Cause: neighbours are IFRAMES, and a pointer over an iframe delivers its
+// moves to THAT document — this window simply stops hearing them. So the load-bearing assertion
+// is that a full-canvas shield sits ABOVE every widget for the duration of the gesture. Plus the
+// recovery path for a widget dragged off-screen: reset centres it, and the hub can fire that
+// reset without the widget's own (unreachable) bar.
+const DRAG = `(async () => {
+  ${PRELUDE}
+  const party = WBY.party, mining = WBY.mining;
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(300);
+  const shield = document.getElementById("dragShield");
+  ok("drag shield exists", !!shield);
+  ok("shield is idle before a gesture", shield && getComputedStyle(shield).display === "none");
+
+  // Grab party's bar and drag it across mining.
+  const bar = el(party).querySelector(".whead");
+  const r0 = bar.getBoundingClientRect();
+  bar.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: r0.left + 40, clientY: r0.top + 8 }));
+  await sleep(20);
+  ok("shield is up during a drag", getComputedStyle(shield).display !== "none");
+  ok("body flags the drag", document.body.classList.contains("dragging"));
+  // Over a neighbour, the shield — not that widget's iframe — must be what the cursor hits.
+  const mr = el(mining).getBoundingClientRect();
+  const hit = document.elementFromPoint(mr.left + mr.width / 2, mr.top + mr.height / 2);
+  ok("the shield covers a neighbouring widget", hit === shield, hit && (hit.id || hit.tagName));
+  // ...and moves keep arriving in THIS document, which is what the freeze was.
+  const x0 = party.s.x;
+  window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: r0.left + 40 + 120, clientY: r0.top + 8 }));
+  await sleep(20);
+  ok("the widget tracks the pointer over a neighbour", party.s.x === x0 + 120, party.s.x + " vs " + (x0 + 120));
+  // Every bar is out while dragging, so the drop target is something you can see.
+  ok("neighbour bars come out as drop targets",
+     getComputedStyle(el(mining).querySelector(".whead")).transform.replace(/ /g, "") === "matrix(1,0,0,1,0,0)",
+     getComputedStyle(el(mining).querySelector(".whead")).transform);
+  window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  await sleep(20);
+  ok("shield drops on pointerup", getComputedStyle(shield).display === "none");
+  ok("drag flag cleared", !document.body.classList.contains("dragging"));
+
+  // Reset = the MIDDLE of the primary monitor, not the registry's starting spot: the whole point
+  // is recovering a widget you can no longer reach.
+  const ci = canvasInfo || { pw: window.innerWidth, ph: window.innerHeight };
+  party.s.x = -4000; party.s.y = 9000; party.s.w = 800; applyFrame(party);
+  resetWidget(party);
+  ok("reset centres horizontally", party.s.x === Math.round((ci.pw - party.size.w) / 2), party.s.x);
+  ok("reset centres vertically", party.s.y === Math.round((ci.ph - party.size.h) / 2), party.s.y);
+  ok("reset drops the custom size", party.s.w === null && party.s.h === null);
+
+  // Hub: a reset per widget, right-aligned, and clicking it must NOT toggle that widget's
+  // checkbox (which is what a button inside the row's <label> would have done).
+  document.getElementById("hub").classList.add("open"); // it's display:none until the cog opens it
+  await sleep(20);
+  const rows = [...document.querySelectorAll("#hub .hub-row.tog")];
+  ok("every widget row has a reset", rows.length === WIDGETS.length
+     && rows.every(r => r.querySelector(".hub-reset")), rows.length + " rows");
+  ok("every reset names a real widget",
+     [...document.querySelectorAll("#hub .hub-reset")].every(b => !!WBY[b.dataset.w]));
+  const mRow = document.querySelector('#hub .hub-reset[data-w="mining"]').closest(".hub-row");
+  const mBtn = mRow.querySelector(".hub-reset"), mChk = mRow.querySelector("input[type=checkbox]");
+  ok("the reset sits right of the checkbox",
+     mBtn.getBoundingClientRect().left > mChk.getBoundingClientRect().right,
+     Math.round(mBtn.getBoundingClientRect().left) + " > " + Math.round(mChk.getBoundingClientRect().right));
+  ok("the reset is flush right in the row",
+     Math.abs(mRow.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) < 20,
+     Math.round(mRow.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) + "px from the edge");
+  const wasChecked = mChk.checked;
+  mining.s.x = -4000; mining.s.y = 9000; applyFrame(mining);
+  mBtn.click();
+  await sleep(20);
+  ok("hub reset recentres its widget", mining.s.x === Math.round((ci.pw - mining.size.w) / 2), mining.s.x);
+  ok("hub reset leaves the on/off checkbox alone", mChk.checked === wasChecked);
+
+  // Section headings: Layout means layout. Settings + patch notes are not that.
+  const secOf = (id) => { let n = document.getElementById(id); while (n && !(n.classList && n.classList.contains("hub-sec"))) n = n.previousElementSibling; return n && n.textContent.trim(); };
+  ok("Arrange is under Layout", secOf("hubArrange") === "Layout", secOf("hubArrange"));
+  ok("full settings is NOT under Layout", secOf("hubSettings") !== "Layout", secOf("hubSettings"));
+  ok("patch notes is NOT under Layout", secOf("hubWhatsNew") !== "Layout", secOf("hubWhatsNew"));
+  return out;
+})()`;
+
+// ── Suite 8: the embedded pages' own headers ──────────────────────────────────
+// The widget bar names the widget, so a page that ALSO carries its name says it twice (Mining
+// did — it kept an old eyebrow through the header refactor). And a page's header controls belong
+// on the right, opposite the title.
+const HEADERS = `(async () => {
+  ${PRELUDE}
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(900); // iframes have to load and lay out before anything can be measured
+  const docOf = (k) => { try { return document.getElementById("wf-" + k).contentDocument; } catch { return null; } };
+
+  for (const w of WIDGETS) {
+    if (w.local) continue;
+    const d = docOf(w.key); if (!d || !d.querySelector(".head")) continue;
+    const heads = [...d.querySelectorAll(".head")].filter(h => h.offsetParent !== null || d.defaultView.getComputedStyle(h).display !== "none");
+    const txt = heads.map(h => h.textContent).join(" ").toLowerCase();
+    const n = txt.split(w.title.toLowerCase()).length - 1;
+    ok(w.title + ": names itself at most once in its header", n <= 1, n + "x");
+  }
+
+  // Notepad's text-size stepper and ＋ New sit at the RIGHT edge of the header (Sub, 2026-07-25).
+  const nd = docOf("notepad");
+  const nhead = nd.querySelector(".head.list-only");
+  const title = nhead.querySelector(".h-title").getBoundingClientRect();
+  const fsz = nhead.querySelector(".fsz").getBoundingClientRect();
+  const nb = nd.getElementById("newBtn").getBoundingClientRect();
+  const hr = nhead.getBoundingClientRect();
+  ok("notepad: controls are right of the title", fsz.left > title.right + 20, Math.round(fsz.left - title.right) + "px gap");
+  ok("notepad: ＋ New is flush right", Math.abs(hr.right - nb.right) < 20, Math.round(hr.right - nb.right) + "px from the edge");
+  ok("notepad: text stepper and ＋ New share the row", Math.abs(fsz.top - nb.top) < 12 && fsz.right <= nb.left + 1);
+  return out;
+})()`;
+
 async function run(label, script, preload) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
@@ -608,6 +722,8 @@ app.whenReady().then(async () => {
     fails += await run("title-bar chrome", CHROME, null);
     fails += await run("controls visible + reachable", REACH, null);
     fails += await run("sweeps: themes / sizes / text / stacks", SWEEPS, null);
+    fails += await run("dragging + reset", DRAG, null);
+    fails += await run("page headers", HEADERS, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);

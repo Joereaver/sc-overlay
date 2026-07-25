@@ -319,16 +319,11 @@
     border: 1px solid var(--border); border-radius: 4px; }
   #cogMenu .cog-btn:hover { background: rgba(var(--accent-rgb), 0.2); border-color: var(--cyan); }
 
-  /* Header: matches the HUD (drag region + tick-strip divider + eyebrow with diamond). */
+  /* Header: matches the HUD (drag region + tick-strip divider). */
   .head { position: relative; padding: 15px 17px 13px; z-index: 10; border-bottom: 1px solid var(--divider);
     -webkit-app-region: drag; cursor: grab; }
   .head::after { content: ""; position: absolute; left: 17px; right: 17px; bottom: -1px; height: 2px;
     background: repeating-linear-gradient(90deg, rgba(var(--accent-rgb), 0.32) 0 3px, transparent 3px 8px); opacity: 0.7; }
-  .eyebrow { position: relative; display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 700;
-    letter-spacing: 0.16em; text-transform: uppercase; color: #eaf6fb; text-shadow: 0 0 14px rgba(var(--accent-rgb), 0.3); }
-  .eyebrow .dot { position: relative; width: 8px; height: 8px; background: var(--cyan-bright); transform: rotate(45deg);
-    box-shadow: 0 0 8px var(--cyan); animation: pulse 1.9s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   .sub { margin-top: 5px; font-size: 9px; font-weight: 600; letter-spacing: 0.16em;
     text-transform: uppercase; color: var(--cyan-dim); }
 
@@ -412,7 +407,8 @@
       <button type="button" id="testBtn" class="cog-btn">🔊 Test sound</button>
       <button type="button" id="openSettings" class="cog-btn">⚙ Open full settings…</button>
     </div>
-    <div class="eyebrow"><span class="dot"></span> Mining Assistant</div>
+    <!-- No second "Mining Assistant" line here: the shared header above already names the widget
+         (this page kept its old eyebrow through the header refactor, so it said it twice). -->
     <div class="sub">Signature scanner · Refinery timers</div>
   </div>
 

@@ -183,7 +183,10 @@
 
   /* Text-size stepper (list header) — scales the note CONTENT (list + editor) via zoom, leaving
      the chrome/buttons fixed, so notes stay readable from 1080p to 4K. */
-  .fsz { display: flex; gap: 3px; margin-right: 2px; }
+  /* Pushed to the right edge of the header (Sub, 2026-07-25) — the title owns the left, the
+     controls own the right, same as every other widget bar. `＋ New` follows on the same line
+     because .fsz eats the leftover room ahead of it. */
+  .fsz { display: flex; gap: 3px; margin-right: 2px; margin-left: auto; }
   .fsbtn { font-family: var(--sans); font-weight: 700; font-size: 11px; line-height: 1; color: var(--cyan-text);
     background: rgba(var(--accent-rgb), 0.1); border: 1px solid var(--divider); border-radius: 5px;
     width: 24px; height: 24px; cursor: pointer; padding: 0; }

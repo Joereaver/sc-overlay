@@ -294,6 +294,7 @@
      an inherited VARIABLE rather than a transform override, so it composes with each trinket's own
      rotation and doesn't have to out-specify every per-theme rule. */
   #panel:hover, #panel.touched, #panel.moving,
+  body.dragging #panel, body.dragging .widget,
   .widget:hover, .widget.touched, .widget.grouped, .widget.moving { --trinket-shift: var(--whead-h, 28px); }
   /* Argo — chunky industrial cogs */
   :root[data-theme="argo"] .corner.tr { width: 34px; height: 34px; top: -12px; right: -12px; background-image: url(cog-argo-tl.png); }
@@ -472,6 +473,10 @@
   .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead,
   #panel:hover .whead, #panel.touched .whead,
   .widget.moving .whead, #panel.moving .whead { transform: translateY(0); pointer-events: auto; }
+  /* While a widget is being DRAGGED every bar comes out: the bar is the drop target, and the drag
+     shield means the widget under the cursor never sees :hover to reveal its own. You aim at
+     something you can see. They stay inert — the shield owns the pointer for the whole gesture. */
+  body.dragging .widget .whead, body.dragging #panel .whead { transform: translateY(0); pointer-events: none; }
   /* ARRANGE MODE keeps the bar OUT and turns it into the grab handle: you drag a widget by its bar
      and drop it onto another widget's bar to stack them (Sub, 2026-07-25) — the same gesture as
      dragging a browser tab onto another window. Its buttons and tabs go inert so they can't
@@ -581,6 +586,14 @@
     font-size: 12.5px; color: var(--cyan-text); }
   #hub .hub-row.tog { cursor: pointer; }
   #hub .hub-row.tog:hover { background: rgba(var(--accent-rgb), 0.1); }
+  /* A widget row is [checkbox + name] … [reset], the reset pushed to the right edge. The label can
+     no longer BE the row: a button inside a <label> toggles the checkbox on click. */
+  #hub .hub-row.tog > label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; cursor: pointer; }
+  #hub .hub-reset { flex: none; margin-left: auto; font-family: var(--sans); font-size: 11px; line-height: 1;
+    color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--border);
+    border-radius: 5px; padding: 3px 7px; cursor: pointer; }
+  #hub .hub-reset:hover { background: rgba(var(--accent-rgb), 0.26); border-color: var(--cyan); }
+  #hub .hub-reset.done { color: var(--gold); border-color: var(--gold); }
   #hub .hub-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--cyan); cursor: pointer; }
   #hub .hub-row.col { display: block; }
   #hub .hub-row.col > label { display: block; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
@@ -596,6 +609,15 @@
   #hub .hub-btn.primary { background: rgba(var(--accent-rgb), 0.2); border-color: var(--cyan); color: var(--cyan-bright); }
   /* Blueprint widget hidden via the hub toggle (shell window stays alive to host the chrome). */
   body.bp-hidden #panel { display: none; }
+
+  /* 🔑 Drag shield. A widget's neighbours are IFRAMES, and pointer events over an iframe go to
+     ITS document — window.pointermove in this one simply stops firing, so a drag froze the
+     moment the cursor crossed another widget and then snapped when it came back out. A shield
+     covering the whole canvas for the duration of the gesture keeps every move event in this
+     document. Sits under the arrange scrim/cog/hub, above every widget. */
+  #dragShield { display: none; position: fixed; inset: 0; z-index: 57; cursor: move; }
+  #dragShield.on { display: block; }
+  #dragShield.resizing { cursor: nwse-resize; }
 
   /* Full-screen ARRANGE-MODE indicator (shell only): a dashed frame + a dim tint + a top
      banner, so it's unmistakable the whole screen is in edit mode and clicks won't reach the
@@ -1132,16 +1154,19 @@
   <div id="globalCog" title="Overlay settings">⚙</div>
   <div id="hub">
     <div class="hub-title"><span class="dia"></span> Overlay App</div>
+    <!-- On/off on the left, "put it back in the middle of the screen" on the right. The reset is
+         here because this menu is the only chrome you can still reach when a widget has been
+         dragged off the bottom of the monitor — its own bar went with it. -->
     <div class="hub-sec">Widgets</div>
-    <label class="hub-row tog"><input type="checkbox" id="wgBlueprint" checked /> Blueprint tracker</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgMining" /> Mining Assistant</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgNotepad" /> Notepad</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgTwitchChat" /> Twitch Chat</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgScFeed" /> SC Feed news</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgParty" /> Party split</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgBattaglia" /> Battaglia track</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgWebView" /> Web page</label>
-    <label class="hub-row tog"><input type="checkbox" id="wgBindingChart" /> Binding chart</label>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgBlueprint" checked /> Blueprint tracker</label><button type="button" class="hub-reset" data-w="blueprint" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgMining" /> Mining Assistant</label><button type="button" class="hub-reset" data-w="mining" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgNotepad" /> Notepad</label><button type="button" class="hub-reset" data-w="notepad" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgTwitchChat" /> Twitch Chat</label><button type="button" class="hub-reset" data-w="twitchChat" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgScFeed" /> SC Feed news</label><button type="button" class="hub-reset" data-w="scFeed" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgParty" /> Party split</label><button type="button" class="hub-reset" data-w="party" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgBattaglia" /> Battaglia track</label><button type="button" class="hub-reset" data-w="battaglia" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgWebView" /> Web page</label><button type="button" class="hub-reset" data-w="webView" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgBindingChart" /> Binding chart</label><button type="button" class="hub-reset" data-w="bindingChart" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-sec">Global appearance</div>
     <div class="hub-row col"><label>Theme</label>
       <select id="hubTheme">
@@ -1165,9 +1190,16 @@
       </select></div>
     <div class="hub-sec">Layout</div>
     <button type="button" id="hubArrange" class="hub-btn primary">⠿ Arrange widgets</button>
+    <!-- Settings and patch notes aren't layout — they were only sitting under that heading because
+         it happened to be the last one (Sub, 2026-07-25). -->
+    <div class="hub-sec">App</div>
     <button type="button" id="hubSettings" class="hub-btn">⚙ Open full settings…</button>
     <button type="button" id="hubWhatsNew" class="hub-btn">✦ Patch notes</button>
   </div>
+
+  <!-- Covers the canvas while a drag/resize is in flight so neighbouring iframes can't swallow
+       the pointer mid-gesture (see #dragShield in the stylesheet). -->
+  <div id="dragShield"></div>
 
   <!-- Full-screen arrange-mode indicator (shell only). Click-through except its banner. -->
   <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div></div>
@@ -1906,12 +1938,25 @@
   // Pointer-drag helper: track by delta so the panel's transform (twist/scale) never fights it.
   // Holds a shell "drag lock" for the gesture so the (otherwise hover-gated) window stays
   // interactive even if the pointer briefly outruns the widget.
-  function dragPointer(onMove, onEnd) {
+  //
+  // 🔑 The gesture runs under a full-canvas SHIELD. Every other widget is an IFRAME, and pointer
+  // events over an iframe belong to ITS document — this window's pointermove simply stops
+  // arriving. That is the whole "the box freezes when I drag near another box, then jumps to
+  // catch up" bug: the drag wasn't slow, it was blind for as long as the cursor was over a
+  // neighbour. The shield keeps every event in this document for the duration.
+  function dragPointer(onMove, onEnd, opts) {
+    const resizing = !!(opts && opts.resize);
     window.overlayApi?.dragLock?.(true);
+    const shield = $("dragShield");
+    if (shield) shield.classList.toggle("resizing", resizing);
+    shield?.classList.add("on");
+    if (!resizing) document.body.classList.add("dragging"); // every bar comes out as a drop target
     const move = (ev) => onMove(ev);
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      shield?.classList.remove("on", "resizing");
+      document.body.classList.remove("dragging");
       window.overlayApi?.dragLock?.(false);
       (onEnd || persistWidget)();
     };
@@ -2297,14 +2342,25 @@
     document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
   });
 
-  // Put ONE widget back to its default spot and size. The tray's "Reset overlay layout" is
-  // all-or-nothing (it deletes widgets.json), which is too blunt when a single widget has been
-  // dragged off-screen or resized badly. Nulling the size fields makes applyFrame fall back to
-  // the registry defaults, and persistW writes the nulls through so the reset survives a restart.
+  // Put ONE widget back to its default SIZE, in the MIDDLE of the primary monitor. The tray's
+  // "Reset overlay layout" is all-or-nothing (it deletes widgets.json), which is too blunt when a
+  // single widget has been dragged off-screen or resized badly. Nulling the size fields makes
+  // applyFrame fall back to the registry defaults, and persistW writes the nulls through so the
+  // reset survives a restart.
+  //
+  // Centre, NOT the registry default spot (Sub, 2026-07-25): the defaults are scattered starting
+  // positions that read as arbitrary once you've arranged your own layout — and the whole point of
+  // reset is recovering a widget you can't reach, so it has to land somewhere unmistakably on
+  // screen. Coordinates are PRIMARY-relative; applyFrame adds the canvas offset.
+  function centreWidget(w) {
+    const ci = canvasInfo || { pw: window.innerWidth, ph: window.innerHeight };
+    w.s.x = Math.max(0, Math.round((ci.pw - boxW(w)) / 2));
+    w.s.y = Math.max(0, Math.round((ci.ph - boxH(w)) / 2));
+  }
   function resetWidget(w) {
     if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
     w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null;
-    if (w.defFn) w.defFn(w); else { w.s.x = w.def.x; w.s.y = w.def.y; }
+    centreWidget(w);
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
@@ -2518,7 +2574,9 @@
         dragPointer((ev) => {
           const nx = ox + (ev.clientX - sx), ny = oy + (ev.clientY - sy);
           if (g0) { g0.x = nx; g0.y = ny; applyGroup(g0); }
-          else { w.s.x = nx; w.s.y = ny; applyFrame(w); renderGroupTabs(); }
+          // Just the frame: moving a standalone widget can't change anyone's tabs, and rebuilding
+          // every bar's tab strip on each pointermove was work the drag paid for nothing.
+          else { w.s.x = nx; w.s.y = ny; applyFrame(w); }
           dropOn = dropTargetAt(ev.clientX, ev.clientY, w);
           highlightDrop(dropOn);
         }, () => {
@@ -2542,7 +2600,7 @@
         const g = groupOf(w);
         if (w.shape === "scaled" && !g) {
           const os = wScale(w);
-          dragPointer((ev) => { w.s.scale = Math.max(0.5, Math.min(2.5, os + (ev.clientX - sx) / 380)); applyFrame(w); }, () => persistW(w));
+          dragPointer((ev) => { w.s.scale = Math.max(0.5, Math.min(2.5, os + (ev.clientX - sx) / 380)); applyFrame(w); }, () => persistW(w), { resize: true });
         } else {
           const f = frameEl(w);
           const ow = g ? g.w : (w.s.w != null ? w.s.w : (f?.offsetWidth || w.size.w));
@@ -2554,7 +2612,7 @@
             // Resizing a grouped widget resizes the whole stack — the tabs share one box.
             if (g) { g.w = nw; g.h = nh; applyGroup(g); }
             else { w.s.w = nw; w.s.h = nh; applyFrame(w); }
-          }, () => { if (g) saveGroups(); else persistW(w); });
+          }, () => { if (g) saveGroups(); else persistW(w); }, { resize: true });
         }
       });
       el.querySelector(".wdone")?.addEventListener("click", () => window.overlayApi.endMove());
@@ -2629,6 +2687,21 @@
 
     // (drag + resize for this panel are wired by the generic per-widget loop, which finds
     //  #moveBanner / #resizeHandle through the same .wmove / .wresize hooks.)
+  }
+
+  // Per-widget reset in the hub: the same action as the ↺ on the widget's own bar, but reachable
+  // when that bar has gone off-screen with the widget — which is the only reason it's here.
+  // Wired outside the shell gate below because it's pure page state (nothing to ask main.cjs for).
+  if (CANVAS) {
+    document.querySelectorAll("#hub .hub-reset").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation(); e.preventDefault();
+        const w = WBY[btn.dataset.w]; if (!w) return;
+        resetWidget(w);
+        btn.classList.add("done"); // brief flash — a hidden widget gives no other feedback
+        setTimeout(() => btn.classList.remove("done"), 900);
+      });
+    });
   }
 
   // ── Global overlay-app hub (canvas shell only) ────────────────────────────
