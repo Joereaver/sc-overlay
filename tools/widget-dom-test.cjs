@@ -86,7 +86,60 @@ const GROUPING = `(async () => {
   return out;
 })()`;
 
-// ── Suite 2: restore from a saved (and partly corrupt) layout ──────────────────
+// ── Suite 2: title-bar chrome (parked behind the widget, slides out on hover) ──
+const CHROME = `(async () => {
+  ${PRELUDE}
+  // Transitions don't advance in a hidden window, so assert on the resting/settled geometry.
+  const kill = document.createElement("style");
+  kill.textContent = ".whead{transition:none !important}";
+  document.head.appendChild(kill);
+
+  const w = WBY.party;
+  const box = () => el(w).getBoundingClientRect();
+  const hood = el(w).querySelector(".whood");
+  const bar = el(w).querySelector(".whead");
+  ok("every widget has a title bar", [...document.querySelectorAll(".widget")].every(e => e.querySelector(".whood > .whead")));
+  ok("bar carries title + 3 buttons",
+     bar.querySelector(".wh-title") && bar.querySelectorAll(".wh-btn").length === 3,
+     bar.querySelector(".wh-title") && bar.querySelector(".wh-title").textContent);
+
+  // The hood hangs ABOVE the widget, so the bar can never cover content.
+  const hr = hood.getBoundingClientRect();
+  ok("hood sits above the widget", Math.abs(hr.bottom - box().top) < 1, "hood.bottom=" + hr.bottom.toFixed(1) + " widget.top=" + box().top.toFixed(1));
+  ok("hood clips its contents", getComputedStyle(hood).overflow === "hidden", getComputedStyle(hood).overflow);
+
+  // At rest the bar is pushed fully below the hood => clipped away to nothing.
+  el(w).classList.remove("touched");
+  const parked = bar.getBoundingClientRect();
+  ok("bar is PARKED behind the widget at rest", parked.top >= hr.bottom - 1,
+     "bar.top=" + parked.top.toFixed(1) + " hood.bottom=" + hr.bottom.toFixed(1));
+  ok("parked bar is not clickable", getComputedStyle(bar).pointerEvents === "none", getComputedStyle(bar).pointerEvents);
+
+  // Slid out: it occupies the strip ABOVE the widget and stops exactly at its top edge.
+  el(w).classList.add("touched");
+  const outR = bar.getBoundingClientRect();
+  ok("bar slides OUT above the widget", outR.bottom <= box().top + 1 && outR.top < box().top,
+     "bar=" + outR.top.toFixed(1) + ".." + outR.bottom.toFixed(1) + " widget.top=" + box().top.toFixed(1));
+  ok("slid-out bar covers NO widget content", outR.bottom <= box().top + 1);
+  ok("slid-out bar is clickable", getComputedStyle(bar).pointerEvents === "auto");
+  ok("bar spans the widget width", Math.abs(outR.width - box().width) < 2, outR.width.toFixed(1) + " vs " + box().width.toFixed(1));
+
+  // The shell must only be told about the bar while it's out, or a parked bar leaves a
+  // permanently clickable strip hanging over the game.
+  const RSEL = ".widget:hover .whead, .widget.touched .whead";
+  ok("slid-out bar IS reported to the shell", [...document.querySelectorAll(RSEL)].includes(bar));
+  el(w).classList.remove("touched");
+  ok("parked bar is NOT reported to the shell", ![...document.querySelectorAll(RSEL)].includes(bar));
+
+  // Arrange mode hands the whole widget to the drag shield.
+  el(w).classList.add("moving");
+  ok("bar hidden in arrange mode", getComputedStyle(hood).display === "none", getComputedStyle(hood).display);
+  el(w).classList.remove("moving");
+  kill.remove();
+  return out;
+})()`;
+
+// ── Suite 3: restore from a saved (and partly corrupt) layout ──────────────────
 const RESTORE = `(async () => {
   ${PRELUDE}
   ok("saved group restored", GROUPS.length === 1, GROUPS.map(g => g.id).join(",") || "none");
@@ -136,6 +189,7 @@ app.whenReady().then(async () => {
   let fails = 0;
   try {
     fails += await run("widget grouping", GROUPING, null);
+    fails += await run("title-bar chrome", CHROME, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);

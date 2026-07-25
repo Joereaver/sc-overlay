@@ -413,28 +413,34 @@
   .widget.moving .wresize { display: grid; }
   .wresize svg { width: 12px; height: 12px; display: block; }
 
-  /* Per-widget header bar — close / settings / reset, so a widget can be dismissed where it sits
-     instead of round-tripping through the settings cog. HOVER-REVEALED, so it's invisible during
-     normal play.
+  /* Per-widget TITLE BAR — real window chrome (title + reset / settings / close), the way a
+     desktop window has one. Two things make it feel like part of the widget rather than something
+     pasted over it:
+       · it lives ABOVE the widget, so it never covers a single pixel of content, and
+       · at rest it is parked BEHIND the widget's top edge and CLIPPED away to nothing by .whood,
+         so hovering makes it SLIDE OUT from behind the panel instead of fading in on top of it.
+     The bar was always there; the hover just pulls it out.
 
-     It sits INSIDE the widget's top edge rather than floating above it, for a concrete reason:
-     the shell hit-tests the rects this page reports, and getBoundingClientRect() covers only the
-     element's own box — an absolutely-positioned child overflowing ABOVE the widget would fall
-     outside that rect and be unclickable, and widening every widget's region upward would eat
-     game clicks along a strip that looks empty. Inside the box it's already covered.
+     🔑 Why the clipping hood exists: the slide is `translateY(100%)` on the bar, and the hood's
+     `overflow:hidden` is what turns "pushed down over the widget" into "hidden behind it". Without
+     the hood the parked bar would sit visibly across the widget's top and swallow its clicks.
 
-     It also stays BELOW .wmove (z 50), so arrange mode's drag shield wins and the header's
-     buttons can't block a drag. Styling mirrors bindingwidget.html's own top bar. */
-  .whead { position: absolute; left: 0; right: 0; top: 0; z-index: 40;
-    display: flex; align-items: center; gap: 6px; padding: 5px 7px 5px 9px;
-    opacity: 0; pointer-events: none; transition: opacity 0.12s ease;
-    background: linear-gradient(180deg, rgba(8, 17, 26, 0.95), rgba(8, 17, 26, 0.72));
-    border-bottom: 1px solid var(--divider); border-radius: 10px 10px 0 0; }
-  /* Revealed on hover, and by `.touched` — set when the embedded page reports a pointerdown.
-     Hover alone would rely on the wrapper tracking a cursor that's over a child IFRAME; the
-     touched path goes through the same-origin bridge, so the header is reachable either way. */
-  .widget:hover .whead, .widget.touched .whead { opacity: 1; pointer-events: auto; }
-  .widget.moving .whead { display: none; } /* arrange mode: the drag shield owns the widget */
+     🔑 Why hovering the bar doesn't make it retract: CSS :hover follows the DOM tree, not
+     geometry, so hovering this absolutely-positioned child still counts as hovering .widget even
+     though it's outside the widget's box. The cursor can travel up off the widget onto the bar and
+     it stays out. (The bar's rect is reported to the shell only while it's out — see RSEL — so a
+     retracted bar never eats a click meant for the game.) */
+  .whood { position: absolute; left: 0; right: 0; bottom: 100%; height: var(--whead-h, 28px);
+    overflow: hidden; pointer-events: none; z-index: 30; }
+  .whead { position: absolute; left: 0; right: 0; bottom: 0; height: var(--whead-h, 28px);
+    box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 9px;
+    pointer-events: none; transform: translateY(100%); transition: transform 0.16s ease;
+    background: linear-gradient(180deg, rgba(8, 17, 26, 0.96), rgba(8, 17, 26, 0.82));
+    border: 1px solid var(--border); border-bottom: 0; border-radius: 9px 9px 0 0; }
+  /* Slid out on hover, and by `.touched` — set when an embedded page reports a pointerdown, since
+     hover alone would rely on the wrapper tracking a cursor that's over a child IFRAME. */
+  .widget:hover .whead, .widget.touched .whead { transform: translateY(0); pointer-events: auto; }
+  .widget.moving .whood { display: none; } /* arrange mode: the drag shield owns the widget */
   .whead .dia { width: 6px; height: 6px; flex: none; background: var(--cyan-bright);
     transform: rotate(45deg); box-shadow: 0 0 8px var(--cyan); }
   .wh-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2042,12 +2048,12 @@
       const label = w.moveLabel || "⠿ Drag to move · corner to resize";
       return '<div class="' + cls + '" id="w-' + w.key + '" style="' + style + '">'
         + '<iframe id="wf-' + w.key + '" title="' + escapeAttr(w.title) + '"' + allow + ' scrolling="no"></iframe>'
-        + '<div class="whead">'
+        + '<div class="whood"><div class="whead">'
         + '<span class="dia"></span><span class="wh-title">' + escapeHtml(w.title) + '</span>'
         + '<button type="button" class="wh-btn wh-reset" title="Reset this widget’s position and size">↺</button>'
         + '<button type="button" class="wh-btn wh-cog" title="Settings">⚙</button>'
         + '<button type="button" class="wh-btn wh-close" title="Close ' + escapeAttr(w.title) + '">✕</button>'
-        + '</div>'
+        + '</div></div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
         + '</div>';
@@ -2591,7 +2597,10 @@
       // so its rect ≈ the visible widget. NOTIFIERS are deliberately excluded from the blanket
       // rule and matched only while a card is up (.live) or being arranged — an idle SC Feed must
       // never eat a click meant for the game.
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .gtabs";
+      // The slid-out title bar sits ABOVE its widget, outside the rect getBoundingClientRect()
+      // reports for .widget — so it needs reporting in its own right, but ONLY while it's out.
+      // A parked bar must not leave a permanently-clickable strip hanging over the game.
+      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .gtabs, .widget:hover .whead, .widget.touched .whead";
       const reportRegions = () => {
         const rects = [];
         document.querySelectorAll(RSEL).forEach((el) => {
