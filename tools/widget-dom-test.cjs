@@ -416,6 +416,118 @@ const REACH = `(async () => {
   return out;
 })()`;
 
+// ── Suite 6: sweeps ───────────────────────────────────────────────────────────
+// The pair suite fixes one dimension (which widgets are stacked) and holds everything else at its
+// default. These sweep the OTHER dimensions - every manufacturer skin, the full size range, the
+// full text-size range - because a bug in one skin or at one extreme is otherwise only ever found
+// by a user. All of them assert the same thing: content stays inside the box it was given.
+const THEMES = ["mobiglas", "drake", "anvil", "greys", "argo", "misc", "aegis", "crusader", "rsi",
+                "mirai", "origin", "esperia", "banu", "gatac", "kruger", "cnou"];
+const SWEEPS = `(async () => {
+  ${PRELUDE}
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(500);
+
+  const frameBox = (w) => (w.local ? el(w).getBoundingClientRect()
+                                   : document.getElementById("wf-" + w.key).getBoundingClientRect());
+  const innerFit = (w) => {
+    try {
+      if (w.local) return null;
+      const doc = document.getElementById("wf-" + w.key).contentDocument;
+      const panel = doc && (doc.getElementById("panel") || doc.getElementById("card"));
+      if (!panel) return null;
+      const f = frameBox(w), pr = panel.getBoundingClientRect();
+      return { ox: Math.round(pr.width - f.width), oy: Math.round(pr.height - f.height) };
+    } catch { return null; }
+  };
+  const fits = (w) => { const o = innerFit(w); return !o || (o.ox <= 2 && o.oy <= 2); };
+  const root = document.documentElement, theme0 = root.getAttribute("data-theme");
+  const THEMES = ${JSON.stringify(THEMES)};
+
+  // ── theme sweep: every skin, every widget ───────────────────────────────────
+  // A skin is a token swap plus per-theme trinket images, so the things that break are a missing
+  // asset (renders as nothing) and a rule that changes layout.
+  const themeBad = [], missingArt = [];
+  for (const th of THEMES) {
+    root.setAttribute("data-theme", th);
+    for (const w of WIDGETS) { syncWidgetTheme(w); }
+    await sleep(30);
+    for (const w of WIDGETS) {
+      if (!fits(w)) themeBad.push(th + "/" + w.key + " " + JSON.stringify(innerFit(w)));
+      const box = frameBox(w);
+      if (box.width < 40 || box.height < 40) themeBad.push(th + "/" + w.key + " collapsed");
+    }
+    // trinket art actually resolves (a 404 renders as an empty box, silently)
+    for (const sel of [".tape.tr", ".tape.bl", ".corner.tr", ".corner.bl", ".bolt.tr", ".bolt.bl"]) {
+      for (const node of document.querySelectorAll(".flair " + sel)) {
+        if (getComputedStyle(node).display === "none") continue;
+        if (node.tagName === "IMG") { if (!node.complete || node.naturalWidth === 0) missingArt.push(th + " " + sel); }
+        else {
+          const bg = getComputedStyle(node).backgroundImage;
+          if (!bg || bg === "none") missingArt.push(th + " " + sel + " (no image)");
+        }
+      }
+    }
+  }
+  if (theme0) root.setAttribute("data-theme", theme0); else root.removeAttribute("data-theme");
+  ok("every skin renders every widget without breaking layout", themeBad.length === 0, themeBad.slice(0, 5).join(" | "));
+  ok("every skin's trinket art resolves", missingArt.length === 0, [...new Set(missingArt)].slice(0, 6).join(" | "));
+
+  // ── size sweep: both ends of every widget's clamp range ─────────────────────
+  const sizeBad = [];
+  for (const w of WIDGETS) {
+    for (const [lbl, ww, hh] of [["min", w.size.minW, w.size.minH], ["max", w.size.maxW, w.size.maxH]]) {
+      if (ww == null) continue;
+      w.s.w = Math.min(ww, 1600); w.s.h = Math.min(hh, 1200); // keep it inside the test viewport
+      applyFrame(w); await sleep(20);
+      if (!fits(w)) sizeBad.push(w.key + "@" + lbl + " " + JSON.stringify(innerFit(w)));
+      const b = frameBox(w);
+      if (b.width < 40 || b.height < 30) sizeBad.push(w.key + "@" + lbl + " collapsed to " + Math.round(b.width) + "x" + Math.round(b.height));
+    }
+    resetWidget(w);
+  }
+  ok("every widget survives both ends of its size range", sizeBad.length === 0, sizeBad.slice(0, 5).join(" | "));
+
+  // ── text-size sweep: 70% to 200% ────────────────────────────────────────────
+  // This is the control that replaced scaling, so it has to hold at both extremes: a widget must
+  // not spill out of its box at 200%, and must not collapse at 70%.
+  const textBad = [];
+  for (const w of WIDGETS) {
+    for (const scale of [0.7, 1, 1.5, 2]) {
+      w.s.text = scale; applyTextScale(w); await sleep(25);
+      if (!fits(w)) textBad.push(w.key + "@" + Math.round(scale * 100) + "% " + JSON.stringify(innerFit(w)));
+    }
+    w.s.text = null; applyTextScale(w);
+  }
+  ok("every widget holds its box from 70% to 200% text", textBad.length === 0, textBad.slice(0, 5).join(" | "));
+
+  // ── stacks of three and four ────────────────────────────────────────────────
+  // Pairs never exercise tab overflow in the bar, which is where a third and fourth tab land.
+  while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+  const quad = ["party", "mining", "battaglia", "notepad"].map(k => WBY[k]);
+  groupWidgets(quad[1], quad[0]);
+  groupWidgets(quad[2], quad[0]);
+  groupWidgets(quad[3], quad[0]);
+  await sleep(60);
+  const g4 = GROUPS[0];
+  ok("four widgets stack into one group", g4 && g4.members.length === 4, g4 && g4.members.join(","));
+  const bar4 = el(WBY[g4.active]).querySelector(".whead");
+  const tabs4 = bar4.querySelectorAll(".wh-tabs .gtab:not(.gdetach)").length;
+  ok("the bar shows a tab per member", tabs4 === 4, tabs4);
+  // the tab row must not push the controls off the bar
+  const right4 = bar4.querySelector(".wh-right").getBoundingClientRect();
+  const barR = bar4.getBoundingClientRect();
+  ok("controls stay on the bar with four tabs",
+     right4.right <= barR.right + 1 && right4.width > 20,
+     "controls end " + Math.round(right4.right) + " bar ends " + Math.round(barR.right));
+  ok("exactly one member of a four-stack is on screen",
+     g4.members.filter(k => shown(WBY[k])).length === 1,
+     g4.members.filter(k => shown(WBY[k])).join(","));
+  while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+  for (const w of WIDGETS) resetWidget(w);
+  return out;
+})()`;
+
 // ── Suite 3: restore from a saved (and partly corrupt) layout ──────────────────
 const RESTORE = `(async () => {
   ${PRELUDE}
@@ -442,6 +554,21 @@ const RESTORE = `(async () => {
 async function run(label, script, preload) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
+  // A widget that logs an error or 404s an asset is broken even when every assertion passes -
+  // a missing image just renders as nothing. Capture both and fail the run on them.
+  const noise = [];
+  win.webContents.on("console-message", (...a) => {
+    const e = a[0], lvl = typeof e === "object" ? e.level : a[1], msg = typeof e === "object" ? e.message : a[2];
+    if ((lvl === "error" || lvl >= 2) && !/Security Warning/.test(String(msg))) noise.push("console: " + String(msg).slice(0, 120));
+  });
+  // The third-party emote providers answer 404 for a channel that simply isn't registered with
+  // them, which is the common case and not a fault - don't fail a run over it.
+  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\//;
+  win.webContents.session.webRequest.onCompleted({ urls: ["*://*/*"] }, (d) => {
+    if (d.statusCode < 400) return;
+    if (d.statusCode === 404 && EXPECTED_404.test(d.url)) return;
+    noise.push("HTTP " + d.statusCode + " " + d.url.replace(/^https?:\/\//, "").slice(0, 70));
+  });
   try {
     await win.loadURL(URL);
     const res = await win.webContents.executeJavaScript(script);
@@ -451,7 +578,10 @@ async function run(label, script, preload) {
       if (!r.pass) fails++;
       console.log((r.pass ? "  ok   " : "  FAIL ") + r.name + (r.detail ? "   [" + r.detail + "]" : ""));
     }
-    console.log(`  ${res.length - fails}/${res.length} passed` + (fails ? `  <<< ${fails} FAILED` : ""));
+    const uniq = [...new Set(noise)];
+    if (uniq.length) { fails++; console.log("  FAIL console/network clean   [" + uniq.slice(0, 4).join(" | ") + "]"); }
+    else console.log("  ok   console/network clean");
+    console.log(`  ${res.length + 1 - fails}/${res.length + 1} passed` + (fails ? `  <<< ${fails} FAILED` : ""));
     return fails;
   } finally { win.destroy(); }
 }
@@ -467,6 +597,7 @@ app.whenReady().then(async () => {
     fails += await run("pair merges (brute force)", PAIRS, null);
     fails += await run("title-bar chrome", CHROME, null);
     fails += await run("controls visible + reachable", REACH, null);
+    fails += await run("sweeps: themes / sizes / text / stacks", SWEEPS, null);
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);

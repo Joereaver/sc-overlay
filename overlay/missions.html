@@ -2841,7 +2841,7 @@
       $("tgTimeRel").checked = PREFS.timeRelative !== false;
       $("tgMissionOcr").checked = !!PREFS.missionOcr;
       $("tgFabCapture").checked = !!PREFS.fabCapture;
-      const ang = widget.angle != null ? widget.angle : DEFAULT_ANGLE;
+      const ang = WBY.blueprint.s.angle != null ? WBY.blueprint.s.angle : DEFAULT_ANGLE;
       $("cogAngle").value = ang; $("cogAngleV").textContent = ang + "°";
       updateOcr();
       summonGlobalCog(); // clicking a widget cog reveals the global settings cog
@@ -2874,7 +2874,7 @@
   $("tgMissionOcr").addEventListener("change", () => { setPref({ missionOcr: $("tgMissionOcr").checked }); updateOcr(); });
   $("tgFabCapture").addEventListener("change", () => { setPref({ fabCapture: $("tgFabCapture").checked }); updateOcr(); });
   // Per-widget angle: live-apply on drag, persist on release (this widget only).
-  $("cogAngle").addEventListener("input", () => { widget.angle = Number($("cogAngle").value); $("cogAngleV").textContent = widget.angle + "°"; applyWidget(); });
+  $("cogAngle")?.addEventListener("input", () => { const bp = WBY.blueprint; bp.s.angle = Number($("cogAngle").value); $("cogAngleV").textContent = bp.s.angle + "°"; applyFrame(bp); persistW(bp); });
   $("cogAngle").addEventListener("change", () => persistWidget());
   $("openSettings").addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.openSettings?.(); setCog(false); });
 
