@@ -1,4 +1,17 @@
 {
+  "0.1.34": {
+    "date": "2026-07-26T00:58:33Z",
+    "notes": [
+      "The overlay is now a widget canvas — nine widgets you place, size and stack anywhere on screen: the Blueprint tracker, Mining Assistant, Notepad, Twitch Chat, SC Feed news, Party Split, a Battaglia grind tracker, any Web Page, and your Binding Chart. Drag one widget onto another's bar to GROUP them into a tabbed stack, and pop a tab back out whenever you like.",
+      "Every widget has the same hover bar now: move, reset, its own settings, and close — plus a text-size control (70–200%) so anything stays readable from 1080p to 4K.",
+      "Dragging is fixed. A widget used to freeze when you dragged it near another one and then jump to catch up — the neighbouring widget was swallowing the mouse. It tracks your cursor properly now, and every widget's bar comes out while you drag so you can see where a stack will land.",
+      "Reset puts a widget back in the MIDDLE of your screen, and the settings cog has a reset button for each widget — so a widget dragged off the edge of your monitor is always recoverable.",
+      "Hold-to-interact only applies while Star Citizen is in front. If you're on the desktop the overlay just works like a normal window, so your interact key no longer types into Discord or your browser.",
+      "A closed widget now really is closed — it stops polling, drops its connections and frees its memory instead of quietly running in the background. The Mining Assistant also stays properly silent when it's off screen or tabbed behind another widget.",
+      "Fixes: grouping the Battaglia tracker with the mission tracker no longer hides the tab bar; the Twitch Chat and Notepad bars retract again once you move away; and the Blueprint panel's settings menu opens beside its cog instead of off the top of the panel.",
+      "Lighter on your machine: the screen-reading loop no longer launches a Windows helper process every three seconds, and the overlay does less work while your cursor is nowhere near it."
+    ]
+  },
   "0.1.33": {
     "date": "2026-07-22T06:45:00Z",
     "notes": [
