@@ -933,7 +933,7 @@ function refreshTray() {
       { label: `Version ${app.getVersion()}`, enabled: false },
       {
         label: "View source on GitHub",
-        click: () => shell.openExternal("https://github.com/SubliminalsTV-Projects/sc-loadout-overlay"),
+        click: () => shell.openExternal("https://github.com/SubliminalsTV-Projects/sc-overlay"),
       },
       { type: "separator" },
       { label: "Quit", click: () => app.quit() },

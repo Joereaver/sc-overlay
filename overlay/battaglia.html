@@ -12,6 +12,10 @@
     <div class="ws-row">
       <button id="doneBtn" class="hbtn" type="button" title="Show tiers you have already finished">Show done</button>
     </div>
+    <div class="ws-sec">Elsewhere</div>
+    <div class="ws-row">
+      <button id="siteBtn" class="hbtn" type="button" title="Open this giver's full track on subliminal.gg">Track on the web ↗</button>
+    </div>
   </div>
 
 <script>/* AMD compatibility: apply the lite skin BEFORE first paint (no flash) when the shell asks for it. */
@@ -108,6 +112,9 @@
   .mrow .bp { flex: none; font-size: 9.5px; color: var(--cyan-dim); }
   .mrow .rp { flex: none; font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--gold); }
   .mrow.best { background: rgba(var(--accent-rgb), 0.07); }
+  .mrow.linked { cursor: pointer; }
+  .mrow.linked:hover { background: rgba(var(--accent-rgb), 0.14); }
+  .mrow.linked:hover .t { color: var(--cyan-bright); }
 
   /* Rank picker */
   .tabs { flex: none; display: flex; gap: 4px; flex-wrap: wrap; padding: 7px 12px;
@@ -156,6 +163,17 @@
   if (EMBEDDED) document.body.classList.add("embedded");
   // Same-origin bridge to the parent canvas (present only when embedded on the overlay).
   const host = () => (EMBEDDED && window.parent) ? window.parent.__battagliaHost : null;
+
+  /* Hand off to the companion site. Embedded, the shell opens the real browser (https only);
+     standalone in a browser tab, a normal new tab does the job. */
+  const SITE = "https://subliminal.gg";
+  function openSite(path) {
+    const url = SITE + path;
+    if (host()) host().openUrl(url);
+    else window.open(url, "_blank", "noopener");
+  }
+  /* Giver -> the site's /factions slug: lowercase, non-alphanumerics collapse to a dash. */
+  const giverSlug = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
   const POLL_MS = 20_000;
   const GIVER = new URLSearchParams(location.search).get("giver") || "";
@@ -280,12 +298,14 @@
     if (!showDone && hidden) {
       appendDoneSection("Completed rewards", gated.filter((r) => state(r) === "have"), true);
     }
-    // Intro rewards have no rank gate, so their only state is: has the mission been done yet?
-    // (Previously these rendered in the "got" style with no label, which said nothing at all.)
+    // These missions carry NO rank in the dataset — which means the field is absent, NOT that the
+    // mission is ungated. 992 of 2763 missions are like this, and givers use rank 0 and null side
+    // by side, so "no rank listed" is the only claim the data supports. Don't call them "intro" or
+    // imply they're the start of the track. Their only honest state is: done yet or not?
     const freeShown = showDone ? free : free.filter((r) => !r.received);
     const freeHidden = free.length - freeShown.length;
     if (freeShown.length) {
-      section("Guaranteed from intro missions");
+      section("Guaranteed · rank not listed");
       for (const r of freeShown) {
         const row = document.createElement("div");
         row.className = "ship " + (r.received ? "have" : "open");
@@ -304,7 +324,7 @@
       }
     }
     if (!showDone && freeHidden) {
-      appendDoneSection("Completed intro rewards", free.filter((r) => r.received), false);
+      appendDoneSection("Completed · rank not listed", free.filter((r) => r.received), false);
     }
     if (!shown.length && !freeShown.length && (hidden || freeHidden)) {
       const d = document.createElement("div"); d.className = "empty";
@@ -325,7 +345,7 @@
       : (track.ranks.find((r) => r.rank === tab)?.missions ?? []);
     if (!list.length) {
       const d = document.createElement("div"); d.className = "empty";
-      d.textContent = "No missions at this rank.";
+      d.textContent = tab === "intro" ? "No unranked missions on this track." : "No missions at this rank.";
       body.appendChild(d);
       return;
     }
@@ -341,6 +361,13 @@
       const rp = document.createElement("div"); rp.className = "rp";
       rp.textContent = m.rep ? "+" + num(m.rep) : "";
       row.append(t, bp, rp);
+      // The full mission breakdown (pools, payout, rep, rewards) lives on the site — the widget
+      // only has room for a summary, so clicking a row hands off to the page that has the detail.
+      if (m.key) {
+        row.classList.add("linked");
+        row.title = "Open this mission on subliminal.gg";
+        row.addEventListener("click", () => openSite("/missions/" + encodeURIComponent(m.key)));
+      }
       body.appendChild(row);
     }
   }
@@ -359,7 +386,7 @@
       b.addEventListener("click", () => { tab = key; render(); });
       el.appendChild(b);
     };
-    if (track.intro.length) mk("Intro", "intro", false);
+    if (track.intro.length) mk("Unranked", "intro", false);
     for (const r of track.ranks) {
       if (!r.missions.length) continue;
       mk("R" + r.rank, r.rank, cur >= 0 && r.rank > cur);
@@ -384,6 +411,7 @@
 
   $("modeBtn").addEventListener("click", () => { mode = mode === "rewards" ? "missions" : "rewards"; render(); });
   $("doneBtn").addEventListener("click", () => { showDone = !showDone; render(); });
+  $("siteBtn").addEventListener("click", () => openSite("/factions/" + giverSlug(track?.faction || "Recco Battaglia")));
   // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
