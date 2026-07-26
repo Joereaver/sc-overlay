@@ -410,21 +410,29 @@
      Binding Chart — is the same object: an iframe this canvas positions and sizes while the
      embedded page just renders. These used to be eight hand-copied CSS blocks differing only in
      their custom-property names; the per-widget values now come from the WIDGETS registry, which
-     writes --wx/--wy/--ww/--wh (and --wscale/--wangle for the scaled ones) onto each element.
+     writes --wx/--wy/--ww/--wh/--wangle (and --wscale for the scaled ones) onto each element.
 
      Two shapes exist:
-      · BOX (default) — flat, and the corner drag grows the box so you see MORE content. Right for
-        anything text-bearing (notes, chat, tables), where a perspective tilt hurts readability.
-      · SCALED (.scaled, Mining only) — tilted + zoomed as one unit, because its content is a
-        fixed-size readout rather than a scrollable document. Its iframe is also sized snugly to
-        its content by the embedded page (host.setSize writes inline width/height, which wins
-        over the vars below). */
-  .widget { position: absolute; left: var(--wx, 40px); top: var(--wy, 60px); z-index: var(--wz, 20); }
+      · BOX (default) — the corner drag grows the box so you see MORE content. Right for anything
+        text-bearing (notes, chat, tables).
+      · SCALED (.scaled) — tilted + zoomed as one unit, for content that is a fixed-size readout
+        rather than a scrollable document. Nothing uses it today (Mining went box-shaped in
+        0.1.34); the shape is kept because the geometry code still branches on it.
+
+     🔑 The ANGLE is not part of that split. Every widget tilts — it's the HUD look, and Sub wants
+     a left-hand and a right-hand widget able to angle inward independently. It used to be written
+     only inside the `scaled` branch of applyFrame(), so the moment the last scaled widget became
+     a box NOTHING honoured --wangle any more and both angle sliders in the app moved a value
+     nobody read. */
+  .widget { position: absolute; left: var(--wx, 40px); top: var(--wy, 60px); z-index: var(--wz, 20);
+    transform-origin: 0 0; /* top-left anchor, so tilting doesn't walk the widget off its corner */
+    transform: perspective(1700px) rotateY(var(--wangle, 0deg)); }
   .widget > iframe { display: block; width: var(--ww, 340px); height: var(--wh, 380px); border: 0;
     background: transparent; color-scheme: normal; }
-  .widget.scaled { transform-origin: 0 0; /* top-left anchor for resize/scale */
-    transform: perspective(1700px) rotateY(var(--wangle, -5deg)) scale(var(--wscale, 1)); }
-  html.amd-lite .widget.scaled { transform: scale(var(--wscale, 1)); }
+  .widget.scaled { transform: perspective(1700px) rotateY(var(--wangle, 0deg)) scale(var(--wscale, 1)); }
+  /* AMD compat: no 3D transform over the game's Vulkan surface (same reason as #panel above). */
+  html.amd-lite .widget { transform: none !important; }
+  html.amd-lite .widget.scaled { transform: scale(var(--wscale, 1)) !important; }
 
   /* Arrange-mode drag surface (also the drag shield over the iframe, which would otherwise
      swallow the pointer) + corner resize handle — both parent-owned, so an embedded page's own
@@ -526,9 +534,14 @@
     border: 1px solid var(--border); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); }
   .widget.cfgopen .wcfg { display: block; }
   .wcfg-row { display: flex; align-items: center; gap: 6px; }
+  .wcfg-row + .wcfg-row { margin-top: 7px; }
   .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-text); }
-  .wcfg-val { font-family: var(--mono); font-size: 10px; color: var(--faint); min-width: 34px; text-align: right; }
+  .wcfg-val, .wcfg-angv { font-family: var(--mono); font-size: 10px; color: var(--faint);
+    min-width: 34px; text-align: right; }
+  .wcfg-ang { flex: none; width: 84px; accent-color: var(--cyan); height: 4px; cursor: pointer; }
+  /* The tilt only means anything on the free-floating canvas; an OBS browser source is flat. */
+  body:not(.canvas) .wcfg-angrow { display: none; }
 
   /* Group tabs — left half of the same bar. */
   .gtab { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1250,8 +1263,8 @@
   // panel keeps its original fixed layout there).
   const CANVAS = !!window.overlayApi || new URLSearchParams(location.search).has("canvas");
   // This widget's layout inside the canvas. null = unset (falls back to a default/baseline).
-  const DEFAULT_ANGLE = 5; // this widget's resting skew until the user changes it (angles right-in)
-  // (the panel's layout state lives on its registry entry - see WBY.blueprint.s)
+  // (the panel's layout state lives on its registry entry - see WBY.blueprint.s; the resting
+  //  angle is 0° — flat — for every widget, and each one carries its own from there.)
   // Global cog is SUMMONED, not always-on: it appears when a widget's cog is clicked (this
   // window's, or the Mining window's via IPC) and fades out again when unused, so it's only
   // there when the person needs it. Shared state so the hub can keep it alive while open.
@@ -2046,8 +2059,11 @@
       host: (w) => ({
         setModal: (on) => window.overlayApi?.setModal?.(!!on),
         requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
-        getAngle: () => (w.s.angle != null ? w.s.angle : w.angle),
-        setAngle: (deg) => { w.s.angle = Number(deg); applyFrame(w); },
+        // Mining's settings menu has its own angle slider; it drives the parent's state like every
+        // other widget's does, so a stacked Mining tilts the whole stack.
+        getAngle: () => wAngle(w),
+        setAngle: (deg) => setWidgetAngle(w, deg),
+        persist: () => persistLayout(w),
       }),
     },
     {
@@ -2151,6 +2167,9 @@
     ? !document.body.classList.contains("bp-hidden")
     : (wEl(w) && wEl(w).style.display !== "none"));
   const wScale = (w) => (w.s.scale != null ? w.s.scale : Math.max(50, Math.min(200, Number(PREFS.overlayScale) || 100)) / 100);
+  // Declared up here because buildWidgetEls() below runs immediately and stamps it into the markup;
+  // the rest of the angle machinery lives with the geometry code further down.
+  const ANGLE_MAX = 35;
 
   // Generate every widget's markup into #widgets (see the container in the body).
   function buildWidgetEls() {
@@ -2187,6 +2206,10 @@
         + '<button type="button" class="wh-btn wcfg-dn" title="Smaller text">A−</button>'
         + '<button type="button" class="wh-btn wcfg-up" title="Bigger text">A+</button>'
         + '<span class="wcfg-val"></span></div>'
+        + '<div class="wcfg-row wcfg-angrow"><span class="wcfg-lbl">Angle</span>'
+        + '<input type="range" class="wcfg-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1" value="0"'
+        + ' title="Tilt this widget left or right" />'
+        + '<span class="wcfg-angv"></span></div>'
         + '</div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -2213,6 +2236,28 @@
   const boxH = (w) => (w.s.h != null ? w.s.h : w.size.h);
   function saveGroups() { window.overlayApi?.saveWidget?.("__groups", { list: GROUPS }); }
 
+  // ── Per-widget angle ────────────────────────────────────────────────────────────────────
+  // The left↔right yaw that gives the HUD its helmet-projection look. Per WIDGET, so a panel on
+  // the left and one on the right can each angle inward. A STACK shares one angle: the members
+  // share a box, so letting each tab carry its own would tilt the frame every time you switched
+  // tab. Range matches the old global overlayTwist config at ±ANGLE_MAX (declared above).
+  const wAngle = (w) => {
+    const g = groupOf(w);
+    if (g && g.angle != null) return g.angle;
+    return w.s.angle != null ? w.s.angle : (w.angle != null ? w.angle : 0);
+  };
+  const clampAngle = (deg) => Math.max(-ANGLE_MAX, Math.min(ANGLE_MAX, Math.round(Number(deg) || 0)));
+  function setWidgetAngle(w, deg) {
+    const v = clampAngle(deg);
+    const g = groupOf(w);
+    if (g) { g.angle = v; applyGroup(g); } else { w.s.angle = v; applyFrame(w); }
+    showAngle(w);
+    return v;
+  }
+  // Where a widget's layout belongs: a stacked one lives on its GROUP, so writing w.s through
+  // would save a value nothing reads back.
+  function persistLayout(w) { if (groupOf(w)) saveGroups(); else persistW(w); }
+
   function applyFrame(w) {
     const el = wEl(w); if (!el) return;
     const ox = canvasInfo?.px || 0, oy = canvasInfo?.py || 0;
@@ -2220,11 +2265,13 @@
     const x = g ? g.x : w.s.x, y = g ? g.y : w.s.y;
     if (x != null) el.style.setProperty("--wx", (x + ox) + "px");
     if (y != null) el.style.setProperty("--wy", (y + oy) + "px");
-    // A scaled widget (Mining) drops to box shape while grouped, so every tab in a stack is the
-    // same size — its own setSize is ignored for the same reason (see the registry's host).
+    // Angle applies to EVERY widget, whatever its shape and whether or not it's stacked — see the
+    // note on .widget in the CSS for why it can't live in the `scaled` branch below.
+    el.style.setProperty("--wangle", wAngle(w) + "deg");
+    // A scaled widget drops to box shape while grouped, so every tab in a stack is the same size —
+    // its own setSize is ignored for the same reason (see the registry's host).
     if (w.shape === "scaled" && !g) {
       el.style.setProperty("--wscale", wScale(w));
-      el.style.setProperty("--wangle", (w.s.angle != null ? w.s.angle : w.angle) + "deg");
     } else {
       el.style.setProperty("--ww", (g ? g.w : boxW(w)) + "px");
       el.style.setProperty("--wh", (g ? g.h : boxH(w)) + "px");
@@ -2269,7 +2316,7 @@
     let g = groupOf(b);
     if (!g) {
       g = { id: "g" + Date.now().toString(36), x: b.s.x, y: b.s.y, w: boxW(b), h: boxH(b),
-            members: [b.key], active: b.key };
+            angle: wAngle(b), members: [b.key], active: b.key };
       GROUPS.push(g);
     }
     const prev = groupOf(a);
@@ -2289,6 +2336,7 @@
     // instead of landing exactly on top of the stack it just left.
     const off = opts && opts.keepPlace ? 0 : 24;
     w.s.x = g.x + off; w.s.y = g.y + off; w.s.w = g.w; w.s.h = g.h;
+    if (g.angle != null) w.s.angle = g.angle; // keep the tilt it had while stacked
     if (g.active === w.key) g.active = g.members[0] || null;
     if (g.members.length < 2) {
       // Drop the group BEFORE re-applying the survivor: applyFrame() reads groupOf(), so doing it
@@ -2298,6 +2346,7 @@
       for (const k of survivors) {
         const m = WBY[k]; if (!m) continue;
         m.s.x = g.x; m.s.y = g.y; m.s.w = g.w; m.s.h = g.h;
+        if (g.angle != null) m.s.angle = g.angle;
         persistW(m); applyFrame(m); showEl(m, m.s.visible);
       }
     } else {
@@ -2308,10 +2357,12 @@
     saveGroups();
   }
 
+  // 🔑 `angle` is saved for BOTH shapes. It used to be written only in the scaled branch, so a box
+  // widget's tilt was forgotten on restart even once it applied.
   function persistW(w) {
     const layout = w.shape === "scaled"
       ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text }
-      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, text: w.s.text };
+      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text };
     window.overlayApi?.saveWidget?.(w.key, layout);
   }
 
@@ -2339,8 +2390,60 @@
     const r = wSettingsRoot(w); const inj = r?.querySelector(".wtext-val"); if (inj) out.push(inj);
     return out;
   };
+  // ── Per-widget angle, part 2: the controls ──────────────────────────────────────────────
+  // Every place an angle can be read or driven from, for ONE widget: the popover on its own bar,
+  // the row injected into a page that has its own settings menu, and — for the two widgets that
+  // shipped a bespoke slider (the Blueprint panel, Mining) — that slider. They all drive the same
+  // state, so they all have to show the same number.
+  const angleControls = (w) => {
+    const out = [];
+    const el = wEl(w);
+    const own = el?.querySelector(".wcfg-ang");
+    if (own) out.push({ input: own, val: el.querySelector(".wcfg-angv") });
+    const r = wSettingsRoot(w);
+    if (r) {
+      const inj = r.querySelector(".wang-ang");
+      if (inj) out.push({ input: inj, val: r.querySelector(".wang-val") });
+      const bespoke = r.querySelector("#cogAngle");
+      if (bespoke) out.push({ input: bespoke, val: r.querySelector("#cogAngleV") });
+    }
+    return out;
+  };
+  function showAngle(w) {
+    const deg = wAngle(w);
+    for (const c of angleControls(w)) {
+      if (c.input) c.input.value = String(deg);
+      if (c.val) c.val.textContent = deg + "°";
+    }
+  }
   // Inject a Text size row into a page's OWN settings menu, so its cog opens one place with
   // everything in it (Sub, 2026-07-25) rather than a popover that points at a second menu.
+  // Angle rides along for the same reason — it's the other control the frame owns rather than the
+  // page, and without it a widget whose page has settings had no way to be tilted at all.
+  function injectWidgetRows(w) {
+    injectTextRow(w);
+    injectAngleRow(w);
+    showAngle(w);
+  }
+  function injectAngleRow(w) {
+    const root = wSettingsRoot(w);
+    // Nothing to do for a page that already has its own angle slider (Mining), or the Blueprint
+    // panel, whose cog menu carries one — a second control for the same value reads as a bug.
+    if (!root || root.querySelector(".wang-row") || root.querySelector("#cogAngle")) return;
+    const doc = root.ownerDocument;
+    const row = doc.createElement("div");
+    row.className = "wang-row";
+    row.style.cssText = "display:flex;align-items:center;gap:6px;padding:6px 12px;";
+    row.innerHTML = '<span style="flex:1;font-size:11px;letter-spacing:.06em;opacity:.85">Angle</span>'
+      + '<input type="range" class="wang-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1"'
+      + ' style="width:84px;height:4px;cursor:pointer;accent-color:var(--cyan,#45D0E0)" />'
+      + '<b class="wang-val" style="min-width:34px;text-align:right;font-size:10px;opacity:.75"></b>';
+    const input = row.querySelector(".wang-ang");
+    input.addEventListener("input", (e) => { e.stopPropagation(); setWidgetAngle(w, input.value); });
+    input.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
+    input.addEventListener("click", (e) => e.stopPropagation());
+    root.appendChild(row);
+  }
   function injectTextRow(w) {
     const root = wSettingsRoot(w);
     if (!root || root.querySelector(".wtext-row")) return;
@@ -2391,6 +2494,7 @@
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
     applyTextScale(w);
+    showAngle(w); // the sliders have to fall back to flat with it
     persistW(w);
   }
 
@@ -2422,11 +2526,12 @@
   // 🔑 Probed on the iframe's LOAD event, not just on the page's ready() call: a page can call
   // ready() before it finishes defining its own exports, so a ready-only probe misses them.
   function probeSettings(w) {
-    if (w.local) { wEl(w)?.classList.add("has-settings"); injectTextRow(w); return; }
+    if (w.local) { wEl(w)?.classList.add("has-settings"); injectWidgetRows(w); return; }
     try {
       const has = typeof frameWin(w)?.__widgetSettings === "function";
       wEl(w)?.classList.toggle("has-settings", has);
-      if (has) injectTextRow(w);
+      if (has) injectWidgetRows(w);
+      else showAngle(w); // its own popover carries the slider instead
     } catch { /* iframe gone */ }
   }
 
@@ -2695,15 +2800,22 @@
         // ONE destination. A page with its own settings opens THAT (the Text size row was injected
         // into it); everything else opens the local popover, which carries Text size itself.
         if (el.classList.contains("has-settings")) {
-          try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); } catch { /* iframe gone */ }
+          try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); } catch { /* iframe gone */ }
           return;
         }
         el.classList.add("cfgopen");
         showTextScale(w);
+        showAngle(w);
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
       el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
       el.querySelector(".wcfg-up")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, +0.1); });
+      // Live-apply while dragging, persist on release — the same shape as the Blueprint panel's
+      // slider, so a widget never saves an angle the user is still sweeping through.
+      const angIn = el.querySelector(".wcfg-ang");
+      angIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetAngle(w, angIn.value); });
+      angIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
+      angIn?.addEventListener("pointerdown", (e) => e.stopPropagation()); // don't start a widget drag
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
       el.querySelector(".wh-reset")?.addEventListener("click", (e) => { e.stopPropagation(); resetWidget(w); });
       // Engaging a widget's own chrome reveals its header too (the iframe can't report this one).
@@ -2979,8 +3091,8 @@
       $("tgTimeRel").checked = PREFS.timeRelative !== false;
       $("tgMissionOcr").checked = !!PREFS.missionOcr;
       $("tgFabCapture").checked = !!PREFS.fabCapture;
-      const ang = WBY.blueprint.s.angle != null ? WBY.blueprint.s.angle : DEFAULT_ANGLE;
-      $("cogAngle").value = ang; $("cogAngleV").textContent = ang + "°";
+      showAngle(WBY.blueprint); // this slider is one of that widget's angle controls
+
       updateOcr();
       summonGlobalCog(); // clicking a widget cog reveals the global settings cog
       window.overlayApi?.setModal?.(true);
@@ -3011,9 +3123,10 @@
   // Mission-name OCR on/off — read by the capture loop each poll (not a display pref).
   $("tgMissionOcr").addEventListener("change", () => { setPref({ missionOcr: $("tgMissionOcr").checked }); updateOcr(); });
   $("tgFabCapture").addEventListener("change", () => { setPref({ fabCapture: $("tgFabCapture").checked }); updateOcr(); });
-  // Per-widget angle: live-apply on drag, persist on release (this widget only).
-  $("cogAngle")?.addEventListener("input", () => { const bp = WBY.blueprint; bp.s.angle = Number($("cogAngle").value); $("cogAngleV").textContent = bp.s.angle + "°"; applyFrame(bp); persistW(bp); });
-  $("cogAngle").addEventListener("change", () => persistWidget());
+  // Per-widget angle: live-apply on drag, persist on release. Goes through setWidgetAngle so a
+  // grouped panel tilts its whole stack (and saves to the group) rather than to itself alone.
+  $("cogAngle")?.addEventListener("input", () => setWidgetAngle(WBY.blueprint, $("cogAngle").value));
+  $("cogAngle")?.addEventListener("change", () => persistLayout(WBY.blueprint));
   $("openSettings").addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.openSettings?.(); setCog(false); });
 
   // OCR activity (fabricator image capture + tracked-mission read). Fed by the Electron

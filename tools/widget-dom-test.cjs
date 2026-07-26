@@ -806,6 +806,98 @@ const LIFECYCLE = `(async () => {
   return out;
 })()`;
 
+// ── Suite 11: per-widget angle ────────────────────────────────────────────────
+// Sub's report: "people can't change the angle of the widget, and the newer ones don't even have
+// the option." Both were real. The angle was written to --wangle inside the `scaled` branch of
+// applyFrame() only — so when the last scaled widget (Mining) became a box in 0.1.34, the two
+// sliders that existed moved a value nothing read, and the seven widgets added since never got a
+// control at all. These assertions are per-widget on purpose: a fix that only works for the
+// Blueprint panel is the bug again.
+const ANGLE = `(async () => {
+  ${PRELUDE}
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(1200);                       // iframes must LOAD before their settings rows exist
+  for (const w of WIDGETS) probeSettings(w);
+  const tf = (w) => getComputedStyle(el(w)).transform;
+
+  // ── it applies at all ───────────────────────────────────────────────────────
+  const deaf = [], flat0 = new Map();
+  for (const w of WIDGETS) flat0.set(w.key, tf(w));
+  for (const w of WIDGETS) {
+    setWidgetAngle(w, 20);
+    const t = tf(w);
+    if (cs(w, "--wangle").trim() !== "20deg") deaf.push(w.key + " var=" + cs(w, "--wangle"));
+    else if (t === "none" || t === flat0.get(w.key)) deaf.push(w.key + " transform unchanged (" + t + ")");
+  }
+  ok("every widget actually tilts when its angle changes", deaf.length === 0, deaf.slice(0, 4).join(" | "));
+
+  const neg = [];
+  for (const w of WIDGETS) { setWidgetAngle(w, -20); if (cs(w, "--wangle").trim() !== "-20deg") neg.push(w.key); }
+  ok("...in both directions", neg.length === 0, neg.join(","));
+  ok("angle is clamped to the slider range", setWidgetAngle(WBY.notepad, 400) === 35 && setWidgetAngle(WBY.notepad, -400) === -35);
+  ok("a junk angle reads as flat, not NaNdeg", setWidgetAngle(WBY.notepad, "banana") === 0 && cs(WBY.notepad, "--wangle") === "0deg", cs(WBY.notepad, "--wangle"));
+
+  // ── every widget offers a way to change it ──────────────────────────────────
+  const noCtl = [], dead = [];
+  for (const w of WIDGETS) {
+    const ctls = angleControls(w).filter(c => c.input);
+    if (!ctls.length) { noCtl.push(w.key); continue; }
+    // and the control is wired: driving the input must move the widget
+    const input = ctls[0].input;
+    input.value = "12";
+    input.dispatchEvent(new (input.ownerDocument.defaultView.Event)("input", { bubbles: true }));
+    await sleep(20);
+    if (cs(w, "--wangle").trim() !== "12deg") dead.push(w.key + " -> " + cs(w, "--wangle"));
+  }
+  ok("every widget exposes an angle control", noCtl.length === 0, noCtl.join(",") || "all nine");
+  ok("...and driving that control tilts the widget", dead.length === 0, dead.slice(0, 4).join(" | "));
+
+  // every control on a widget shows the SAME number (bespoke slider + injected row + popover)
+  const desync = [];
+  for (const w of WIDGETS) {
+    setWidgetAngle(w, -7);
+    for (const c of angleControls(w)) if (c.input && Number(c.input.value) !== -7) desync.push(w.key);
+  }
+  ok("all of a widget's angle controls agree", desync.length === 0, [...new Set(desync)].join(","));
+
+  // ── it survives a restart ───────────────────────────────────────────────────
+  const saved = [];
+  window.overlayApi = Object.assign({}, window.overlayApi, {
+    saveWidget: (id, l) => saved.push([id, JSON.parse(JSON.stringify(l))]),
+  });
+  setWidgetAngle(WBY.notepad, -13); persistLayout(WBY.notepad);
+  const rec = saved.filter(s => s[0] === "notepad").pop();
+  ok("a box widget's angle is persisted", rec && rec[1].angle === -13, rec ? JSON.stringify(rec[1]) : "nothing saved");
+
+  // ── a stack shares one angle ────────────────────────────────────────────────
+  while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+  setWidgetAngle(WBY.party, 15);
+  groupWidgets(WBY.notepad, WBY.party);   // notepad dropped onto party
+  await sleep(60);
+  const g = GROUPS[0];
+  ok("a new group takes the host widget's angle", g && g.angle === 15, g && g.angle);
+  ok("both members render the group's angle",
+     cs(WBY.party, "--wangle") === "15deg" && cs(WBY.notepad, "--wangle") === "15deg",
+     cs(WBY.party, "--wangle") + " / " + cs(WBY.notepad, "--wangle"));
+  saved.length = 0;
+  setWidgetAngle(WBY.notepad, -9); persistLayout(WBY.notepad);
+  ok("tilting one tab tilts the whole stack",
+     GROUPS[0].angle === -9 && cs(WBY.party, "--wangle") === "-9deg", cs(WBY.party, "--wangle"));
+  ok("a stacked widget saves its angle to the GROUP", saved.some(s => s[0] === "__groups"), saved.map(s => s[0]).join(","));
+  detachFromGroup(WBY.notepad);
+  await sleep(40);
+  ok("popping a tab out keeps the tilt it had", cs(WBY.notepad, "--wangle") === "-9deg", cs(WBY.notepad, "--wangle"));
+
+  // ── reset puts it back flat ─────────────────────────────────────────────────
+  resetWidget(WBY.notepad);
+  ok("reset flattens the widget", cs(WBY.notepad, "--wangle") === "0deg", cs(WBY.notepad, "--wangle"));
+  ok("...and its control follows", angleControls(WBY.notepad).every(c => !c.input || Number(c.input.value) === 0));
+
+  while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+  for (const w of WIDGETS) resetWidget(w);
+  return out;
+})()`;
+
 async function run(label, script, preload) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
@@ -858,6 +950,7 @@ app.whenReady().then(async () => {
     fails += await run("layout restore", RESTORE, path.join(__dirname, "widget-dom-stub-preload.cjs"));
     fails += await run("chrome anchoring + latches", ANCHOR, path.join(__dirname, "widget-dom-stub-preload.cjs"));
     fails += await run("lifecycle: closed = idle", LIFECYCLE, null);
+    fails += await run("per-widget angle", ANGLE, null);
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);
     console.error(`is the sidecar running? \`npm run overlay\` should be listening on :${PORT}`);
