@@ -92,6 +92,18 @@ npm run overlay
 
 ## Project status
 
-This repository is public for transparency and to accept contributions, but it is not open source. The software is licensed under the PolyForm Strict License 1.0.0. You may read the code, ask questions, and contribute improvements, but you may not redistribute it, ship a modified or rebranded build, or use it commercially without a separate written license.
+This repository is public for transparency and to accept contributions.
 
-If you want to contribute, the best path is to keep the changes aligned with the project's current direction: useful, local-first, and transparent.
+If you want to contribute, the best path is to keep the changes aligned with the project's current direction: useful, local-first, and transparent. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+SC Overlay is **source-available**, not open source. It is licensed under the [Functional Source License 1.1 with an MIT future licence (FSL-1.1-MIT)](LICENSE.md).
+
+In short: you may read, modify, fork and share the code, run your own build, and publish a **free** port to a platform this project does not support — a community Linux build is expressly fine. What you may not do is ship it inside a commercial product or service that substitutes for SC Overlay. Two years after each release, that version becomes MIT automatically.
+
+**Ports and forks are welcome.** Only Windows is officially supported and tested; if you build for another OS, please give it its own name and say plainly that it is an unofficial community build.
+
+**Names and logos are not licensed.** "SubliminalsTV", "SC Overlay", and the project's artwork are not covered by the licence — a fork needs its own branding. Star Citizen®, Roberts Space Industries® and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC; this is an unofficial fan project.
+
+If you want to do something the licence does not allow, ask: <sub@subliminal.gg>.

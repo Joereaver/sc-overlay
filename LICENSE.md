@@ -1,72 +1,163 @@
 Copyright © 2026 SubliminalsTV. All rights reserved.
 
-The source code of the SC Blueprint Tracker is made publicly viewable for
-transparency and to accept contributions. It is licensed under the PolyForm
-Strict License 1.0.0, reproduced in full below. In that license, the
-"licensor" is SubliminalsTV.
+SC Overlay is **source-available**, not open source. It is licensed under the
+**Functional Source License, Version 1.1, MIT Future License (FSL-1.1-MIT)**,
+reproduced verbatim below. In that license, "we" and "us" mean SubliminalsTV.
 
-You may read the source and submit contributions (see CONTRIBUTING). You may
-NOT distribute the software, ship a modified or rebranded build, or use it for
-a commercial purpose, without a separate written license from SubliminalsTV.
+## In plain English (summary only — the terms below are what govern)
+
+You **may**, without asking:
+
+- read, study and modify the source;
+- submit contributions (see CONTRIBUTING.md);
+- run your own modified build, including on hardware or an operating system
+  this project does not officially support;
+- publish and share a fork or a port — for example a community Linux build —
+  provided you are not selling it or using it to compete with this project;
+- use SC Overlay while streaming, including on a monetised channel. Using the
+  app is not "making the Software available to others."
+
+You **may not**:
+
+- ship it inside a commercial product or service that substitutes for
+  SC Overlay or offers substantially the same functionality — the "rename it
+  and sell it" case;
+- use the SubliminalsTV name, the SC Overlay name, or the project's logos to
+  brand your build. No license here grants trademark rights (see Trademarks),
+  so a fork must carry its own name.
+
+Two things worth knowing:
+
+- **Redistribution carries these terms with it.** If you share a fork, ship
+  this license with it and leave the copyright notices intact.
+- **Each release becomes MIT two years after it is published.** That grant is
+  irrevocable and automatic; it applies per version, from that version's own
+  release date.
+
+If you want to do something these terms do not allow, ask — a separate written
+license is always possible. Contact: sub@subliminal.gg
 
 ---
 
-# PolyForm Strict License 1.0.0
+# Functional Source License, Version 1.1, MIT Future License
 
-<https://polyformproject.org/licenses/strict/1.0.0>
+## Abbreviation
 
-## Acceptance
+FSL-1.1-MIT
 
-In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
+## Notice
 
-## Copyright License
+Copyright 2026 SubliminalsTV
 
-The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose, other than distributing the software or making changes or new works based on the software.
+## Terms and Conditions
 
-## Patent License
+### Licensor ("We")
 
-The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
+The party offering the Software under these Terms and Conditions.
 
-## Noncommercial Purposes
+### The Software
 
-Any noncommercial purpose is a permitted purpose.
+The "Software" is each version of the software that we make available under
+these Terms and Conditions, as indicated by our inclusion of these Terms and
+Conditions with the Software.
 
-## Personal Uses
+### License Grant
 
-Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
+Subject to your compliance with this License Grant and the Patents,
+Redistribution and Trademark clauses below, we hereby grant you the right to
+use, copy, modify, create derivative works, publicly perform, publicly display
+and redistribute the Software for any Permitted Purpose identified below.
 
-## Noncommercial Organizations
+### Permitted Purpose
 
-Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
+A Permitted Purpose is any purpose other than a Competing Use. A Competing Use
+means making the Software available to others in a commercial product or
+service that:
 
-## Fair Use
+1. substitutes for the Software;
 
-You may have "fair use" rights for the software under the law. These terms do not limit them.
+2. substitutes for any other product or service we offer using the Software
+   that exists as of the date we make the Software available; or
 
-## No Other Rights
+3. offers the same or substantially similar functionality as the Software.
 
-These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
+Permitted Purposes specifically include using the Software:
 
-## Patent Defense
+1. for your internal use and access;
 
-If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+2. for non-commercial education;
 
-## Violations
+3. for non-commercial research; and
 
-The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
+4. in connection with professional services that you provide to a licensee
+   using the Software in accordance with these Terms and Conditions.
 
-## No Liability
+### Patents
 
-***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
+To the extent your use for a Permitted Purpose would necessarily infringe our
+patents, the license grant above includes a license under our patents. If you
+make a claim against any party that the Software infringes or contributes to
+the infringement of any patent, then your patent license to the Software ends
+immediately.
 
-## Definitions
+### Redistribution
 
-The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
+The Terms and Conditions apply to all copies, modifications and derivatives of
+the Software.
 
-**You** refers to the individual or entity agreeing to these terms.
+If you redistribute any copies, modifications or derivatives of the Software,
+you must include a copy of or a link to these Terms and Conditions and not
+remove any copyright notices provided in or with the Software.
 
-**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
+### Disclaimer
 
-**Your licenses** are all the licenses granted to you for the software under these terms.
+THE SOFTWARE IS PROVIDED "AS IS" AND WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING WITHOUT LIMITATION WARRANTIES OF FITNESS FOR A PARTICULAR
+PURPOSE, MERCHANTABILITY, TITLE OR NON-INFRINGEMENT.
 
-**Use** means anything you do with the software requiring one of your licenses.
+IN NO EVENT WILL WE HAVE ANY LIABILITY TO YOU ARISING OUT OF OR RELATED TO THE
+SOFTWARE, INCLUDING INDIRECT, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES,
+EVEN IF WE HAVE BEEN INFORMED OF THEIR POSSIBILITY IN ADVANCE.
+
+### Trademarks
+
+Except for displaying the License Details and identifying us as the origin of
+the Software, you have no right under these Terms and Conditions to use our
+trademarks, trade names, service marks or product names.
+
+## Grant of Future License
+
+We hereby irrevocably grant you an additional license to use the Software under
+the MIT license that is effective on the second anniversary of the date we make
+the Software available. On or after that date, you may use the Software under
+the MIT license, in which case the following will apply:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## Third-party components
+
+This license covers the SC Overlay source code. It does not change the terms of
+anything bundled with it:
+
+- Third-party npm dependencies remain under their own licenses.
+- Star Citizen® game data, and any Cloud Imperium artwork used under the CIG
+  Fan Kit, remain the property of Cloud Imperium Rights LLC and are used under
+  their terms. They are not licensed to you by this document.
