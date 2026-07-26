@@ -1,0 +1,62 @@
+/* Skin trinkets — shared by the Blueprint panel (missions.html) and the Mining Assistant
+   (mining.html). Its own file because missions.html deliberately does NOT load
+   widget-theme.css (it carries its own token set inline, and the shared sheet's panel and
+   header rules would collide with its own). Link it RELATIVELY — `href="trinkets.css"` —
+   so it resolves both at the app's overlay root and under /sc-overlay/widgets/ on the site.
+   The site's sync copies every loose file beside the pages, so this ships automatically;
+   a root-absolute href would not be rewritten and would 404 there. */
+
+/* ── Skin trinkets: Drake tape · Anvil hardware · Argo/MISC cogs · Grey's bolts ──
+   These used to live in missions.html, which meant only the Blueprint panel could wear them —
+   the canvas injects a copy onto each flair widget's wrapper, so inside the app the Mining
+   widget looked right, but the SAME page opened on its own (the product page, an OBS browser
+   source, the LAN/phone URL) had no trinkets at all under any skin. They're the skin's
+   IDENTITY (Sub, 2026-07-25), so they belong to whichever widget opts in, not to one document.
+
+   OPT-IN BY MARKUP: a page gets these only by carrying the nodes. Today that's the Blueprint
+   panel and the Mining Assistant — per Sub's rule trinkets do NOT go on every widget, or
+   they'd be everywhere. Add `class="flair"` to a page's own #panel for the sizing the canvas
+   uses for embedded widgets (the bare #panel sizes are the Blueprint panel's).
+
+   🔑 The trinkets hang OUTSIDE the panel box, so a page carrying them must not be
+   `overflow:hidden` (contain content on an inner scroller instead) and needs a margin at
+   least as big as the overhang, or the frame edge clips them. */
+.tape { display: none; position: absolute; z-index: 31; pointer-events: none; user-select: none;
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, .5)); }
+:root[data-theme="drake"] #panel .tape, :root[data-theme="drake"] .flair .tape { display: block; }
+.tape.tr { width: 60px; top: -20px; right: -22px; transform: rotate(50deg); }
+.tape.bl { width: 60px; bottom: -34px; left: -30px; --trinket-rot: 19deg; }
+.flair .tape.tr { width: 62px; top: -18px; right: -20px; transform: rotate(44deg); }
+.flair .tape.bl { width: 66px; bottom: -30px; left: -26px; --trinket-rot: 13deg; }
+
+/* Anvil corner hardware — flathead bolt + screw head, so the HUD looks bolted into the cockpit. */
+.bolt { display: none; position: absolute; z-index: 31; pointer-events: none; user-select: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .55)); }
+:root[data-theme="anvil"] #panel .bolt, :root[data-theme="anvil"] .flair .bolt { display: block; }
+.bolt.tr { width: 30px; top: -9px; right: -9px; transform: rotate(12deg); }
+.bolt.bl { width: 29px; bottom: -9px; left: -9px; --trinket-rot: -15deg; }
+
+/* Generic corner slots, background-image set per theme: Argo + MISC get machine cogs (two
+   distinct each), Grey's a rusty bolt with exposed wires. Paths are relative to THIS file,
+   which sits alongside the art at the overlay root — same resolution as before the move. */
+.corner { display: none; position: absolute; z-index: 31; pointer-events: none;
+  background-size: contain; background-repeat: no-repeat; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .55)); }
+:root[data-theme="argo"] .corner, :root[data-theme="misc"] .corner,
+:root[data-theme="greys"] .corner { display: block; }
+/* Argo — chunky industrial cogs */
+:root[data-theme="argo"] .corner.tr { width: 34px; height: 34px; top: -12px; right: -12px; background-image: url(cog-argo-tl.png); }
+:root[data-theme="argo"] .corner.bl { width: 32px; height: 32px; bottom: -11px; left: -11px; background-image: url(cog-argo-br.png); }
+/* MISC — finer, cleaner gears */
+:root[data-theme="misc"] .corner.tr { width: 30px; height: 30px; top: -10px; right: -10px; background-image: url(cog-misc-tl.png); }
+:root[data-theme="misc"] .corner.bl { width: 31px; height: 31px; bottom: -11px; left: -11px; background-image: url(cog-misc-br.png); }
+/* Grey's — rusty bolt + exposed wires */
+:root[data-theme="greys"] .corner.tr { width: 46px; height: 46px; top: -15px; right: -15px; background-image: url(greys-corner-tl.png); }
+:root[data-theme="greys"] .corner.bl { width: 46px; height: 46px; bottom: -15px; left: -15px; background-image: url(greys-corner-br.png); }
+
+/* The BOTTOM trinket is anchored to the sliding bar: when the bar comes out it travels down with
+   it rather than being covered. `--trinket-shift` is set by whichever document owns a bar (the
+   canvas); a page opened on its own never sets it, so the trinket just sits still. Composing
+   through a variable keeps each trinket's own rotation intact. */
+.tape.bl, .bolt.bl, .corner.bl {
+  transform: translateY(var(--trinket-shift, 0px)) rotate(var(--trinket-rot, 0deg));
+  transition: transform 0.16s ease; }

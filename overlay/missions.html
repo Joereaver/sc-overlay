@@ -19,6 +19,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<!-- Skin trinkets (tape / bolts / cogs), shared with mining.html. Deliberately NOT
+     widget-theme.css: this page carries its own token set inline and the shared sheet's panel
+     and header rules would collide. Relative href — see the header of trinkets.css. -->
+<link rel="stylesheet" href="trinkets.css" />
 <style>
   /* Mission Control stream-overlay design language (SC diegetic HUD):
      navy-teal translucent glass, cyan system chrome, gold value accents,
@@ -231,24 +235,12 @@
     --strip: repeating-linear-gradient(90deg, rgba(227,123,54,.40) 0 4px, transparent 4px 8px, rgba(94,232,132,.30) 8px 9px, transparent 9px 13px);
   }
 
-  /* Duct-tape corner accents — Drake's field-repair design language, so they belong to
-     the Drake theme only. Sit on the panel (tilt with it), hang off the corner, lap a
-     little onto it without covering the header/footer text. */
-  .tape { display: none; position: absolute; z-index: 31; pointer-events: none; user-select: none;
-    filter: drop-shadow(0 3px 5px rgba(0,0,0,.5)); }
-  :root[data-theme="drake"] #panel .tape, :root[data-theme="drake"] .widget.flair .tape { display: block; }
-  .tape.tr { width: 60px; top: -20px; right: -22px; transform: rotate(50deg); }
-  .tape.bl { width: 60px; bottom: -34px; left: -30px; --trinket-rot: 19deg; }
-  .widget.flair .tape.tr { width: 62px; top: -18px; right: -20px; transform: rotate(44deg); }
-  .widget.flair .tape.bl { width: 66px; bottom: -30px; left: -26px; --trinket-rot: 13deg; }
-
-  /* Anvil corner hardware — flathead bolt + screw head, so the HUD looks bolted into the
-     cockpit. Anvil theme only; sits on the panel's outer corners (needs overflow:visible). */
-  .bolt { display: none; position: absolute; z-index: 31; pointer-events: none; user-select: none;
-    filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); }
-  :root[data-theme="anvil"] #panel .bolt, :root[data-theme="anvil"] .widget.flair .bolt { display: block; }
-  .bolt.tr { width: 30px; top: -9px; right: -9px; transform: rotate(12deg); }
-  .bolt.bl { width: 29px; bottom: -9px; left: -9px; --trinket-rot: -15deg; }
+  /* Drake's duct tape, Anvil's hardware, the Argo/MISC cogs and Grey's rusty bolts now live in
+     the shared widget-theme.css, so a widget page opened on its OWN (the product page, an OBS
+     source) wears them too — inside the canvas they were injected onto the wrapper, so only the
+     embedded case ever looked right. This document keeps just the two pieces that are genuinely
+     canvas-specific: the bar-follows shift below, and the brandtab/trialmark that belong to the
+     Blueprint panel alone. */
 
   /* ── Manufacturer logo folder-tab ───────────────────────────────────────────
      A file-folder-style tab on the panel's top-left that houses the ship's manufacturer
@@ -274,37 +266,15 @@
     border: 1px solid rgba(255,205,130,.6); padding: 5px 13px; border-radius: 7px; background: rgba(18,12,4,.78); }
   :root.demo .trialmark { display: block; }
 
-  /* ── Per-manufacturer corner hardware ───────────────────────────────────────
-     Generic corner slots (background-image set per theme), same idea as Drake's tape /
-     Anvil's bolts but data-driven: Argo + MISC get machine cogs (two distinct cogs each),
-     Grey's gets a rusty bolt with exposed wires. Sit just off the panel's corners. */
-  .corner { display: none; position: absolute; z-index: 31; pointer-events: none;
-    background-size: contain; background-repeat: no-repeat; filter: drop-shadow(0 2px 3px rgba(0,0,0,.55)); }
-  :root[data-theme="argo"] .corner, :root[data-theme="misc"] .corner,
-  :root[data-theme="greys"] .corner { display: block; }
-  /* 🔑 The trinkets are NOT chrome — they're the skin's identity, so they stay visible at all
-     times (Sub, 2026-07-25). The BOTTOM one is anchored to the bar: when the bar slides out it
-     travels down with it instead of vanishing or being covered. Corners are top-RIGHT and
-     bottom-LEFT so they clear the bar's right-justified controls and the panel's top-left
-     manufacturer folder tab. */
-  .tape.bl, .bolt.bl, .corner.bl {
-    transform: translateY(var(--trinket-shift, 0px)) rotate(var(--trinket-rot, 0deg));
-    transition: transform 0.16s ease; }
-  /* Whenever the bar is out, the bottom trinket shifts down by exactly the bar's height. Driven by
-     an inherited VARIABLE rather than a transform override, so it composes with each trinket's own
-     rotation and doesn't have to out-specify every per-theme rule. */
+  /* Whenever the bar is out, the bottom trinket shifts down by exactly the bar's height, so it
+     travels with the bar instead of being covered. Driven by an inherited VARIABLE rather than a
+     transform override, so it composes with each trinket's own rotation and doesn't have to
+     out-specify every per-theme rule (which live in widget-theme.css). This setter stays HERE:
+     it's about the canvas's sliding bar, and a widget page opened on its own has no bar — leaving
+     the variable unset there is exactly right, the trinket simply doesn't move. */
   #panel:hover, #panel.touched, #panel.moving, #panel.grouped,
   body.dragging #panel, body.dragging .widget,
   .widget:hover, .widget.touched, .widget.grouped, .widget.moving { --trinket-shift: var(--whead-h, 28px); }
-  /* Argo — chunky industrial cogs */
-  :root[data-theme="argo"] .corner.tr { width: 34px; height: 34px; top: -12px; right: -12px; background-image: url(cog-argo-tl.png); }
-  :root[data-theme="argo"] .corner.bl { width: 32px; height: 32px; bottom: -11px; left: -11px; background-image: url(cog-argo-br.png); }
-  /* MISC — finer, cleaner gears */
-  :root[data-theme="misc"] .corner.tr { width: 30px; height: 30px; top: -10px; right: -10px; background-image: url(cog-misc-tl.png); }
-  :root[data-theme="misc"] .corner.bl { width: 31px; height: 31px; bottom: -11px; left: -11px; background-image: url(cog-misc-br.png); }
-  /* Grey's — rusty bolt + exposed wires */
-  :root[data-theme="greys"] .corner.tr { width: 46px; height: 46px; top: -15px; right: -15px; background-image: url(greys-corner-tl.png); }
-  :root[data-theme="greys"] .corner.bl { width: 46px; height: 46px; bottom: -15px; left: -15px; background-image: url(greys-corner-br.png); }
   /* Origin Jumpworks — a fine dashed inset stroke reads as high-end contrast stitching on a leather
      dash (their luxury interiors). Gold thread (value color) just inside the panel edge. */
   .stitch { display: none; position: absolute; inset: 5px; border-radius: 8px; pointer-events: none; z-index: 4;

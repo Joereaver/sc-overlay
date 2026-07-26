@@ -14,6 +14,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/widget-theme.css" />
+<!-- Relative on purpose — see the header of trinkets.css. -->
+<link rel="stylesheet" href="trinkets.css" />
 <style>
   /* Shares the Mission Control stream-overlay design language with the main HUD
      (missions.html): navy-teal translucent glass, cyan chrome, gold value accents,
@@ -174,7 +176,11 @@
   * { scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), 0.28) transparent; }
 
   #panel {
-    position: relative; width: 360px; margin: 14px auto 16px; border-radius: 12px;
+    position: relative; width: 360px; border-radius: 12px;
+    /* 🔑 Margin, not `14px auto`, on three counts: the trinkets hang up to 15px outside the box
+       and a frame edge would clip them; the site's shim measures the panel's margins for exactly
+       that reason; and `auto` still centres it in a plain browser because the sides are auto. */
+    margin: 18px auto 20px;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
     border: 1px solid var(--border);
     box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.08), 0 8px 34px rgba(0, 0, 0, 0.45), 0 0 30px rgba(var(--accent-rgb), 0.16);
@@ -183,8 +189,16 @@
        default. rotateY keeps the horizontal extent constant as content grows (no h-scrollbar). */
     transform: perspective(1700px) rotateY(var(--twist, 0deg));
     transform-origin: 60% center;
-    overflow: hidden;
+    /* Column: .head and .foot hold the edges, #secs takes the slack. NOT overflow:hidden — the
+       trinkets hang outside this box and clipping here is what makes them vanish silently (the
+       trap that has now bitten five times). #secs is the scroll container instead. */
+    display: flex; flex-direction: column; overflow: visible;
   }
+  #panel > .head, #panel > .foot { flex: none; }
+  #secs { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  /* Embedded, the parent injects trinkets onto the widget wrapper (outside this iframe, which
+     clips), so the page's own copies would double up. */
+  body.embedded .tape, body.embedded .bolt, body.embedded .corner { display: none !important; }
   /* CRT scanlines (+ Esperia mesh, Origin stitching) come from the shared widget-theme.css
      via .wpanel, so every widget carries the active theme's surface treatment. */
   /* visor sheen */
@@ -236,7 +250,10 @@
      used to size its own frame from its content, which made it the odd one out and broke every
      stack it joined (a shared box has no single "content size"). Text size is a separate control
      now — see the bar's settings cog. */
-  body.embedded #panel { margin: 0; width: 100%; height: 100%; transform: none; overflow: auto; }
+  /* Scrolling belongs to #secs (see the base rule), not the panel: with the panel scrolling, its
+     header and footer scrolled away with the content and the empty tail below the footer was the
+     dead space Sub kept seeing on a box taller than its content. */
+  body.embedded #panel { margin: 0; width: 100%; height: 100%; transform: none; overflow: visible; }
   /* 🔑 The settings menu must NOT live inside that scrolling box, or it gets clipped away and the
      cog looks dead — which is exactly what happened. In embedded mode it's re-parented to <body>
      and sized to the widget, so it can overlay the content and scroll on its own. */
@@ -385,7 +402,7 @@
 </style>
 </head>
 <body>
-<div id="panel" class="wpanel">
+<div id="panel" class="wpanel flair">
   <div class="stitch"></div>
   <div id="moveBanner"><div class="movebox">⠿ Drag to move · corner to resize<button id="moveDone">Done</button></div></div>
   <div id="resizeHandle" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>
@@ -412,22 +429,40 @@
     <div class="sub">Signature scanner · Refinery timers</div>
   </div>
 
-  <div class="sec">
-    <div class="sec-h" data-sec="scan"><span class="car">▾</span>Signature Scanner<span class="badge" id="scanBadge"></span></div>
-    <div id="scanBody">
-      <div class="scan-now empty" id="scanNow">Scan a rock — I'll name it here.</div>
-      <div class="tgt-lbl">Hunting for <span id="tgtCount"></span></div>
-      <div class="targets" id="targets"></div>
+  <!-- 🔑 The sections live in their own scroller so the panel can be a flex column: the header and
+       the footer hold the panel's top and bottom edges and THIS grows into whatever is left. Before
+       this the sections were direct children and everything was top-packed, so any frame taller
+       than the content (which is most of them — the widget's box is whatever size you dragged it
+       to) left a slab of empty glass hanging under the footer. -->
+  <div id="secs">
+    <div class="sec">
+      <div class="sec-h" data-sec="scan"><span class="car">▾</span>Signature Scanner<span class="badge" id="scanBadge"></span></div>
+      <div id="scanBody">
+        <div class="scan-now empty" id="scanNow">Scan a rock — I'll name it here.</div>
+        <div class="tgt-lbl">Hunting for <span id="tgtCount"></span></div>
+        <div class="targets" id="targets"></div>
+      </div>
     </div>
-  </div>
 
-  <div class="sec">
-    <div class="sec-h" data-sec="ref"><span class="car">▾</span>Refinery Timers<span class="badge" id="refBadge"></span></div>
-    <div id="refBody">
-      <div class="jobs" id="jobs"></div>
+    <div class="sec">
+      <div class="sec-h" data-sec="ref"><span class="car">▾</span>Refinery Timers<span class="badge" id="refBadge"></span></div>
+      <div id="refBody">
+        <div class="jobs" id="jobs"></div>
+      </div>
     </div>
   </div>
   <div class="foot">Open the Refinement Center to add jobs · alarms are local</div>
+
+  <!-- Skin trinkets. The canvas injects its own copy of these onto the widget WRAPPER (outside
+       this iframe, which clips), so these are for the page standing on its own — the product
+       page, an OBS browser source, the phone URL — and are hidden in embedded mode to avoid
+       doubling up. Styling is shared, in widget-theme.css. -->
+  <img class="tape tr" alt="" src="tape-m-tl.webp">
+  <img class="tape bl" alt="" src="tape-m-br.webp">
+  <img class="bolt tr" alt="" src="anvil-bolt-tl.webp">
+  <img class="bolt bl" alt="" src="anvil-screw-br.webp">
+  <div class="corner tr"></div>
+  <div class="corner bl"></div>
 </div>
 
 <script>
