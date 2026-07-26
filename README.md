@@ -4,16 +4,32 @@
   <img src="build/icon.png" alt="SC Overlay blueprint tracker logo" width="180" />
 </p>
 
-SC Overlay is a desktop companion for Star Citizen. It started as a log watcher, but it has grown into a full in-game overlay for mission tracking, blueprint info, and a few quality-of-life helpers that make the game feel less like a spreadsheet and more like a tool you actually use.
+SC Overlay is a desktop companion for Star Citizen. It started as a log watcher, but it has grown into a full in-game overlay built out of widgets you place, size and stack wherever you want them — mission and blueprint tracking, mining, and a few quality-of-life helpers that make the game feel less like a spreadsheet and more like a tool you actually use.
+
+You can try the widgets in your browser, without installing anything: **[sc-overlay.subliminal.gg](https://sc-overlay.subliminal.gg)** runs the real ones.
 
 This project is designed to be practical first and transparent second. If a feature needs extra processing, OCR, or a server-side handoff, it is opt-in and clearly separated from the local-first experience.
 
 ## What it does
 
-- Mission and blueprint tracking: follow the mission you are currently tracking, see its blueprint pool, and mark what you have already collected.
-- Fabricator helper: optional OCR can identify a fabrication kiosk item and help build a capture for the blueprint catalog.
-- Mining and refinement helpers: useful context while you play, without making the overlay feel like a second job.
-- Optional sync features: if you enable them, the app can send data to my servers for account-based or collection-related features.
+The overlay is one transparent canvas across your monitors. Drag a widget where you want it, pull its corner to size it, and drop one onto another to stack them as tabs in a shared frame. Nine of them:
+
+- **Blueprints** — follow the mission you are currently tracking, see its blueprint pool with your real drop odds, and mark what you have already collected.
+- **Mining assistant** — reads the scan signature and names the deposit, calls out the ones you asked it to watch for, and counts your refinery jobs down with an alarm when they land.
+- **Reputation track** — your standing with a mission giver, the rank ladder above you, and which rank-gated ships sit at the top of it.
+- **Party split** — split a haul by SCU rather than by aUEC, price it from bundled commodity data, and save the split for the day the ore actually sells.
+- **Notepad** — scratch notes you can type into without leaving the game.
+- **Twitch chat** — any channel's live chat, rendered in the overlay's own styling.
+- **SC Feed** — Star Citizen news that surfaces when something breaks, then gets out of the way.
+- **Binding chart** — your own control chart on a hotkey.
+- **Web page** — whatever site you keep checking, pinned over the game.
+
+Plus:
+
+- **Sixteen skins**, fifteen of them drawn from a manufacturer's own cockpit. Leave it on auto and the overlay matches whatever ship you are flying.
+- **Fabricator helper**: optional OCR can identify a fabrication kiosk item and help build a capture for the blueprint catalog.
+- **Optional sync**: if you enable it, the app can send data to my servers for account-based or collection-related features.
+- Free, and it updates itself.
 
 ## Privacy and opt-in
 
@@ -41,9 +57,11 @@ Requirements:
 
 Install the desktop app:
 
-- Download the latest .exe installer from the releases page.
-- Run the installer and follow the setup prompts.
+- Download the latest installer from [sc-overlay.subliminal.gg](https://sc-overlay.subliminal.gg), or from the releases page here.
+- Run the installer and follow the setup prompts. The installer is unsigned, so Windows SmartScreen will warn you — More info, then Run anyway.
 - Launch the app and keep Star Citizen running while you use it.
+
+The app checks for updates on its own, so this is a one-time install.
 
 ## Development notes
 
