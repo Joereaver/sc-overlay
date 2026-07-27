@@ -148,7 +148,7 @@ export class PartyTracker {
   private renderText(s: PartySession): string {
     const when = new Date(s.savedAt).toLocaleString();
     const lines = [
-      "SC Overlay - party split",
+      "SC Overlay - loot split",
       "=".repeat(34),
       s.label,
       "Saved: " + when,
@@ -226,7 +226,7 @@ export class PartyTracker {
   private async writeIndex(): Promise<void> {
     const data = JSON.stringify(this.sessions).replace(/</g, "\\u003c");
     const html = `<!doctype html>
-<meta charset="utf-8"><title>SC Overlay - saved party splits</title>
+<meta charset="utf-8"><title>SC Overlay - saved loot splits</title>
 <style>
  :root{--bg:#0b1119;--pan:#101a24;--line:#1e3242;--cy:#45D0E0;--go:#FFD27A;--tx:#c4dbe6;--dim:#7fa7bb;--faint:#5d7e90}
  *{box-sizing:border-box}
@@ -249,7 +249,7 @@ export class PartyTracker {
  .loot span{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 9px;margin:3px 5px 0 0}
  .empty{color:var(--faint)}
 </style>
-<h1>Saved party splits</h1>
+<h1>Saved loot splits</h1>
 <div class="sub">SC Overlay &middot; this file regenerates whenever a split is saved. The matching .json and .txt files sit in this folder.</div>
 <div id="out"></div>
 <script>

@@ -2004,7 +2004,7 @@
       // The main Blueprint panel. A registry widget like any other so it can be GROUPED (Battaglia
       // + missions was the pairing Sub wanted), but LOCAL: it lives in this document rather than an
       // iframe, so it has no page to load, no theme to push and no bridge to talk over.
-      key: "blueprint", local: true, title: "Blueprints", flair: true,
+      key: "blueprint", local: true, title: "Mission & BP Tracker", flair: true,
       size: { w: 380, h: 560, minW: 300, maxW: 1400, minH: 240, maxH: 1600 },
       // Default resting spot: top-right of the PRIMARY display, where this panel has always sat.
       defFn: (w) => {
@@ -2014,7 +2014,7 @@
       },
     },
     {
-      key: "mining", page: "mining.html", title: "Mining Assistant",
+      key: "mining", page: "mining.html", title: "Mining Scanner",
       // Box-shaped like every other widget as of 2026-07-25. It used to be "scaled" (tilt+zoom as
       // a unit, sizing its own frame from its content) and that made it the odd one out: a stack
       // shares ONE box, so a member insisting on its own size fought it, rendered clipped, and
@@ -2037,7 +2037,7 @@
       }),
     },
     {
-      key: "notepad", page: "notepad.html", title: "Notepad",
+      key: "notepad", page: "notepad.html", title: "Journal",
       def: { x: 480, y: 60 }, size: { w: 320, h: 380, minW: 220, maxW: 900, minH: 160, maxH: 900 },
       focusFn: "__notepadFocus",
       // Don't strand the keyboard grab: hiding mid-typing would leave the interact key suspended.
@@ -2064,7 +2064,7 @@
       onHide: (w) => { wEl(w)?.classList.remove("live"); },
     },
     {
-      key: "party", page: "party.html", title: "Party split",
+      key: "party", page: "party.html", title: "Loot Split",
       def: { x: 860, y: 560 }, size: { w: 340, h: 400, minW: 280, maxW: 760, minH: 200, maxH: 900 },
       focusFn: "__partyFocus",
       host: () => ({
@@ -2074,7 +2074,7 @@
       onHide: (w) => { try { frameWin(w)?.__partyExitTyping?.(); } catch { /* iframe gone */ } },
     },
     {
-      key: "battaglia", page: "battaglia.html", title: "Battaglia track",
+      key: "battaglia", page: "battaglia.html", title: "Event Tracker",
       def: { x: 40, y: 560 }, size: { w: 360, h: 470, minW: 300, maxW: 760, minH: 240, maxH: 900 },
     },
     {
