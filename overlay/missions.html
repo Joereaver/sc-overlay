@@ -2085,7 +2085,7 @@
       host: () => ({ openUrl: (u) => window.overlayApi?.openUrl?.(u) }),
     },
     {
-      key: "bindingChart", page: "bindingwidget.html", title: "Binding Chart",
+      key: "bindingChart", page: "bindingwidget.html", title: "Infographic Viewer",
       def: { x: 120, y: 120 }, size: { w: 620, h: 340, minW: 260, maxW: 6000, minH: 160, maxH: 3000 },
       // Re-read the PNG each time it's summoned, so a re-exported chart appears without a restart.
       onShow: (w) => { try { frameWin(w)?.__bindingReload?.(); } catch { /* not loaded yet */ } },

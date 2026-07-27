@@ -913,7 +913,7 @@ function refreshTray() {
       { label: "Loot Split", type: "checkbox", checked: partyVisible, click: toggleParty },
       { label: "Event Tracker", type: "checkbox", checked: battagliaVisible, click: toggleBattaglia },
       { label: "Web Page", type: "checkbox", checked: webViewVisible, click: toggleWebView },
-      { label: "Binding Chart", type: "checkbox", checked: bindingChartVisible, click: toggleBindingChart },
+      { label: "Infographic Viewer", type: "checkbox", checked: bindingChartVisible, click: toggleBindingChart },
       { type: "separator" },
       { label: "Tools", enabled: false },
       { label: "Refresh missions (re-read log)", click: refreshMissions },
