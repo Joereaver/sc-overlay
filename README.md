@@ -12,17 +12,18 @@ This project is designed to be practical first and transparent second. If a feat
 
 ## What it does
 
-The overlay is one transparent canvas across your monitors. Drag a widget where you want it, pull its corner to size it, and drop one onto another to stack them as tabs in a shared frame. Nine of them:
+The overlay is one transparent canvas across your monitors. Drag a widget where you want it, pull its corner to size it, and drop one onto another to stack them as tabs in a shared frame. Ten of them:
 
-- **Blueprints** — follow the mission you are currently tracking, see its blueprint pool with your real drop odds, and mark what you have already collected.
-- **Mining assistant** — reads the scan signature and names the deposit, calls out the ones you asked it to watch for, and counts your refinery jobs down with an alarm when they land.
-- **Reputation track** — your standing with a mission giver, the rank ladder above you, and which rank-gated ships sit at the top of it.
-- **Party split** — split a haul by SCU rather than by aUEC, price it from bundled commodity data, and save the split for the day the ore actually sells.
-- **Notepad** — scratch notes you can type into without leaving the game.
-- **Twitch chat** — any channel's live chat, rendered in the overlay's own styling.
+- **Mission & BP Tracker** — follow the mission you are currently tracking, see its blueprint pool with your real drop odds, and mark what you have already collected.
+- **Mining Scanner** — reads the scan signature and names the deposit, calls out the ones you asked it to watch for, and counts your refinery jobs down with an alarm when they land.
+- **Event Tracker** — your standing with a mission giver, the rank ladder above you, and which rank-gated ships sit at the top of it.
+- **Unlock Alerts** — a blueprint unlock, with its picture, wherever on screen you actually look. Invisible until something drops.
+- **Loot Split** — split a haul by SCU rather than by aUEC, price it from bundled commodity data, and save the split for the day the ore actually sells.
+- **Journal** — scratch notes you can type into without leaving the game.
+- **Twitch Chat** — any channel's live chat, rendered in the overlay's own styling. Sign in and you can reply without leaving the game; reading needs no account.
 - **SC Feed** — Star Citizen news that surfaces when something breaks, then gets out of the way.
-- **Binding chart** — your own control chart on a hotkey.
-- **Web page** — whatever site you keep checking, pinned over the game.
+- **Infographic Viewer** — your own control chart, or any image, on a hotkey.
+- **Web Page** — whatever site you keep checking, pinned over the game. Including the ones that refuse to be embedded anywhere else: the RSI site, UEX, erkul.
 
 Plus:
 

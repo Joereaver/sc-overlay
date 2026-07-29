@@ -1,4 +1,18 @@
 {
+  "0.1.35": {
+    "date": "2026-07-29T21:30:00Z",
+    "notes": [
+      "New widget — Unlock Alerts. The \"Blueprint Received\" pop used to be stuck to the bottom of the tracker panel, which is the one place you never look mid-mission. It is now its own widget you drag wherever you actually watch, it shows the item's picture, and several unlocks at once queue up instead of stepping on each other.",
+      "The Web Page widget can show ANY site now. Sites that refuse to be embedded — the RSI site above all, plus UEX, erkul and starcitizen.tools — used to come up as a blank box. They work. Sign-ins work too, in their own cookie jar, kept separate from your normal browser.",
+      "You can send Twitch chat from the overlay. Sign in with Twitch in the chat widget (a short code on twitch.tv, no password typed into the app) and the send bar appears. Reading chat still needs no account at all.",
+      "Blueprint unlocks show the real fabricator photo instead of a grey 3D model. The old picture was shared between items that use the same game model, so three different Scraper Modules all looked identical — it could not even tell you which one you had unlocked.",
+      "Fewer phantom \"Debris\" call-outs while mining. The scanner now checks the frame for the marker that sits beside a real signature reading, so a number picked up off some other part of your HUD no longer gets announced as a scan.",
+      "Widget names are clearer: Mission & BP Tracker, Mining Scanner, Journal, Loot Split, Event Tracker and Infographic Viewer. Your layout, hotkeys and settings are untouched — only the labels changed.",
+      "The settings cog no longer sits there forever. If you summon it and go back to flying, it packs itself away after 30 seconds of the game having focus — it was holding the overlay in a clickable state the whole time it stayed open.",
+      "Fixes: the SC Feed widget's alert settings (the ♪ button) open again; the tilt slider works on every widget that has one; the Mining Scanner wears your ship's skin properly and lost its slab of empty glass; and the Web Page widget's bar now slides out on hover like every other widget.",
+      "Behind the scenes: if the overlay's background service ever crashes it now writes down why and restarts itself, instead of leaving the app looking fine while nothing works."
+    ]
+  },
   "0.1.34": {
     "date": "2026-07-26T00:58:33Z",
     "notes": [
