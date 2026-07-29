@@ -449,16 +449,19 @@ function startFabCapture({ port, configDir, onStatus }) {
       // frame for the scan glyph beside the number — it has the OCR but not the pixels.
       if (read.kind === "mineable" && typeof read.signature === "number" && read.pin) {
         const glyph = findScanGlyph(shot, read.pin);
-        console.log(
-          `[mining] signature ${read.signature} — glyph ${glyph.seen ? "FOUND" : "not found"}` +
-          ` (${Math.round(glyph.fraction * 100)}% of ${glyph.total}px, box mean rgb ${glyph.mean}` +
-          `${glyph.hitMean ? `, matched mean rgb ${glyph.hitMean}` : ""})`,
-        );
         try {
+          // The measurements go WITH the verdict so the SIDECAR logs them. This process is a
+          // detached GUI app — its stdout goes nowhere, so logging here wrote the numbers into
+          // the void, which is exactly what happened to the ones asked for to tune the
+          // thresholds. sidecar.log is the file a user can actually read and send.
           await fetch(`http://localhost:${port}/api/mining/scan`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ signature: read.signature, confirmed: glyph.seen }),
+            body: JSON.stringify({
+              signature: read.signature,
+              confirmed: glyph.seen,
+              glyph: { fraction: glyph.fraction, total: glyph.total, mean: glyph.mean, hitMean: glyph.hitMean },
+            }),
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           });
         } catch (e) { console.warn("[mining] scan post failed:", e && e.message); }

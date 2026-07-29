@@ -98,6 +98,12 @@ export class MiningTracker extends EventEmitter {
     if (hit) this.emit("target-hit", { ...hit, signature });
   }
 
+  /** Does this signature resolve to a rock in the table? Used by the log line that explains why a
+   *  read was or wasn't announced — a known ore is applied regardless of the glyph. */
+  knowsSignature(signature: number): boolean {
+    return (this.data?.index[String(signature)] ?? []).length > 0;
+  }
+
   setTarget(name: string, on: boolean): void {
     if (on) this.targets.add(name);
     else this.targets.delete(name);

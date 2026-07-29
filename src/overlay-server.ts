@@ -1710,7 +1710,21 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   if (url === "/api/mining/scan" && req.method === "POST") {
     const body = await readBody(req);
     const signature = Number(body?.signature);
-    if (Number.isFinite(signature)) mining.applyMineableRead(signature, body?.confirmed === true);
+    // Logged HERE, not in the caller: the caller is a detached GUI process whose stdout goes
+    // nowhere, while this lands in sidecar.log — the file a user can read and send. Every read
+    // prints its numbers, so the colour band can be tuned from real scans instead of the single
+    // frame it was built from.
+    const g = body?.glyph as { fraction?: number; total?: number; mean?: number[]; hitMean?: number[] } | undefined;
+    if (Number.isFinite(signature)) {
+      const known = mining.knowsSignature(signature);
+      console.log(
+        `[mining] signature ${signature} — glyph ${body?.confirmed === true ? "FOUND" : "not found"}` +
+        (g ? ` (${Math.round((g.fraction ?? 0) * 100)}% of ${g.total}px, box mean rgb ${g.mean}` +
+             `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""})` : "") +
+        ` — ${known ? "known ore, announced regardless" : body?.confirmed === true ? "debris, announced" : "debris, SUPPRESSED (no glyph)"}`,
+      );
+      mining.applyMineableRead(signature, body?.confirmed === true);
+    }
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ ok: true }));
     return;

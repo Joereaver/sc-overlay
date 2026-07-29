@@ -118,6 +118,11 @@ export function hasScanHud(ocr: OcrResult): boolean {
  *  isolates the real value. Normalizes the usual o->0 / l->1 OCR slips. Returns null when
  *  no grouped number is present (e.g. the comma dropped — a later poll re-reads it). */
 export function parseSignature(text: string): number | null {
+  // 🔑 The o->0 / l->1 rescue below turns LETTERS into digits, so a word made only of those
+  // letters becomes a number: "IIOO" read as 1,100 and "IOOI" as 1,001 — phantom signatures off
+  // ordinary HUD text, announced as debris the player never scanned. A real signature always has
+  // at least one genuine digit surviving, so require one before rescuing anything.
+  if (!/\d/.test(text)) return null;
   const t = text.replace(/[oO]/g, "0").replace(/[lI|]/g, "1");
   const g = /(\d{1,2})[.,](\d{3})(?!\d)/.exec(t); // "3,170" / "25,800"
   if (g) {

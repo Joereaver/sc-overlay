@@ -553,15 +553,24 @@ const SCANBOX = `(async () => {
   ${PRELUDE}
   const box = document.getElementById("scanBox");
   ok("the outline exists", !!box);
+  // ⚠️ This suite drives the REAL control, which persists to the REAL sidecar config — including
+  // a Reset. Remember whatever the user has calibrated and put it back at the end, or running the
+  // tests silently destroys their scan region.
+  const userRegion = (typeof scanRegion !== "undefined" && scanRegion) ? JSON.parse(JSON.stringify(scanRegion)) : null;
   ok("...and is off until asked for", getComputedStyle(box).display === "none");
 
   setScanBox(true);
   await sleep(150);
   const r = box.getBoundingClientRect();
   const ci = canvasInfo || { px: 0, py: 0, pw: innerWidth, ph: innerHeight };
-  const cx = ci.px + ci.pw / 2, cy = ci.py + ci.ph / 2;
-  // classifyScreen: |x - cx| < 0.17w, and y between cy-0.24h and cy-0.015h.
-  const want = { left: cx - 0.17 * ci.pw, right: cx + 0.17 * ci.pw, top: cy - 0.24 * ci.ph, bottom: cy - 0.015 * ci.ph };
+  // Against the ACTIVE region, not the default: once a user has dragged theirs, the box is
+  // supposed to follow it. Asserting the default here failed the moment Sub dragged his — the
+  // test was wrong, not the box.
+  const f = scanRegion || SCAN_DEFAULT;
+  const want = {
+    left: ci.px + f.x * ci.pw, right: ci.px + (f.x + f.w) * ci.pw,
+    top: ci.py + f.y * ci.ph, bottom: ci.py + (f.y + f.h) * ci.ph,
+  };
   const off = Math.max(Math.abs(r.left - want.left), Math.abs(r.right - want.right),
                        Math.abs(r.top - want.top), Math.abs(r.bottom - want.bottom));
   ok("it covers exactly the band the classifier searches", off <= 2,
@@ -590,13 +599,20 @@ const SCANBOX = `(async () => {
   document.getElementById("sbReset").click();
   await sleep(80);
   const b2 = box.getBoundingClientRect();
-  ok("Reset puts it back to the default band", scanRegion === null && Math.abs(b2.left - b0.left) < 2,
-     "region=" + JSON.stringify(scanRegion));
+  const defLeft = ci.px + SCAN_DEFAULT.x * ci.pw;
+  ok("Reset puts it back to the DEFAULT band", scanRegion === null && Math.abs(b2.left - defLeft) < 2,
+     "region=" + JSON.stringify(scanRegion) + " left=" + Math.round(b2.left) + " want=" + Math.round(defLeft));
 
   setScanBox(false);
   await sleep(100);
   ok("...and turns back off", getComputedStyle(box).display === "none");
   ok("...and stops taking the pointer once off", getComputedStyle(box).pointerEvents === "none");
+
+  // Hand the user's own calibration back — see the note at the top of this suite.
+  saveScanRegion(userRegion);
+  await sleep(150);
+  ok("the suite restored the region it found", JSON.stringify(scanRegion) === JSON.stringify(userRegion),
+     "now=" + JSON.stringify(scanRegion));
   return out;
 })()`;
 

@@ -420,6 +420,9 @@
       <div class="cog-tone">Alert tone <span class="lnk" id="toneBtn">choose WAV…</span><span class="lnk clr hidden" id="toneClr">reset</span></div>
       <div class="cog-sec">Announce</div>
       <div class="cog-seg"><span class="seg" id="segTarget" data-m="target">Targets only</span><span class="seg" id="segEvery" data-m="every">Every rock</span></div>
+      <label class="cog-opt" title="Say &quot;Debris&quot; when a scan reads a signature that isn't a known ore. Turn this off if you only care about rocks.">
+        <input type="checkbox" id="debrisChk" /> Call out debris
+      </label>
       <div class="cog-sec">Tools</div>
       <label class="cog-opt" title="Draws a box on screen showing the area the app reads for a scan signature. Nothing outside it is looked at.">
         <input type="checkbox" id="scanBoxChk" /> Show the scan read area
@@ -499,6 +502,10 @@
   // a master gain so the volume slider scales tones + clips + the alarm.
   const getVol = () => { const v = parseFloat(localStorage.getItem("miningVol")); return isNaN(v) ? 1 : Math.max(0, Math.min(1, v)); };
   const voiceOn = () => localStorage.getItem("miningVoice") !== "off";
+  // Debris call-outs, ON by default (they're the confirmation that a scan registered at all).
+  // Sub asked for the switch because a signature that isn't a known ore is often not worth
+  // hearing about — and because a false one is worse than silence.
+  const debrisOn = () => localStorage.getItem("miningDebris") !== "off";
 
   function speak(text) {
     if (!voiceOn()) return;
@@ -676,7 +683,11 @@
   const renderVoice = () => {
     $("voiceChk").checked = voiceOn();
     $("scanBoxChk").checked = localStorage.getItem("miningScanBox") === "on";
+    $("debrisChk").checked = debrisOn();
   };
+  $("debrisChk").addEventListener("change", () => {
+    localStorage.setItem("miningDebris", $("debrisChk").checked ? "on" : "off");
+  });
   $("voiceChk").addEventListener("change", () => { localStorage.setItem("miningVoice", $("voiceChk").checked ? "on" : "off"); });
   // "Show the scan read area" — the canvas draws the box, because it is the only surface that
   // spans the screen; this widget is a small window that could be anywhere. Same-origin, so the
@@ -775,12 +786,25 @@
   }));
 
   let lastScanSig = null, lastJobCount = 0;
+  // Has this widget seen its first state frame yet? The tracker keeps the LAST scan and sends it
+  // in every frame, so a freshly-mounted widget (app start, toggling it, an arrange re-arm) used
+  // to treat that as brand new and announce it again — the same rock, or the same "Debris", every
+  // single time the widget loaded. Seed silently on the first frame instead.
+  let primed = false;
+  // ...and never announce a scan that is simply OLD. A signature from ten minutes ago is not news
+  // even if this widget has never seen it.
+  const SCAN_FRESH_MS = 30000;
   function applyState(v) {
     view = v;
     targetSet.clear(); (v.targets || []).forEach(t => targetSet.add(t));
     renderAll();
     const sc = v.scan;
-    if (sc && sc.signature !== lastScanSig) { lastScanSig = sc.signature; onNewScan(sc); }
+    if (sc && sc.signature !== lastScanSig) {
+      lastScanSig = sc.signature;
+      const fresh = !sc.at || (Date.now() - sc.at) < SCAN_FRESH_MS;
+      if (primed && fresh) onNewScan(sc);
+    }
+    primed = true;
     const jc = (v.jobs || []).length;
     if (jc > lastJobCount) maybeAutoShow(); // a newly-read refinery job -> pop up
     lastJobCount = jc;
@@ -798,6 +822,9 @@
     // and the widget kept popping itself up mid-flight; a confirmed glyph is proof, so confirmed
     // debris pops again. An unconfirmed non-match never reaches here — the tracker drops it.
     const real = (s) => s.matches.length > 0 || s.confirmed === true;
+    // Debris switched off: a non-ore signature is not worth a word, a flash, or popping the
+    // widget open. Known ores are unaffected — this only governs the "Debris" call-out.
+    if (!sc.matches.length && !debrisOn()) return;
     if (hiddenMode) { if (real(sc)) maybeAutoShow(); return; }
     const el = $("scanNow");
     const flash = () => { el.classList.remove("hit"); void el.offsetWidth; el.classList.add("hit"); };
