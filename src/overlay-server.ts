@@ -14,7 +14,7 @@ import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
-import { loadCatalog, ocrImage, hasScanHud, classifyScreen, type CatalogEntry, type OcrResult } from "./screen-read.js";
+import { loadCatalog, ocrImage, hasScanHud, classifyScreen, type CatalogEntry, type OcrResult, type ScanRegion } from "./screen-read.js";
 import { maybeShareLog } from "./log-share.js";
 
 const overlayDir = assetDir(import.meta.url, "overlay");
@@ -87,6 +87,10 @@ interface Config {
   /** Mining Assistant: arms the capture loop to read the Refinement Center (job timers)
    *  and the mining scanner signature. Opt-in; read by electron/capture.cjs each poll. */
   miningAssistant: boolean;
+  /** Where the signature number is hunted, as fractions of the frame. Null = the default band.
+   *  Set by dragging the "scan read area" box (Mining Scanner cog) — the only way to cope with a
+   *  HUD that doesn't sit where we assume. */
+  scanRegion: ScanRegion | null;
   /** Auto-show the Mining Assistant window when the scanner/refinery screen is detected. */
   miningAutoShow: boolean;
   /** Remembers whether the Mining Assistant window was left open, so it's restored on launch. */
@@ -218,6 +222,7 @@ const DEFAULTS: Config = {
   fabCapture: false,
   missionOcr: false,
   miningAssistant: false,
+  scanRegion: null,
   miningAutoShow: false,
   miningOpen: false,
   notepadOpen: false,
@@ -1214,11 +1219,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       // Pre-computed OCR from the main process (RapidOCR reads the fabricator name off a right-
       // panel crop). Classify directly — skip the WinRT OCR entirely for this call.
       const ocr: OcrResult = { w: Number(body.w) || 0, h: Number(body.h) || 0, lines: body.lines };
-      result = classifyScreen(ocr, screenCatalog);
+      result = classifyScreen(ocr, screenCatalog, { scanRegion: config.scanRegion });
       scanHud = hasScanHud(ocr);
     } else if (typeof body.path === "string" && body.path) {
       const ocr = await ocrImage(body.path);
-      result = classifyScreen(ocr, screenCatalog);
+      result = classifyScreen(ocr, screenCatalog, { scanRegion: config.scanRegion });
       scanHud = hasScanHud(ocr);
     }
     // Routing applies to BOTH sources. Mining reads feed its tracker (same process); the
@@ -1398,6 +1403,16 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.fabCapture === "boolean") config.fabCapture = body.fabCapture;
     if (typeof body.missionOcr === "boolean") config.missionOcr = body.missionOcr;
     if (typeof body.miningAssistant === "boolean") config.miningAssistant = body.miningAssistant;
+    // The dragged scan region. `null` resets to the default band. Stored as fractions, and only
+    // if it's usable: a region dragged off-frame or collapsed to nothing would silently stop all
+    // scanning, and "my scanner died and I don't know why" is the worst outcome here.
+    if (body.scanRegion === null) config.scanRegion = null;
+    else if (body.scanRegion && typeof body.scanRegion === "object") {
+      const r = body.scanRegion as ScanRegion;
+      const ok = [r.x, r.y, r.w, r.h].every((n) => typeof n === "number" && Number.isFinite(n))
+        && r.w > 0.02 && r.h > 0.01 && r.x >= 0 && r.y >= 0 && r.x + r.w <= 1.001 && r.y + r.h <= 1.001;
+      if (ok) config.scanRegion = { x: r.x, y: r.y, w: r.w, h: r.h };
+    }
     if (typeof body.miningAutoShow === "boolean") config.miningAutoShow = body.miningAutoShow;
     if (typeof body.miningOpen === "boolean") config.miningOpen = body.miningOpen;
     if (typeof body.notepadOpen === "boolean") config.notepadOpen = body.notepadOpen;

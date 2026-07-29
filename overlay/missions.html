@@ -602,13 +602,24 @@
      you can see whether the number is even inside it. Purely informational —
      pointer-events:none and deliberately NOT in the RSEL region list, or a box this size would
      swallow clicks meant for the game. */
+  /* It is also a CONTROL: drag it, or its corner, and that becomes the region the app reads.
+     Interactive only while it's shown — this is a calibration mode, not permanent furniture. */
   #scanBox { display: none; position: fixed; z-index: 12; pointer-events: none;
     border: 1px dashed rgba(var(--accent-rgb), 0.55); border-radius: 4px;
     background: rgba(var(--accent-rgb), 0.05); }
-  body.scanbox #scanBox { display: block; }
+  body.scanbox #scanBox { display: block; pointer-events: auto; cursor: move; }
   #scanBox .sb-tag { position: absolute; left: 0; top: -17px; font-family: var(--sans);
     font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--cyan-dim); white-space: nowrap; }
+    color: var(--cyan-dim); white-space: nowrap; pointer-events: none; }
+  #scanBox .sb-grip { position: absolute; right: -1px; bottom: -1px; width: 16px; height: 16px;
+    cursor: nwse-resize; border-right: 2px solid rgba(var(--accent-rgb), 0.8);
+    border-bottom: 2px solid rgba(var(--accent-rgb), 0.8); border-bottom-right-radius: 4px; }
+  #scanBox .sb-reset { position: absolute; right: 0; top: -19px; font-family: var(--sans);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--cyan-dim);
+    cursor: pointer; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px;
+    background: rgba(8, 17, 26, 0.85); }
+  #scanBox .sb-reset:hover { color: var(--cyan-bright); }
+  body.scanbox.sb-dragging #scanBox { border-style: solid; background: rgba(var(--accent-rgb), 0.10); }
 
   /* 🔑 Drag shield. A widget's neighbours are IFRAMES, and pointer events over an iframe go to
      ITS document — window.pointermove in this one simply stops firing, so a drag froze the
@@ -1134,7 +1145,11 @@
   </div>
 
   <!-- Diagnostic outline of the area the signature classifier reads (Mining Scanner cog). -->
-  <div id="scanBox"><span class="sb-tag">Scan read area</span></div>
+  <div id="scanBox">
+    <span class="sb-tag">Scan read area · drag to move</span>
+    <span class="sb-reset" id="sbReset" title="Put the read area back to its default position and size">Reset</span>
+    <span class="sb-grip" title="Drag to resize"></span>
+  </div>
 
   <!-- Global overlay-app chrome (canvas shell only): screen-anchored cog + in-overlay hub. -->
   <div id="globalCog" title="Overlay settings">⚙</div>
@@ -2436,24 +2451,93 @@
   // Drawn over the PRIMARY display, which is where the game is captured from; on a multi-monitor
   // rig with SC on a second screen the outline sits on the wrong one, and that is worth knowing
   // before trusting it as a diagnostic.
+  // The default band, as fractions — MUST match DEFAULT_SCAN_REGION in screen-read.ts, which is
+  // what the classifier falls back to. The suite asserts the drawn box against the same numbers.
+  const SCAN_DEFAULT = { x: 0.5 - 0.17, y: 0.5 - 0.24, w: 0.34, h: 0.24 - 0.015 };
+  let scanRegion = null;   // fractions, or null while we're using the default
+
+  const scanDisplay = () => canvasInfo || { px: 0, py: 0, pw: window.innerWidth, ph: window.innerHeight };
   function drawScanBox() {
     const el = document.getElementById("scanBox");
     if (!el) return;
-    const ci = canvasInfo || { px: 0, py: 0, pw: window.innerWidth, ph: window.innerHeight };
-    const w = ci.pw * 0.34;                       // 0.17 either side of centre
-    const top = ci.py + ci.ph * (0.5 - 0.24);
-    const h = ci.ph * (0.24 - 0.015);
-    el.style.left = Math.round(ci.px + ci.pw / 2 - w / 2) + "px";
-    el.style.top = Math.round(top) + "px";
-    el.style.width = Math.round(w) + "px";
-    el.style.height = Math.round(h) + "px";
+    const ci = scanDisplay();
+    const f = scanRegion || SCAN_DEFAULT;
+    el.style.left = Math.round(ci.px + f.x * ci.pw) + "px";
+    el.style.top = Math.round(ci.py + f.y * ci.ph) + "px";
+    el.style.width = Math.round(f.w * ci.pw) + "px";
+    el.style.height = Math.round(f.h * ci.ph) + "px";
   }
   function setScanBox(on) {
     document.body.classList.toggle("scanbox", !!on);
     if (on) drawScanBox();
   }
-  // Restore on load: mining.html and this page are same-origin, so its cog's flag is right here.
+  /** Persist the dragged region (or null to reset). The SIDECAR owns it — it's what runs the
+   *  classifier — so this is the same POST the settings page uses, not a local-only pref. */
+  function saveScanRegion(f) {
+    scanRegion = f;
+    drawScanBox();
+    fetch("/api/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scanRegion: f }),
+    }).catch(() => { /* best-effort; the box still shows what we set */ });
+  }
+
+  // Drag the box to move it, its corner to resize. Fractions of the display it sits on, so the
+  // setting survives a resolution change. Clamped into the frame and to a sane minimum — a region
+  // dragged off-screen or squashed to nothing would silently stop all scanning.
+  (() => {
+    const el = document.getElementById("scanBox");
+    if (!el) return;
+    let mode = null, sx = 0, sy = 0, start = null;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.target && e.target.id === "sbReset") return;   // handled below
+      mode = (e.target && e.target.classList.contains("sb-grip")) ? "resize" : "move";
+      sx = e.clientX; sy = e.clientY;
+      start = { ...(scanRegion || SCAN_DEFAULT) };
+      document.body.classList.add("sb-dragging");
+      window.overlayApi?.dragLock?.(true);   // keep the window interactive for the whole gesture
+      // Capture keeps the drag alive if the cursor outruns the box. It throws when the pointer id
+      // isn't active (a synthetic event, or one already released) — that must not abort the drag.
+      try { el.setPointerCapture?.(e.pointerId); } catch { /* drag still works without capture */ }
+      e.preventDefault(); e.stopPropagation();
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!mode) return;
+      const ci = scanDisplay();
+      const dx = (e.clientX - sx) / ci.pw, dy = (e.clientY - sy) / ci.ph;
+      const f = { ...start };
+      if (mode === "move") { f.x = start.x + dx; f.y = start.y + dy; }
+      else { f.w = start.w + dx; f.h = start.h + dy; }
+      f.w = Math.max(0.03, Math.min(1, f.w));
+      f.h = Math.max(0.02, Math.min(1, f.h));
+      f.x = Math.max(0, Math.min(1 - f.w, f.x));
+      f.y = Math.max(0, Math.min(1 - f.h, f.y));
+      scanRegion = f;
+      drawScanBox();
+      e.preventDefault();
+    });
+    const end = (e) => {
+      if (!mode) return;
+      mode = null;
+      document.body.classList.remove("sb-dragging");
+      window.overlayApi?.dragLock?.(false);
+      try { el.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
+      saveScanRegion(scanRegion);   // one write per gesture, not per frame
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+    document.getElementById("sbReset")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      saveScanRegion(null);
+    });
+  })();
+
+  // Restore on load: the toggle is the mining cog's (same-origin localStorage), the REGION is the
+  // sidecar's, since that's what actually reads the screen.
   try { if (localStorage.getItem("miningScanBox") === "on") setScanBox(true); } catch { /* no storage */ }
+  fetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((c) => {
+    if (c && c.scanRegion) { scanRegion = c.scanRegion; drawScanBox(); }
+  }).catch(() => { /* default band it is */ });
 
   // ── The Web Page widget's native view ───────────────────────────────────────────────────
   // Its content isn't in the DOM at all: the shell paints a WebContentsView over the canvas,
@@ -3160,7 +3244,11 @@
       // for .widget — so it needs reporting in its own right, but ONLY while it's out. A parked
       // bar must not leave a permanently-clickable strip over the game. (#panel's own bar is
       // covered the same way; #panel itself is already listed.)
-      const RSEL = "#panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+      // `body.scanbox #scanBox` only: the scan-read-area box is draggable, and a drag can't start
+      // unless the shell makes the window interactive over it. Listed ONLY while it's shown —
+      // it's a calibration mode you switch on, and a box that size must not sit in the cursor
+      // hit-test the rest of the time.
+      const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.

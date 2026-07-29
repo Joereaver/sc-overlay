@@ -566,11 +566,37 @@ const SCANBOX = `(async () => {
                        Math.abs(r.top - want.top), Math.abs(r.bottom - want.bottom));
   ok("it covers exactly the band the classifier searches", off <= 2,
      "max edge error " + off.toFixed(1) + "px");
-  ok("it can never eat a click meant for the game", getComputedStyle(box).pointerEvents === "none");
+  // It is a CONTROL while shown — you drag it to move the read area — so it has to take the
+  // pointer, and the shell has to be told to make the window interactive over it or the drag
+  // could never start.
+  ok("...and is draggable while shown", getComputedStyle(box).pointerEvents === "auto");
+  ok("...so the shell is told to make the window interactive over it",
+     typeof RSEL === "string" ? RSEL.includes("#scanBox") : "RSEL unreachable");
+
+  // Dragging it moves the REGION, not just the drawing — otherwise the box would be a diagnostic
+  // that lies about where the app reads.
+  const b0 = box.getBoundingClientRect();
+  box.dispatchEvent(new PointerEvent("pointerdown", { clientX: b0.left + 20, clientY: b0.top + 20, bubbles: true }));
+  box.dispatchEvent(new PointerEvent("pointermove", { clientX: b0.left + 80, clientY: b0.top + 50, bubbles: true }));
+  await sleep(60);
+  const b1 = box.getBoundingClientRect();
+  ok("dragging moves it", Math.round(b1.left - b0.left) === 60 && Math.round(b1.top - b0.top) === 30,
+     "moved " + Math.round(b1.left - b0.left) + "," + Math.round(b1.top - b0.top));
+  box.dispatchEvent(new PointerEvent("pointerup", { clientX: b0.left + 80, clientY: b0.top + 50, bubbles: true }));
+  await sleep(60);
+  ok("...and that becomes the region the classifier is given", scanRegion != null,
+     JSON.stringify(scanRegion));
+
+  document.getElementById("sbReset").click();
+  await sleep(80);
+  const b2 = box.getBoundingClientRect();
+  ok("Reset puts it back to the default band", scanRegion === null && Math.abs(b2.left - b0.left) < 2,
+     "region=" + JSON.stringify(scanRegion));
 
   setScanBox(false);
   await sleep(100);
   ok("...and turns back off", getComputedStyle(box).display === "none");
+  ok("...and stops taking the pointer once off", getComputedStyle(box).pointerEvents === "none");
   return out;
 })()`;
 

@@ -82,6 +82,28 @@ const REFINERY_MATERIALS = new Set([
   "DIAMOND", "SILICON", "STILERON", "SAVRILIUM", "OURATITE", "RICCITE", "LINDINIUM", "TORITE", "ICE",
 ]);
 
+/** Where on screen the signature number is hunted, as FRACTIONS of the frame (0–1) so one
+ *  setting survives any resolution. Null anywhere means "use the default band". */
+export interface ScanRegion { x: number; y: number; w: number; h: number; }
+
+/** The default: the central-upper band the HUD puts the number in. These are the fractions the
+ *  classifier used exclusively until 2026-07-29, kept as the reset target — and the canvas draws
+ *  its outline from the SAME numbers, so the box can never claim a region that isn't read. */
+export const DEFAULT_SCAN_REGION: ScanRegion = { x: 0.5 - 0.17, y: 0.5 - 0.24, w: 0.34, h: 0.24 - 0.015 };
+
+/** Resolve a (possibly absent or nonsense) saved region to real pixels. A region that has been
+ *  dragged off-frame or collapsed to nothing would silently stop all scanning, so anything
+ *  unusable falls back to the default rather than being honoured. */
+export function scanRegion(saved: ScanRegion | null | undefined, w: number, h: number): { x: number; y: number; w: number; h: number } {
+  const f = saved
+    && Number.isFinite(saved.x) && Number.isFinite(saved.y)
+    && Number.isFinite(saved.w) && Number.isFinite(saved.h)
+    && saved.w > 0.02 && saved.h > 0.01
+    && saved.x >= 0 && saved.y >= 0 && saved.x + saved.w <= 1.001 && saved.y + saved.h <= 1.001
+    ? saved : DEFAULT_SCAN_REGION;
+  return { x: f.x * w, y: f.y * h, w: f.w * w, h: f.h * h };
+}
+
 /** The mining scan HUD's own words. Exported as a test because the CAPTURE LOOP needs to know
  *  the player is at the scanner even on frames where no signature parsed — that is what tells it
  *  to poll fast (a scan is a live feedback loop) instead of idling at the slow rate. */
@@ -519,7 +541,11 @@ const catHasTier = (t: string) => fuzzySubstringDistance(anchorNorm(t), "TIER") 
 const stripName = (raw: string) => raw.replace(/\s*fabrication\s*time.*$/i, "").replace(/\s+/g, " ").trim();
 
 /** Turn an OCR result into a structured read: fabricator item, tracked mission, or nothing. */
-export function classifyScreen(ocr: OcrResult, catalog: CatalogEntry[]): ScreenRead {
+export function classifyScreen(
+  ocr: OcrResult,
+  catalog: CatalogEntry[],
+  opts?: { scanRegion?: ScanRegion | null },
+): ScreenRead {
   const lines = ocr.lines;
   if (!lines.length) return { kind: "none" };
   const joined = lines.map((l) => l.text).join(" ");
@@ -620,10 +646,15 @@ export function classifyScreen(ocr: OcrResult, catalog: CatalogEntry[]): ScreenR
   // positionally — a signature-shaped number in the central-upper band — and only while the
   // scan HUD is up (guards against a stray centered number on some other screen). The tracker
   // maps it to a rock; a value not in the table is salvage debris.
-  if (/scanning|ready to scan|\bstrong\b|\bmoderate\b|\bweak\b/i.test(joined)) {
-    const cx = ocr.w / 2, cy = ocr.h / 2;
+  if (SCAN_HUD.test(joined)) {
+    // Where to look for the number. Default is the central-upper band the HUD puts it in; a
+    // player can move/resize it (Mining Scanner → "Show the scan read area", then drag), which is
+    // the only way to cope with a HUD that doesn't sit where we assume — a different aspect
+    // ratio, a UI scale, or the whole thing on a second monitor.
+    const r = scanRegion(opts?.scanRegion, ocr.w, ocr.h);
+    const cx = r.x + r.w / 2;
     const cands = lines
-      .filter((l) => l.y > cy - 0.24 * ocr.h && l.y < cy - 0.015 * ocr.h && Math.abs(l.x - cx) < 0.17 * ocr.w)
+      .filter((l) => l.y > r.y && l.y < r.y + r.h && l.x > r.x && l.x < r.x + r.w)
       .map((l) => ({ l, sig: parseSignature(l.text) }))
       .filter((c): c is { l: OcrLine; sig: number } => c.sig != null);
     if (cands.length) {
