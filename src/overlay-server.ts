@@ -116,6 +116,9 @@ interface Config {
   twitchRefreshToken: string;
   /** Remembers whether the SC Feed widget was left armed, so it's restored on launch. */
   scFeedOpen: boolean;
+  /** Blueprint-unlock notifier armed. Defaults TRUE — it replaced a toast that used to live
+   *  inside the Blueprint panel, so off-by-default would quietly remove an existing notification. */
+  unlockAlertOpen: boolean;
   /** Where a SC Feed card's click goes: "site" opens sc-feed.subliminal.gg (default - the feed
    *  is the product), "source" opens the story's own URL (Spectrum, YouTube, Reddit...). */
   scFeedLinkTarget: "site" | "source";
@@ -227,6 +230,7 @@ const DEFAULTS: Config = {
   twitchUserLogin: "",
   twitchRefreshToken: "",
   scFeedOpen: false,
+  unlockAlertOpen: true,
   scFeedLinkTarget: "site",
   scFeedVoice: false,
   scFeedSound: true,
@@ -1402,6 +1406,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       config.twitchChatFontScale = Math.max(0.8, Math.min(2, body.twitchChatFontScale));
     if (typeof body.twitchClientId === "string") config.twitchClientId = body.twitchClientId.trim();
     if (typeof body.scFeedOpen === "boolean") config.scFeedOpen = body.scFeedOpen;
+    if (typeof body.unlockAlertOpen === "boolean") config.unlockAlertOpen = body.unlockAlertOpen;
     if (body.scFeedLinkTarget === "site" || body.scFeedLinkTarget === "source") config.scFeedLinkTarget = body.scFeedLinkTarget;
     if (typeof body.scFeedVoice === "boolean") config.scFeedVoice = body.scFeedVoice;
     if (typeof body.scFeedSound === "boolean") config.scFeedSound = body.scFeedSound;

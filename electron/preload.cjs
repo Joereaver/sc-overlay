@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // SC Feed news notifier: shell-owned on/off (armed), same as the widgets above.
   setScFeed: (on) => ipcRenderer.send("app:set-scfeed", !!on),
   onScFeedVisible: (cb) => ipcRenderer.on("overlay:scfeed-visible", (_e, s) => cb(s)),
+  // Blueprint-unlock notifier (armed/disarmed like SC Feed).
+  setUnlockAlert: (on) => ipcRenderer.send("app:set-unlockalert", !!on),
+  onUnlockAlertVisible: (cb) => ipcRenderer.on("overlay:unlockalert-visible", (_e, s) => cb(s)),
   scFeedPickTone: () => ipcRenderer.invoke("scfeed:pick-tone"),
   scFeedClearTone: () => ipcRenderer.invoke("scfeed:clear-tone"),
   // Party split widget: shell-owned visibility; its name fields reuse the keyboard-grab above.

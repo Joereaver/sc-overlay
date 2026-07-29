@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Unlock Alerts</title>
+<script>/* AMD compatibility: apply the lite skin BEFORE first paint (no flash) when the shell asks for it. */
+  if (new URLSearchParams(location.search).has("lite")) document.documentElement.classList.add("amd-lite");
+  /* Apply ?theme= before first paint (no flash). The parent canvas keeps this in sync live (same-origin). */
+  { const q = new URLSearchParams(location.search); const r = document.documentElement;
+    const t = q.get("theme"); if (t) r.setAttribute("data-theme", t); }</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/widget-theme.css" />
+<style>
+  /* "Blueprint Received" toast, as a PLACEABLE widget.
+     This used to live pinned to the bottom edge of the Blueprint panel, where Sub never saw it —
+     the whole point of a notifier is that it lands where your eyes already are, which for most
+     people is the middle of the screen. Like SC Feed this is a NOTIFIER, not a panel: invisible
+     until a blueprint actually drops, click-through the rest of the time, and it fades itself out.
+     Theme tokens come from the shared /widget-theme.css. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; }
+  body { font-family: var(--sans); color: var(--cyan-text); overflow: hidden; }
+
+  /* Opacity (not display) so it can fade, with pointer-events off while hidden so it can NEVER
+     intercept a click meant for the game. */
+  #card {
+    position: relative; width: 100%; height: 100%;
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--cyan); border-radius: 12px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.22), var(--panel-solid));
+    -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55), 0 0 20px rgba(var(--accent-rgb), 0.22);
+    opacity: 0; pointer-events: none; transform: translateY(-6px) scale(0.985);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+  #card.show { opacity: 1; pointer-events: auto; transform: none; }
+  html.amd-lite #card { -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+    background: var(--panel-solid) !important; transition: none; }
+
+  /* A thin sweep of accent along the top edge — reads as "something just happened". */
+  #card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--cyan), transparent); opacity: 0.9; }
+
+  .thumb { flex: none; width: 58px; height: 58px; border-radius: 9px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
+    background: radial-gradient(circle at 50% 38%, rgba(var(--accent-rgb), 0.16), rgba(8, 17, 26, 0.6)); }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .thumb.noimg img { display: none; }
+  .thumb.noimg::after { content: "◆"; color: var(--cyan); font-size: 20px; }
+
+  .txt { min-width: 0; flex: 1 1 auto; }
+  /* --cyan-bright, not --cyan: the card's own background is an accent tint, so the plain accent
+     sits almost on top of it and the label washes out. The old in-panel toast used bright too. */
+  .lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--cyan-bright); display: flex; align-items: center; gap: 6px; }
+  .lbl .tick { color: var(--green, #2ee6a0); }
+  .name { font-size: 15px; font-weight: 600; color: var(--gold); margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A second unlock landing while the first is still up — the queue depth, so a burst reads as
+     a burst instead of one card flickering. */
+  .more { font-size: 10px; color: var(--cyan-dim); margin-top: 2px; }
+  .more[hidden] { display: none; }
+
+  #close { position: absolute; top: 5px; right: 7px; border: 0; background: transparent;
+    color: var(--cyan-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 4px; }
+  #close:hover { color: var(--cyan); }
+</style>
+</head>
+<body>
+  <div id="card">
+    <span class="thumb" id="thumb"><img id="img" alt="" /></span>
+    <div class="txt">
+      <div class="lbl"><span class="tick">✓</span> Blueprint Received</div>
+      <div class="name" id="name"></div>
+      <div class="more" id="more" hidden></div>
+    </div>
+    <button id="close" title="Dismiss">✕</button>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const EMBEDDED = new URLSearchParams(location.search).has("embedded");
+  // Same-origin bridge to the parent canvas (present only when embedded on the overlay).
+  const host = () => (EMBEDDED && window.parent) ? window.parent.__unlockAlertHost : null;
+
+  const SHOW_MS = 8000;      // long enough to read mid-fight, short enough not to nag
+  const FRESH_MS = 120000;   // an SSE reconnect replays the last view — don't re-pop old receipts
+
+  let queue = [];
+  let current = null;
+  let hideTimer = null;
+  let lastAt = null;         // receipts are identified by their timestamp, same as the old pop
+  let previewing = false;
+
+  /** Tell the shell whether we're occupying screen space. While a card is up the widget's rect
+   *  joins the cursor hit-test so the ✕ is clickable; the rest of the time it must be invisible
+   *  to the hit-test or an idle notifier eats clicks meant for the game. */
+  function setActive(on) { try { host()?.active?.(!!on); } catch { /* not embedded */ } }
+
+  function paint(bp) {
+    $("name").textContent = bp.name || "Blueprint";
+    const thumb = $("thumb"), img = $("img");
+    thumb.classList.remove("noimg");
+    // Fabricator capture first, clay render second, glyph last — the capture is the picture the
+    // player recognises from the kiosk, and several items share one render. A FLAG guards the
+    // retry: img.src reads back as a resolved absolute URL, so comparing it to a relative
+    // fallback never matches and the handler would re-set the same broken source forever.
+    const first = bp.image || bp.imageFallback, second = bp.image ? bp.imageFallback : null;
+    let triedFallback = false;
+    if (first) {
+      img.onerror = () => {
+        if (second && !triedFallback) { triedFallback = true; img.src = second; return; }
+        thumb.classList.add("noimg");
+      };
+      img.src = first;
+    } else { thumb.classList.add("noimg"); img.removeAttribute("src"); }
+  }
+
+  /** The "+N more" badge. Repainted whenever the queue CHANGES, not only when a card appears —
+   *  a second unlock landing while the first is still up has to update the count it's sitting on. */
+  function paintQueue() {
+    const more = $("more");
+    more.hidden = queue.length === 0;
+    if (queue.length) more.textContent = "+" + queue.length + " more";
+  }
+
+  function show(bp, hold) {
+    current = bp;
+    paint(bp);
+    paintQueue();
+    $("card").classList.add("show");
+    setActive(true);
+    clearTimeout(hideTimer);
+    if (!hold) hideTimer = setTimeout(next, SHOW_MS);
+  }
+
+  function hide() {
+    current = null;
+    $("card").classList.remove("show");
+    setActive(false);
+  }
+
+  function next() {
+    clearTimeout(hideTimer);
+    if (queue.length) { show(queue.shift()); return; }
+    hide();
+  }
+
+  $("close").addEventListener("click", (e) => { e.stopPropagation(); queue = []; hide(); });
+
+  /** A receipt off the mission stream. Deduped by timestamp and dropped if stale, so neither an
+   *  SSE reconnect nor a page reload re-announces something you already saw. */
+  function offer(jr) {
+    if (!jr || !jr.at || jr.at === lastAt) return;
+    const t = Date.parse(jr.at);
+    if (isFinite(t) && Date.now() - t > FRESH_MS) { lastAt = jr.at; return; }
+    lastAt = jr.at;
+    if (previewing) return; // don't fight the arrange-mode sample card
+    if (current) { queue.push(jr); paintQueue(); } else show(jr);
+  }
+
+  // The mission stream is the same one the canvas reads; justReceived is set for real-time
+  // receipts only, which is exactly the set of things worth announcing.
+  let es = null;
+  function connect() {
+    try { es?.close(); } catch { /* already gone */ }
+    es = new EventSource("/missions/events");
+    es.onmessage = (e) => {
+      try { offer(JSON.parse(e.data)?.justReceived); } catch { /* partial frame */ }
+    };
+    // EventSource retries on its own, but a sidecar restart can leave it wedged — reconnect
+    // explicitly so a long session doesn't silently stop announcing.
+    es.onerror = () => { try { es.close(); } catch { /* ignore */ } setTimeout(connect, 5000); };
+  }
+  connect();
+
+  // Arrange mode: the parent holds up a sample card so the widget can be positioned even though
+  // it's invisible the rest of the time by design.
+  window.__unlockAlertPreview = (on) => {
+    previewing = !!on;
+    if (on) {
+      clearTimeout(hideTimer);
+      show({ name: "Trawler Scraper Module", image: null, imageFallback: null }, true);
+    } else if (!queue.length) hide();
+  };
+
+  if (new URLSearchParams(location.search).has("demo")) window.__unlockAlertPreview(true);
+</script>
+</body>
+</html>

@@ -47,7 +47,7 @@ const GROUPING = `(async () => {
     saveWidget: (id, l) => saved.push([id, JSON.parse(JSON.stringify(l))]),
   });
 
-  ok("registry has 9 widgets (incl. the Blueprint panel)", typeof WIDGETS !== "undefined" && WIDGETS.length === 9, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
+  ok("registry has 10 widgets (incl. the Blueprint panel)", typeof WIDGETS !== "undefined" && WIDGETS.length === 10, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
   ok("starts ungrouped", GROUPS.length === 0, GROUPS.length);
   const party = WBY.party, mining = WBY.mining, notepad = WBY.notepad;
   ok("test widgets shown", shown(party) && shown(mining) && shown(notepad));
@@ -917,7 +917,9 @@ const ANGLE = `(async () => {
   return out;
 })()`;
 
-async function run(label, script, preload, query) {
+// `page` targets a widget's OWN page instead of the canvas — a notifier is easiest to drive
+// standalone, without the whole canvas around it.
+async function run(label, script, preload, query, page) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
   // A widget that logs an error or 404s an asset is broken even when every assertion passes -
@@ -939,7 +941,8 @@ async function run(label, script, preload, query) {
     noise.push("HTTP " + d.statusCode + " " + d.url.replace(/^https?:\/\//, "").slice(0, 70));
   });
   try {
-    await win.loadURL(query ? URL + "&" + query : URL);
+    const base = page ? `http://localhost:${PORT}/${page}` : URL;
+    await win.loadURL(query ? base + (base.includes("?") ? "&" : "?") + query : base);
     const res = await win.webContents.executeJavaScript(script);
     let fails = 0;
     console.log(`\n${label}`);
@@ -999,46 +1002,75 @@ const COGHIDE = `(async () => {
   return out;
 })()`;
 
-// An unlocked blueprint must show the FABRICATOR CAPTURE, not the clay render. The render exists
-// for nearly every item but is a grey untextured mesh, and items that reuse a game model share one
-// byte-identical render — all three Scraper Modules do — so the render can't even identify what you
-// unlocked. The capture 404s until someone has captured that item, hence the fallback chain.
-// Local URLs stand in for the two endpoints so the suite doesn't depend on the network.
-const BPPOP = `(async () => {
-  ${PRELUDE}
+
+// The unlock notifier, driven on its OWN page (it's a widget now, not part of the panel).
+// It must: prefer the fabricator capture over the clay render, fall back when there's no capture,
+// never re-announce a receipt it has already shown, ignore stale ones an SSE reconnect replays,
+// and queue a burst instead of flickering. Local URLs stand in for the two image endpoints.
+const UNLOCK = `(async () => {
+  const out = [];
+  const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const GOOD = "tape-tl.webp", GOOD2 = "anvil-bolt-tl.webp", BAD = "deliberate-404-for-test.webp";
-  const thumb = document.querySelector("#bpPop .bp-pop-thumb"), img = document.getElementById("bpPopImg");
-  const src = () => (img.getAttribute("src") || "");
-  // maybeBpPop dedupes on the receipt time, so every call needs a distinct one — and a fresh one,
-  // since it drops anything older than 2 min. Counting backwards a second at a time keeps both true.
-  let n = 0;
-  const pop = (o) => { img.onerror = null; maybeBpPop({ name: "T", at: new Date(Date.now() - (n++ * 1000)).toISOString(), ...o }); };
+  const card = document.getElementById("card"), img = document.getElementById("img");
+  const thumb = document.getElementById("thumb");
+  const up = () => card.classList.contains("show");
+  const src = () => img.getAttribute("src") || "";
+  const at = (secsAgo) => new Date(Date.now() - secsAgo * 1000).toISOString();
 
-  pop({ image: GOOD, imageFallback: GOOD2 });
+  ok("starts hidden", !up());
+
+  // Hold the timestamp: a receipt is identified BY it, so re-sending the same receipt means the
+  // same string. Recomputing it would just look like a second unlock and quietly test nothing.
+  const RECEIPT = at(1);
+  offer({ name: "Trawler Scraper Module", at: RECEIPT, image: GOOD, imageFallback: GOOD2 });
   await sleep(200);
-  ok("prefers the fabricator capture over the render", src().endsWith(GOOD), src());
-  ok("...and shows the thumb", !thumb.classList.contains("noimg"));
+  ok("a fresh receipt shows the card", up());
+  ok("prefers the fabricator capture", src().endsWith(GOOD), src());
+  ok("names the blueprint", document.getElementById("name").textContent === "Trawler Scraper Module");
 
-  // No capture for this item yet (404) — must land on the render rather than a blank tile.
-  pop({ image: BAD, imageFallback: GOOD2 });
-  await sleep(400);
-  ok("falls back to the render when no capture exists", src().endsWith(GOOD2), src());
-  ok("...still shows a thumb", !thumb.classList.contains("noimg"));
+  // The very same receipt again — every SSE frame repeats the current view, so this arrives
+  // constantly and must never re-announce or pile up in the queue.
+  const before = src();
+  offer({ name: "SOMETHING ELSE", at: RECEIPT, image: GOOD2, imageFallback: GOOD2 });
+  await sleep(120);
+  ok("the same receipt is not re-announced", src() === before && document.getElementById("name").textContent === "Trawler Scraper Module");
+  ok("...and does not queue", document.getElementById("more").hidden, document.getElementById("more").textContent);
 
-  // Neither resolves — glyph, and no infinite retry loop between the two.
-  pop({ image: BAD, imageFallback: BAD });
+  // A second unlock while the first is up queues rather than clobbering.
+  offer({ name: "Second Item", at: at(2), image: GOOD2, imageFallback: GOOD2 });
+  await sleep(120);
+  ok("a burst queues behind the current card", document.getElementById("more").textContent === "+1 more",
+     document.getElementById("more").textContent);
+
+  document.getElementById("close").click();
+  await sleep(120);
+  ok("dismiss clears the card and the queue", !up());
+
+  // No capture for this item — must land on the render, not a blank tile.
+  offer({ name: "No Capture Yet", at: at(3), image: BAD, imageFallback: GOOD2 });
   await sleep(500);
+  ok("falls back to the render when the capture 404s", src().endsWith(GOOD2), src());
+  ok("...and still shows a picture", !thumb.classList.contains("noimg"));
+
+  document.getElementById("close").click(); await sleep(80);
+  offer({ name: "Nothing At All", at: at(4), image: BAD, imageFallback: BAD });
+  await sleep(600);
   ok("falls through to the glyph when both fail", thumb.classList.contains("noimg"));
 
-  // Unresolvable name: no UUID, so neither URL exists.
-  pop({ image: null, imageFallback: null });
-  await sleep(150);
-  ok("no image at all = glyph", thumb.classList.contains("noimg"));
+  // A reconnect replays the last view; anything older than the freshness window must stay quiet.
+  document.getElementById("close").click(); await sleep(80);
+  offer({ name: "Ancient", at: at(600), image: GOOD, imageFallback: GOOD2 });
+  await sleep(160);
+  ok("a stale receipt is ignored", !up());
 
-  // Older payload shape (render only) must still work.
-  pop({ image: null, imageFallback: GOOD });
-  await sleep(200);
-  ok("render-only payload still renders", src().endsWith(GOOD), src());
+  // Arrange mode holds a sample card up so the widget can be positioned while idle.
+  window.__unlockAlertPreview(true);
+  await sleep(160);
+  ok("arrange preview holds a card up", up());
+  window.__unlockAlertPreview(false);
+  await sleep(160);
+  ok("...and drops it when arrange ends", !up());
   return out;
 })()`;
 
@@ -1062,9 +1094,12 @@ app.whenReady().then(async () => {
     fails += await run("per-widget angle", ANGLE, null);
     fails += await run("cog auto-hide on game focus", COGHIDE,
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
-    fails += await run("unlock pop: capture before render", BPPOP, null);
+    fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
   } catch (e) {
+    // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
+    // hunting that by bisection wastes a run each time.
     console.error(`\nharness error: ${e && e.message}`);
+    if (e && e.stack) console.error(String(e.stack).split("\n").slice(0, 8).join("\n"));
     console.error(`is the sidecar running? \`npm run overlay\` should be listening on :${PORT}`);
     fails = 1;
   }

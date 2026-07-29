@@ -113,6 +113,10 @@ let miningVisible = false; // is the in-canvas mining widget currently shown
 let notepadVisible = false; // is the in-canvas notepad widget currently shown
 let twitchChatVisible = false; // is the in-canvas Twitch Chat widget currently shown
 let scFeedVisible = false; // is the in-canvas SC Feed notifier armed (it only SHOWS when there's news)
+// Blueprint-unlock notifier. Defaults ON because it REPLACED the toast that used to be pinned
+// inside the Blueprint panel — leaving it off by default would silently remove a notification
+// people already had.
+let unlockAlertVisible = true;
 let partyVisible = false; // is the in-canvas Party split widget currently shown
 let battagliaVisible = false; // is the in-canvas Battaglia grind tracker currently shown
 let webViewVisible = false; // is the in-canvas Web Page widget currently shown
@@ -370,6 +374,7 @@ function createOverlay() {
     sendNotepadVisible({ on: notepadVisible });
     sendTwitchChatVisible({ on: twitchChatVisible });
     sendScFeedVisible({ on: scFeedVisible });
+    sendUnlockAlertVisible({ on: unlockAlertVisible });
     sendPartyVisible({ on: partyVisible });
     sendBattagliaVisible({ on: battagliaVisible });
     sendWebViewVisible({ on: webViewVisible });
@@ -558,7 +563,7 @@ function sendMiningVisible(state) {
 }
 // Push widget on/off state to the in-overlay hub checkboxes (kept in sync with the tray).
 function pushWidgetStates() {
-  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }); }
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }); }
   catch { /* renderer gone */ }
 }
 // The Notepad widget is a plain in-canvas iframe (no auto-show / SSE), so its visibility is a
@@ -608,6 +613,20 @@ function setScFeedVisible(on) {
   refreshTray();
 }
 function toggleScFeed() { setScFeedVisible(!scFeedVisible); }
+// Blueprint-unlock notifier — armed like SC Feed: mounted and listening, but it only paints
+// when a blueprint actually drops.
+function sendUnlockAlertVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:unlockalert-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setUnlockAlertVisible(on) {
+  unlockAlertVisible = !!on;
+  sendUnlockAlertVisible({ on: unlockAlertVisible });
+  postConfig({ unlockAlertOpen: unlockAlertVisible });
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleUnlockAlert() { setUnlockAlertVisible(!unlockAlertVisible); }
 // Party split widget — plain in-canvas iframe, same shell-owned visibility as the Notepad.
 function sendPartyVisible(state) {
   try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:party-visible", state); }
@@ -1058,6 +1077,7 @@ function refreshTray() {
       { label: "Journal", type: "checkbox", checked: notepadVisible, click: toggleNotepad },
       { label: "Twitch Chat", type: "checkbox", checked: twitchChatVisible, click: toggleTwitchChat },
       { label: "SC Feed", type: "checkbox", checked: scFeedVisible, click: toggleScFeed },
+      { label: "Unlock Alerts", type: "checkbox", checked: unlockAlertVisible, click: toggleUnlockAlert },
       { label: "Loot Split", type: "checkbox", checked: partyVisible, click: toggleParty },
       { label: "Event Tracker", type: "checkbox", checked: battagliaVisible, click: toggleBattaglia },
       { label: "Web Page", type: "checkbox", checked: webViewVisible, click: toggleWebView },
@@ -1182,6 +1202,7 @@ if (!app.requestSingleInstanceLock()) {
       notepadVisible = c.notepadOpen === true;
       twitchChatVisible = c.twitchChatOpen === true;
       scFeedVisible = c.scFeedOpen === true;
+      unlockAlertVisible = c.unlockAlertOpen !== false; // default ON — it replaced an existing toast
       partyVisible = c.partyOpen === true;
       battagliaVisible = c.battagliaOpen === true;
       webViewVisible = c.webViewOpen === true;
@@ -1376,7 +1397,7 @@ if (!app.requestSingleInstanceLock()) {
   // Binding chart is hotkey-only (never kept on). Both widgets now live in the one overlay
   // renderer, so mining is a shell-owned visibility flag (setMiningVisible) rather than a window.
   // (sendMiningVisible / pushWidgetStates / setMiningVisible are defined at module scope above.)
-  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }));
+  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {
     if (on) { miningAutoSuppress = 0; setMiningVisible(true); }
     else setMiningVisible(false, { manual: true });
@@ -1384,6 +1405,7 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on("app:set-notepad", (_e, on) => setNotepadVisible(!!on));
   ipcMain.on("app:set-twitchchat", (_e, on) => setTwitchChatVisible(!!on));
   ipcMain.on("app:set-scfeed", (_e, on) => setScFeedVisible(!!on));
+  ipcMain.on("app:set-unlockalert", (_e, on) => setUnlockAlertVisible(!!on));
   ipcMain.on("app:set-party", (_e, on) => setPartyVisible(!!on));
   ipcMain.on("app:set-battaglia", (_e, on) => setBattagliaVisible(!!on));
   // SC Feed alert tone picker, mirroring mining:pick-tone (renderers can't open OS dialogs).

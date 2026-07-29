@@ -787,27 +787,6 @@
   .cc-stat { display: flex; flex-direction: column; line-height: 1.05; }
   .cc-val { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 18px; font-weight: 700; color: var(--gold); }
   .cc-lbl { font-size: 8.5px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-dim); margin-top: 2px; }
-  /* Global "Blueprint Received" pop — a transient bottom banner that fires on ANY real-time
-     receipt regardless of the displayed mission, so a drop is never missed when it lands on a
-     same-named mission you aren't viewing. Auto-dismisses; click-through (pointer-events:none). */
-  .bp-pop { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 12;
-    display: flex; align-items: center; gap: 10px; padding: 8px 11px;
-    border: 1px solid var(--cyan); border-radius: 10px;
-    background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.20), var(--panel-solid));
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55), 0 0 16px rgba(var(--accent-rgb), 0.22);
-    opacity: 0; transform: translateY(8px) scale(0.98); pointer-events: none;
-    transition: opacity 0.28s ease, transform 0.28s ease; }
-  .bp-pop.show { opacity: 1; transform: translateY(0) scale(1); }
-  .bp-pop-thumb { width: 44px; height: 44px; flex: none; border-radius: 7px; overflow: hidden;
-    background: rgba(0, 0, 0, 0.28); display: grid; place-items: center; border: 1px solid var(--divider); }
-  .bp-pop-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .bp-pop-thumb.noimg img { display: none; }
-  .bp-pop-thumb.noimg::after { content: "◆"; color: var(--cyan); font-size: 17px; }
-  .bp-pop-txt { min-width: 0; }
-  .bp-pop-lbl { font-family: var(--sans); font-size: 8.5px; font-weight: 700; letter-spacing: 0.16em;
-    text-transform: uppercase; color: var(--cyan-bright); }
-  .bp-pop-name { font-family: var(--sans); font-size: 13px; font-weight: 600; color: var(--gold);
-    margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Unlocked-blueprint reveal: the actual item render + name for each drop.
      Column count = min(drops, 4); tiles fill their cell, so fewer drops = bigger
@@ -1086,14 +1065,6 @@
         <button type="button" class="wh-btn wh-close" id="bpClose" title="Close the Blueprint panel">&#10005;</button>
       </span>
     </div></div>
-    <!-- Global "Blueprint Received" pop — fires on any real-time receipt regardless of the mission shown. -->
-    <div id="bpPop" class="bp-pop">
-      <span class="bp-pop-thumb"><img id="bpPopImg" alt=""></span>
-      <div class="bp-pop-txt">
-        <div class="bp-pop-lbl">✓ Blueprint Received</div>
-        <div class="bp-pop-name" id="bpPopName"></div>
-      </div>
-    </div>
     <!-- 🔑 A child of #panel, NOT of .head. It's positioned bottom-right to open beside the cog,
          which lives in the bottom bar — but .head is position:relative, so while it sat in there
          "bottom: 6px" meant the bottom of the HEADER and the menu opened at the top of the panel,
@@ -1157,6 +1128,7 @@
     <div class="hub-row tog"><label><input type="checkbox" id="wgNotepad" /> Journal</label><button type="button" class="hub-reset" data-w="notepad" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgTwitchChat" /> Twitch Chat</label><button type="button" class="hub-reset" data-w="twitchChat" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgScFeed" /> SC Feed</label><button type="button" class="hub-reset" data-w="scFeed" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgUnlockAlert" /> Unlock Alerts</label><button type="button" class="hub-reset" data-w="unlockAlert" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgParty" /> Loot Split</label><button type="button" class="hub-reset" data-w="party" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgBattaglia" /> Event Tracker</label><button type="button" class="hub-reset" data-w="battaglia" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgWebView" /> Web Page</label><button type="button" class="hub-reset" data-w="webView" title="Recentre this widget on screen">↺</button></div>
@@ -1396,43 +1368,14 @@
     return html + "</div>";
   }
 
-  // Global "Blueprint Received" pop — driven by the view's justReceived (real-time receipts only),
-  // deduped by receipt time, with a client-side freshness guard so an SSE reconnect / page reload
-  // carrying a stale justReceived doesn't re-pop. Fires regardless of which mission is displayed.
-  let lastBpPopAt = null;
-  let bpPopTimer = null;
-  function maybeBpPop(jr) {
-    if (!jr || !jr.at || jr.at === lastBpPopAt) return;
-    lastBpPopAt = jr.at;
-    const t = Date.parse(jr.at);
-    if (isFinite(t) && Date.now() - t > 120000) return; // stale (reconnect/reload) — don't pop
-    const el = $("bpPop"); if (!el) return;
-    const thumb = el.querySelector(".bp-pop-thumb"), img = $("bpPopImg");
-    $("bpPopName").textContent = jr.name || "Blueprint";
-    thumb.classList.remove("noimg");
-    // Fabricator capture first, clay render second, glyph last. The capture is the picture the
-    // player actually recognises from the kiosk; the render is a grey mesh that several items can
-    // share, so it's a fallback rather than the source of truth.
-    const first = jr.image || jr.imageFallback, second = jr.image ? jr.imageFallback : null;
-    if (first) {
-      // Track the retry with a FLAG, not by comparing img.src to the fallback: reading .src gives
-      // the resolved absolute URL, so a relative fallback never compares equal and the handler
-      // re-sets the same broken source forever.
-      let triedFallback = false;
-      img.onerror = () => {
-        if (second && !triedFallback) { triedFallback = true; img.src = second; return; } // no capture — render
-        thumb.classList.add("noimg");
-      };
-      img.src = first;
-    } else { thumb.classList.add("noimg"); img.removeAttribute("src"); }
-    el.classList.add("show");
-    clearTimeout(bpPopTimer);
-    bpPopTimer = setTimeout(() => el.classList.remove("show"), 6500);
-  }
+  // The "Blueprint Received" toast moved OUT of this panel into its own placeable notifier widget
+  // (overlay/unlockalert.html, registry key `unlockAlert`). It was pinned to the panel's bottom
+  // edge — the one place a notification is useless, since that's not where anyone is looking; Sub
+  // unlocked a blueprint and never saw it fire. The widget subscribes to /missions/events and
+  // reads justReceived itself, so nothing here needs to forward it.
 
   function render(v) {
     current = v;
-    maybeBpPop(v.justReceived);
     if (v.prefs) { PREFS = v.prefs; applyPrefs(); }
     isLive = !!v.live; updateDiamond();
     const panel = $("panel");
@@ -2082,6 +2025,20 @@
         openUrl: (url) => window.overlayApi?.openUrl?.(url),
         pickTone: () => window.overlayApi?.scFeedPickTone?.(),   // native dialog lives in the shell
         clearTone: () => window.overlayApi?.scFeedClearTone?.(),
+      }),
+      onHide: (w) => { wEl(w)?.classList.remove("live"); },
+    },
+    {
+      // The "Blueprint Received" toast, as a widget you can put where you'll actually see it.
+      // It used to be pinned to the bottom edge of the Blueprint panel, which is the one place a
+      // notification is useless — Sub unlocked a blueprint and never saw it fire.
+      key: "unlockAlert", page: "unlockalert.html", title: "Unlock Alerts",
+      notifier: true, z: 22,
+      def: { x: 780, y: 300 }, size: { w: 320, h: 86, minW: 240, maxW: 620, minH: 74, maxH: 200 },
+      moveLabel: "✓ Blueprint unlocks pop up here · drag to move · corner to resize",
+      host: (w) => ({
+        // Only claim screen space while a card is actually up (see .live in the RSEL region list).
+        active: (on) => { const el = wEl(w); if (el) el.classList.toggle("live", !!on); },
       }),
       onHide: (w) => { wEl(w)?.classList.remove("live"); },
     },
@@ -2886,8 +2843,11 @@
   }
 
   // Arrange mode holds a sample card up so an idle (invisible) SC Feed can still be positioned.
-  function scFeedPreview(on) {
-    try { frameWin(WBY.scFeed)?.__scFeedPreview?.(on); } catch { /* iframe not ready */ }
+  // Arrange-mode sample card for a notifier. Each notifier page exposes __<key>Preview, so this
+  // works for any of them rather than being wired to one — the second notifier (Unlock Alerts)
+  // would be invisible in arrange mode if this stayed scFeed-only.
+  function notifierPreview(w, on) {
+    try { frameWin(w)?.["__" + w.key + "Preview"]?.(on); } catch { /* iframe not ready */ }
   }
 
   if (CANVAS) {
@@ -2906,7 +2866,8 @@
         for (const w of WIDGETS) {
           const el = wEl(w); if (el && el.style.display !== "none") el.classList.add("moving");
         }
-        if (wEl(WBY.scFeed)?.classList.contains("moving")) scFeedPreview(true);
+        for (const w of WIDGETS)
+          if (w.notifier && wEl(w)?.classList.contains("moving")) notifierPreview(w, true);
       }
       if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
       if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><ul><li>Newest note one</li><li>Newest note two</li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li>Older note</li></ul></div>'; $("whatsnew").classList.add("show"); } // headless-test the patch-notes modal
@@ -2965,7 +2926,7 @@
         $("hubTheme").value = c.theme || "mobiglas";
       }).catch(() => { /* fall back to whatever's in the inputs */ });
       $("wgBlueprint").checked = WBY.blueprint.s.visible !== false;
-      window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
+      window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
       window.overlayApi.setModal?.(true); window.overlayApi.hover?.(true);
     }
     gc.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); setHub(!hub.classList.contains("open")); });
@@ -3024,12 +2985,13 @@
     $("wgNotepad").addEventListener("change", () => window.overlayApi.setNotepad($("wgNotepad").checked));
     $("wgTwitchChat").addEventListener("change", () => window.overlayApi.setTwitchChat($("wgTwitchChat").checked));
     $("wgScFeed").addEventListener("change", () => window.overlayApi.setScFeed($("wgScFeed").checked));
+    $("wgUnlockAlert").addEventListener("change", () => window.overlayApi.setUnlockAlert($("wgUnlockAlert").checked));
     $("wgParty").addEventListener("change", () => window.overlayApi.setParty($("wgParty").checked));
     $("wgBattaglia").addEventListener("change", () => window.overlayApi.setBattaglia($("wgBattaglia").checked));
     $("wgWebView").addEventListener("change", () => window.overlayApi.setWebView($("wgWebView").checked));
     $("wgBindingChart").addEventListener("change", () => window.overlayApi.setBindingChart($("wgBindingChart").checked));
     // Stay in sync if a widget is toggled elsewhere (tray) while the hub is open.
-    window.overlayApi.onWidgetStates?.((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
+    window.overlayApi.onWidgetStates?.((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
     // Global appearance — persisted config (also broadcasts to OBS sources).
     $("hubTheme").addEventListener("change", () => setPref({ theme: $("hubTheme").value }));
     // Layout
@@ -3062,7 +3024,7 @@
         const el = wEl(w); if (!el) continue;
         const shown = on && el.style.display !== "none";
         el.classList.toggle("moving", shown);
-        if (w.notifier) scFeedPreview(shown);
+        if (w.notifier) notifierPreview(w, shown);
       }
     });
     // Close the Blueprint panel from the panel itself (setBlueprintVisible persists it, and the
