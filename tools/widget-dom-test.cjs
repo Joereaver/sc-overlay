@@ -547,6 +547,17 @@ const SWEEPS = `(async () => {
 // ── Suite 3: restore from a saved (and partly corrupt) layout ──────────────────
 const RESTORE = `(async () => {
   ${PRELUDE}
+  // The tracker is the app's main surface: a saved "closed" must NOT survive a launch, or the
+  // app opens to an empty screen with no obvious way back (Sub, 2026-07-29 — "I don't care what
+  // its last state was"). The stub layout deliberately has it closed.
+  ok("the tracker re-opens even though the saved layout had it CLOSED",
+     shown(WBY.blueprint) && WBY.blueprint.s.visible !== false,
+     "visible=" + WBY.blueprint.s.visible + " bp-hidden=" + document.body.classList.contains("bp-hidden"));
+  // ...and that override is ONLY for the tracker: everything else restores what it was.
+  ok("...and other widgets still restore their own saved state",
+     WBY.party.s.x === 900 && WBY.notepad.s.w === 320,
+     "party.x=" + WBY.party.s.x + " notepad.w=" + WBY.notepad.s.w);
+
   ok("saved group restored", GROUPS.length === 1, GROUPS.map(g => g.id).join(",") || "none");
   const g = GROUPS[0];
   ok("ghost member dropped", g && !g.members.includes("doesNotExist"), g && g.members.join(","));

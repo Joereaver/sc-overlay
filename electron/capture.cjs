@@ -15,6 +15,16 @@ const path = require("node:path");
 const os = require("node:os");
 
 const POLL_MS = 3000;
+// Ore scanning is a live feedback loop — you scan a rock and want to hear what it is NOW — so the
+// loop speeds up while the scan HUD is actually on screen, then falls back. Sub, 2026-07-29:
+// "while I'm scanning for ore I want it to be as fast as possible", but explicitly NOT at the
+// fabricator, where rushing risks capturing a half-loaded render.
+const FAST_MS = 900;
+// How long a sighting of the scan HUD keeps the loop fast. Comfortably longer than the gap
+// between scans, so a scanning session doesn't drop back to 3s between rocks.
+const FAST_WINDOW_MS = 20000;
+// The kiosk render fades in over ~1-2s. This is the wait the 3s tick was implicitly giving it.
+const SETTLE_MS = 3000;
 
 // Return the FOREGROUND window's process name AND its screen rectangle. The rect lets us capture
 // the monitor the game is actually on (not a blind sources[0]) — critical on multi-monitor rigs.
@@ -290,7 +300,11 @@ function startFabCapture({ port, configDir, onStatus }) {
   let lastRenderWait = "";    // last item stuck waiting on its render (throttle the "waiting" note)
   let renderTries = 0;        // consecutive polls the current item failed the render check
   let renderStuck = false;    // we've already told the user this item's render won't load
-  let pendingItem = null;     // item seen last tick, awaiting a settle poll before capture
+  let pendingItem = null;     // item seen earlier, awaiting its settle window before capture
+  let pendingAt = 0;          // when we FIRST saw it — the settle is a duration, not a poll count
+  let fastUntil = 0;          // poll fast until this time (set while the scan HUD is on screen)
+  let lastTickMs = 0;         // how long the last poll actually took — the fast rate tunes off it
+  let rate = POLL_MS;         // the interval currently armed, so we only re-arm on a real change
   const uploaded = new Set(); // items pushed to the site this session
   const pendingUploads = new Map(); // item UUID -> display name|null: captured locally but NOT yet
   //                                   confirmed on the site; the drain loop retries until it lands
@@ -410,6 +424,27 @@ function startFabCapture({ port, configDir, onStatus }) {
           if (rr.kind === "fabricator" && rr.item) { read = rr; renderSrc = panel.img; } // rr.crop is panel-relative
         } catch (e) { console.warn("[fab-capture] RapidOCR re-read failed, using Windows OCR:", e && e.message); }
       }
+      // Cadence. Scanning ore is a live feedback loop: you shoot a rock and want to hear what it
+      // is immediately, so while the scan HUD is on screen the loop runs at FAST_MS. Everything
+      // else — and the fabricator ABOVE ALL — stays at the slow rate, because rushing a kiosk
+      // risks grabbing a render mid-fade. A kiosk frame cancels fast mode outright.
+      if (read.kind === "fabricator") fastUntil = 0;
+      else if (mining && read.scanHud) fastUntil = Date.now() + FAST_WINDOW_MS;
+      // Self-tuning, because this runs over a RUNNING GAME and a fixed rate is a guess about
+      // someone else's PC. A tick costs a screen grab plus an OCR (~230ms on Sub's machine with
+      // the warm worker, but a slower box could be several times that). Never let the loop occupy
+      // more than about two thirds of the time — on a fast machine that lands on FAST_MS, on a
+      // slow one it backs off by itself instead of stealing frames from the game.
+      const floor = Math.max(FAST_MS, Math.round(lastTickMs * 1.5));
+      const want = Date.now() < fastUntil ? floor : POLL_MS;
+      if (want !== rate) {
+        rate = want;
+        clearInterval(timer);
+        timer = setInterval(tick, rate);
+        timer.unref?.();
+        console.log(`[fab-capture] poll ${rate}ms${rate === FAST_MS ? " (scanning)" : ""}`);
+      }
+
       // A mining signature: the sidecar deliberately does NOT act on it until we've checked the
       // frame for the scan glyph beside the number — it has the OCR but not the pixels.
       if (read.kind === "mineable" && typeof read.signature === "number" && read.pin) {
@@ -450,14 +485,21 @@ function startFabCapture({ port, configDir, onStatus }) {
         }
         // Settle: the kiosk's 3D render fades in over ~1-2s, so a first-glimpse capture
         // can come out half-loaded / see-through. Require the item to still be on screen
-        // a poll later (this shot) before capturing, giving the render time to finish.
+        // SETTLE_MS later before capturing, giving the render time to finish.
+        // 🔑 Measured in TIME, not in polls. It used to be "still there a poll later", which
+        // silently meant ~3s only because the loop ticked every 3s — the moment the loop speeds
+        // up for ore scanning, a poll-based settle would start grabbing kiosk renders mid-fade.
+        // Sub's rule: going faster for mining must not change anything at the terminal.
         if (pendingItem !== item) {
           pendingItem = item;
+          pendingAt = Date.now();
           renderTries = 0; renderStuck = false; // fresh item — reset the render-stuck tracking
           emitEvent({ state: "settling", name: read.name });
           console.log(`[fab-capture] ${read.name}: waiting for render to settle`);
           return;
         }
+        // Still inside the settle window (a fast mining cadence can bring us back here in <1s).
+        if (Date.now() - pendingAt < SETTLE_MS) return;
         const c = read.crop;
         // Crop the render from whichever frame produced `read` — the panel crop (RapidOCR path,
         // its crop is panel-relative) or the full frame (Windows OCR path).
@@ -544,6 +586,7 @@ function startFabCapture({ port, configDir, onStatus }) {
     } catch (e) {
       console.error("[fab-capture] tick error:", e && e.message);
     } finally {
+      lastTickMs = Date.now() - busyAt;
       busy = false;
     }
   }
@@ -594,7 +637,7 @@ function startFabCapture({ port, configDir, onStatus }) {
     }
   }
 
-  const timer = setInterval(tick, POLL_MS);
+  let timer = setInterval(tick, POLL_MS);
   timer.unref?.();
   const drainTimer = setInterval(drainPending, DRAIN_MS);
   drainTimer.unref?.();

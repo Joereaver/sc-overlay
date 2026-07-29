@@ -6,6 +6,9 @@
 // exists, and a degenerate one-member group — because the loader is supposed to repair those
 // rather than trust the file.
 const SAVED = {
+  // Left CLOSED on purpose: the tracker is the app's main surface and must re-open on launch
+  // regardless (Sub, 2026-07-29). Suite 3 asserts the loader overrides this.
+  blueprint: { x: 100, y: 100, w: 380, h: 560, visible: false },
   mining: { x: 300, y: 200, scale: null, angle: null },
   party: { x: 900, y: 600, w: 340, h: 400 },
   notepad: { x: 500, y: 100, w: 320, h: 380 },

@@ -14,7 +14,7 @@ import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
-import { loadCatalog, readScreenshot, classifyScreen, type CatalogEntry, type OcrResult } from "./screen-read.js";
+import { loadCatalog, ocrImage, hasScanHud, classifyScreen, type CatalogEntry, type OcrResult } from "./screen-read.js";
 import { maybeShareLog } from "./log-share.js";
 
 const overlayDir = assetDir(import.meta.url, "overlay");
@@ -1205,14 +1205,21 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   if (url === "/api/screen-read" && req.method === "POST") {
     const body = await readBody(req);
     let result: unknown = { kind: "none" };
+    // Was the mining scan HUD on screen at all? Reported separately from `kind` because it is
+    // true on frames where no signature parsed — which is exactly when the capture loop still
+    // needs to know the player is scanning, so it can keep polling fast instead of idling.
+    let scanHud = false;
     if (!screenCatalog) screenCatalog = loadCatalog(dataDir);
     if (Array.isArray(body.lines)) {
       // Pre-computed OCR from the main process (RapidOCR reads the fabricator name off a right-
       // panel crop). Classify directly — skip the WinRT OCR entirely for this call.
       const ocr: OcrResult = { w: Number(body.w) || 0, h: Number(body.h) || 0, lines: body.lines };
       result = classifyScreen(ocr, screenCatalog);
+      scanHud = hasScanHud(ocr);
     } else if (typeof body.path === "string" && body.path) {
-      result = await readScreenshot(body.path, screenCatalog);
+      const ocr = await ocrImage(body.path);
+      result = classifyScreen(ocr, screenCatalog);
+      scanHud = hasScanHud(ocr);
     }
     // Routing applies to BOTH sources. Mining reads feed its tracker (same process); the
     // mission/fabricator reads are routed by capture.cjs off the returned result.
@@ -1227,7 +1234,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // share the one captured image across all of them (the log/kiosk can't say which size).
     else if (rd.kind === "fabricator" && rd.name) rd.items = tracker.itemUuidsForName(rd.name);
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(result));
+    res.end(JSON.stringify({ ...(result as object), scanHud }));
     return;
   }
 

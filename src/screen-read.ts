@@ -11,7 +11,7 @@
 // survives 16:9 / 21:9 / UI-scale differences between players. If OCR yields nothing
 // usable the caller falls back to the existing log-based behaviour.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -81,6 +81,14 @@ const REFINERY_MATERIALS = new Set([
   "QUARTZ", "HEPHAESTANITE", "LARANITE", "AGRICIUM", "BORASE", "BEXALITE", "TARANITE", "ASLARITE", "BERYL",
   "DIAMOND", "SILICON", "STILERON", "SAVRILIUM", "OURATITE", "RICCITE", "LINDINIUM", "TORITE", "ICE",
 ]);
+
+/** The mining scan HUD's own words. Exported as a test because the CAPTURE LOOP needs to know
+ *  the player is at the scanner even on frames where no signature parsed — that is what tells it
+ *  to poll fast (a scan is a live feedback loop) instead of idling at the slow rate. */
+const SCAN_HUD = /scanning|ready to scan|\bstrong\b|\bmoderate\b|\bweak\b/i;
+export function hasScanHud(ocr: OcrResult): boolean {
+  return SCAN_HUD.test(ocr.lines.map((l) => l.text).join(" | "));
+}
 
 /** Pull the scan signature number out of a HUD line. The value is comma-grouped thousands
  *  ("2,000" / "3,170" / "25,800") preceded by a diamond/pin icon the OCR renders as stray
@@ -158,8 +166,10 @@ function ocrScriptPath(): string {
   return ps1Path;
 }
 
-/** Run Windows OCR over an image file, returning lines with bounding boxes. */
-export function ocrImage(imagePath: string): Promise<OcrResult> {
+/** One powershell per read — kept as the FALLBACK for when the warm worker can't be spawned or
+ *  has just died. Correct but slow: it pays process startup + WinRT loading + engine creation
+ *  every time (897ms median vs the worker's 234ms). */
+function ocrImageOneShot(imagePath: string): Promise<OcrResult> {
   // WinRT StorageFile.GetFileFromPathAsync needs an absolute, backslash-separated path.
   const winPath = resolve(imagePath).replace(/\//g, "\\");
   return new Promise((done) => {
@@ -180,6 +190,118 @@ export function ocrImage(imagePath: string): Promise<OcrResult> {
       },
     );
   });
+}
+
+/** ConvertTo-Json can leave a raw control char inside a string (an OCR'd glyph decoded to one)
+ *  which strict JSON.parse rejects. `sanitizeJson` below strips them the same way the one-shot
+ *  path does, without this file having to repeat that literal character class. */
+function parseOcrJson(text: string): OcrResult {
+  try {
+    let cleaned = "";
+    for (const ch of text) cleaned += ch.charCodeAt(0) < 32 ? " " : ch;
+    const start = cleaned.indexOf("{");
+    const parsed = start >= 0 ? (JSON.parse(cleaned.slice(start)) as OcrResult) : null;
+    return parsed && Array.isArray(parsed.lines) ? parsed : { w: 0, h: 0, lines: [] };
+  } catch { return { w: 0, h: 0, lines: [] }; }
+}
+
+// ── The warm OCR worker ───────────────────────────────────────────────────────
+// Windows OCR itself is quick; STARTING it is not. Until 2026-07-29 every read spawned its own
+// powershell, paying process startup, `Add-Type`, three WinRT type loads and a fresh OcrEngine —
+// each and every time. Measured on Sub's machine, same image, same engine:
+//
+//     one powershell per read   897ms median
+//     one kept warm             234ms median   (568ms startup, paid once)
+//
+// That 663ms was most of the delay between scanning a rock and hearing the call-out. So the
+// process is kept alive and fed image paths on stdin. Spawned lazily — nothing starts until
+// something actually reads the screen, and every OCR opt-in is off by default — and if it dies
+// the next call falls back to a one-shot read and respawns.
+const OCR_LINES = OCR_PS1.split("\n");
+const OCR_SETUP = OCR_LINES.filter((l) => !l.startsWith("param(") && !l.startsWith("$file =") && !l.startsWith("$stream =")
+  && !l.startsWith("$decoder =") && !l.startsWith("$bitmap =") && !l.startsWith("$result =")
+  && !l.startsWith("$lines =") && !l.startsWith("@{ w=") && !l.startsWith("  ") && l !== "}");
+const OCR_BODY = OCR_LINES.filter((l) => l.startsWith("$file =") || l.startsWith("$stream =")
+  || l.startsWith("$decoder =") || l.startsWith("$bitmap =") || l.startsWith("$result =")
+  || l.startsWith("$lines =") || l.startsWith("  ") || l === "}" || l.startsWith("@{ w="));
+
+const OCR_WORKER_PS1 = [
+  ...OCR_SETUP,
+  `Write-Output "OCR-READY"`,
+  `while ($true) {`,
+  `  $Path = [Console]::In.ReadLine()`,
+  `  if ($null -eq $Path -or $Path -eq 'QUIT') { break }`,
+  `  try {`,
+  ...OCR_BODY.map((l) => "    " + l),
+  `    $stream.Dispose()`,
+  `  } catch { Write-Output '{"w":0,"h":0,"lines":[]}' }`,
+  `}`,
+].join("\n");
+
+let worker: ReturnType<typeof spawn> | null = null;
+let workerBuf = "";
+/** Answered in order — one image at a time, which is all the callers ever ask for. */
+const workerQueue: ((r: OcrResult) => void)[] = [];
+
+function killOcrWorker(): void {
+  const w = worker;
+  worker = null;
+  workerBuf = "";
+  try { w?.kill(); } catch { /* already gone */ }
+  // Nothing may be left hanging: a pending read that never settles latches the capture loop.
+  while (workerQueue.length) workerQueue.shift()?.({ w: 0, h: 0, lines: [] });
+}
+
+function ensureOcrWorker(): ReturnType<typeof spawn> | null {
+  if (worker) return worker;
+  try {
+    const p = join(tmpdir(), "sc-tracker-ocr-worker.ps1");
+    writeFileSync(p, OCR_WORKER_PS1, "utf8");
+    const w = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", p], { windowsHide: true });
+    worker = w;
+    w.stdout?.setEncoding("utf8");
+    w.stdout?.on("data", (chunk: string) => {
+      workerBuf += chunk;
+      let i: number;
+      while ((i = workerBuf.indexOf("\n")) >= 0) {
+        const line = workerBuf.slice(0, i).trim();
+        workerBuf = workerBuf.slice(i + 1);
+        if (!line || line === "OCR-READY") continue;   // the banner, not a result
+        workerQueue.shift()?.(parseOcrJson(line));
+      }
+    });
+    w.on("exit", () => { if (worker === w) killOcrWorker(); });
+    w.on("error", () => { if (worker === w) killOcrWorker(); });
+    return w;
+  } catch { killOcrWorker(); return null; }
+}
+
+/** Run Windows OCR over an image file, returning lines with bounding boxes. */
+export function ocrImage(imagePath: string): Promise<OcrResult> {
+  const w = ensureOcrWorker();
+  if (!w?.stdin) return ocrImageOneShot(imagePath);   // couldn't start one — take the slow road
+  const winPath = resolve(imagePath).replace(/\//g, "\\");
+  return new Promise((done) => {
+    let settled = false;
+    const finish = (r: OcrResult) => { if (!settled) { settled = true; done(r); } };
+    workerQueue.push(finish);
+    try { w.stdin?.write(winPath + "\n"); } catch { finish({ w: 0, h: 0, lines: [] }); return; }
+    // A wedged worker must never latch the capture loop. Give up well inside that loop's own
+    // 15s watchdog, drop the worker, and let the next call start a fresh one.
+    setTimeout(() => {
+      if (settled) return;
+      const at = workerQueue.indexOf(finish);
+      if (at >= 0) workerQueue.splice(at, 1);
+      killOcrWorker();
+      finish({ w: 0, h: 0, lines: [] });
+    }, 8000);
+  });
+}
+
+/** Shut the worker down. Safe when it was never started. */
+export function stopOcrWorker(): void {
+  try { worker?.stdin?.write("QUIT\n"); } catch { /* dead already */ }
+  killOcrWorker();
 }
 
 // ---- Name resolution ----------------------------------------------------------

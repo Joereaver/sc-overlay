@@ -2773,6 +2773,13 @@
       for (const w of WIDGETS) {
         const saved = (all && all[w.key]) || null;
         if (saved) w.s = { ...w.s, ...saved };
+        // 🔑 The Mission & BP Tracker ALWAYS opens on launch, whatever it was left in (Sub,
+        // 2026-07-29: "I don't care what its last state was"). It is the app's main surface, and
+        // a saved `visible:false` — a stray ✕, or a session that ended with it closed — meant
+        // opening the app to an empty screen. Forced HERE, where the saved layout is applied,
+        // rather than in the canvas block further down: that block races this loader and lost.
+        // Every other widget still restores exactly what it was.
+        if (w.key === "blueprint" && w.s.visible === false) w.s.visible = true;
         if (w.s.x == null || w.s.y == null) {
           if (w.defFn) w.defFn(w); else { w.s.x = w.def.x; w.s.y = w.def.y; }
         }
@@ -2905,7 +2912,9 @@
       // (the panel's own layout is loaded by the registry loader, keyed "blueprint")
       const q = new URLSearchParams(location.search); // test overrides
       applyAllFrames(); // re-apply every widget with the now-loaded canvas offset (they init in their own async block)
-      if (WBY.blueprint.s.visible === false) document.body.classList.add("bp-hidden"); // restore hidden state
+      // The tracker's forced-open rule lives in the registry loader (search "ALWAYS opens on
+      // launch") — it has to, because that loader applies the saved layout AFTER this block.
+      if (WBY.blueprint.s.visible === false) document.body.classList.add("bp-hidden");
       if (q.has("arrange")) { // headless-test the arrange chrome (incl. any widget also shown via its own flag)
         $("panel").classList.add("moving"); document.body.classList.add("arranging");
         for (const w of WIDGETS) {
