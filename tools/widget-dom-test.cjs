@@ -544,6 +544,36 @@ const SWEEPS = `(async () => {
   return out;
 })()`;
 
+// ── Suite: the "scan read area" outline ───────────────────────────────────────
+// The Mining Scanner cog can draw a box showing where the app reads for a signature. A
+// diagnostic that lies is worse than none, so the drawn rect is asserted against the SAME
+// fractions classifyScreen() searches — if that band ever moves, this fails instead of the box
+// quietly pointing at the wrong part of the screen.
+const SCANBOX = `(async () => {
+  ${PRELUDE}
+  const box = document.getElementById("scanBox");
+  ok("the outline exists", !!box);
+  ok("...and is off until asked for", getComputedStyle(box).display === "none");
+
+  setScanBox(true);
+  await sleep(150);
+  const r = box.getBoundingClientRect();
+  const ci = canvasInfo || { px: 0, py: 0, pw: innerWidth, ph: innerHeight };
+  const cx = ci.px + ci.pw / 2, cy = ci.py + ci.ph / 2;
+  // classifyScreen: |x - cx| < 0.17w, and y between cy-0.24h and cy-0.015h.
+  const want = { left: cx - 0.17 * ci.pw, right: cx + 0.17 * ci.pw, top: cy - 0.24 * ci.ph, bottom: cy - 0.015 * ci.ph };
+  const off = Math.max(Math.abs(r.left - want.left), Math.abs(r.right - want.right),
+                       Math.abs(r.top - want.top), Math.abs(r.bottom - want.bottom));
+  ok("it covers exactly the band the classifier searches", off <= 2,
+     "max edge error " + off.toFixed(1) + "px");
+  ok("it can never eat a click meant for the game", getComputedStyle(box).pointerEvents === "none");
+
+  setScanBox(false);
+  await sleep(100);
+  ok("...and turns back off", getComputedStyle(box).display === "none");
+  return out;
+})()`;
+
 // ── Suite 3: restore from a saved (and partly corrupt) layout ──────────────────
 const RESTORE = `(async () => {
   ${PRELUDE}
@@ -1106,6 +1136,7 @@ app.whenReady().then(async () => {
     fails += await run("cog auto-hide on game focus", COGHIDE,
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
+    fails += await run("scan read area", SCANBOX, null);
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
     // hunting that by bisection wastes a run each time.

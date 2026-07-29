@@ -421,6 +421,9 @@
       <div class="cog-sec">Announce</div>
       <div class="cog-seg"><span class="seg" id="segTarget" data-m="target">Targets only</span><span class="seg" id="segEvery" data-m="every">Every rock</span></div>
       <div class="cog-sec">Tools</div>
+      <label class="cog-opt" title="Draws a box on screen showing the area the app reads for a scan signature. Nothing outside it is looked at.">
+        <input type="checkbox" id="scanBoxChk" /> Show the scan read area
+      </label>
       <button type="button" id="testBtn" class="cog-btn">🔊 Test sound</button>
       <button type="button" id="openSettings" class="cog-btn">⚙ Open full settings…</button>
     </div>
@@ -670,8 +673,20 @@
   }, 1000);
 
   // ---- settings (all in the cog) ----
-  const renderVoice = () => { $("voiceChk").checked = voiceOn(); };
+  const renderVoice = () => {
+    $("voiceChk").checked = voiceOn();
+    $("scanBoxChk").checked = localStorage.getItem("miningScanBox") === "on";
+  };
   $("voiceChk").addEventListener("change", () => { localStorage.setItem("miningVoice", $("voiceChk").checked ? "on" : "off"); });
+  // "Show the scan read area" — the canvas draws the box, because it is the only surface that
+  // spans the screen; this widget is a small window that could be anywhere. Same-origin, so the
+  // flag in localStorage is the one the canvas reads on startup; the host call is just so the
+  // box appears the instant you tick it.
+  $("scanBoxChk").addEventListener("change", () => {
+    const on = $("scanBoxChk").checked;
+    localStorage.setItem("miningScanBox", on ? "on" : "off");
+    try { host()?.scanBox?.(on); } catch { /* standalone: no canvas to draw on */ }
+  });
   $("volSlider").value = Math.round(getVol() * 100);
   $("volSlider").addEventListener("input", () => { localStorage.setItem("miningVol", ($("volSlider").value / 100).toString()); if (master) master.gain.value = getVol(); });
   // Per-widget angle: live-apply on drag, persist on release (this widget only). Embedded, the

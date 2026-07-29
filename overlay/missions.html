@@ -597,6 +597,19 @@
   /* Blueprint widget hidden via the hub toggle (shell window stays alive to host the chrome). */
   body.bp-hidden #panel { display: none; }
 
+  /* "Show the scan read area" (Mining Scanner cog). A diagnostic outline over the band the
+     signature classifier actually searches, so a scan that never registers stops being a mystery:
+     you can see whether the number is even inside it. Purely informational —
+     pointer-events:none and deliberately NOT in the RSEL region list, or a box this size would
+     swallow clicks meant for the game. */
+  #scanBox { display: none; position: fixed; z-index: 12; pointer-events: none;
+    border: 1px dashed rgba(var(--accent-rgb), 0.55); border-radius: 4px;
+    background: rgba(var(--accent-rgb), 0.05); }
+  body.scanbox #scanBox { display: block; }
+  #scanBox .sb-tag { position: absolute; left: 0; top: -17px; font-family: var(--sans);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--cyan-dim); white-space: nowrap; }
+
   /* 🔑 Drag shield. A widget's neighbours are IFRAMES, and pointer events over an iframe go to
      ITS document — window.pointermove in this one simply stops firing, so a drag froze the
      moment the cursor crossed another widget and then snapped when it came back out. A shield
@@ -1119,6 +1132,9 @@
       </div>
     </div>
   </div>
+
+  <!-- Diagnostic outline of the area the signature classifier reads (Mining Scanner cog). -->
+  <div id="scanBox"><span class="sb-tag">Scan read area</span></div>
 
   <!-- Global overlay-app chrome (canvas shell only): screen-anchored cog + in-overlay hub. -->
   <div id="globalCog" title="Overlay settings">⚙</div>
@@ -2037,6 +2053,8 @@
       host: (w) => ({
         setModal: (on) => window.overlayApi?.setModal?.(!!on),
         requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
+        // "Show the scan read area": drawn here, because only the canvas spans the screen.
+        scanBox: (on) => setScanBox(on),
         // Mining's settings menu has its own angle slider; it drives the parent's state like every
         // other widget's does, so a stacked Mining tilts the whole stack.
         getAngle: () => wAngle(w),
@@ -2410,6 +2428,33 @@
     const r = wSettingsRoot(w); const inj = r?.querySelector(".wtext-val"); if (inj) out.push(inj);
     return out;
   };
+  // ── "Show the scan read area" ───────────────────────────────────────────────────────────
+  // The Mining Scanner's cog toggles this; the CANVAS draws it, because the canvas is the only
+  // surface that spans the screen. The fractions are the ones classifyScreen() actually searches
+  // for a signature number — keep them in step, or the box lies about what is read.
+  //   x: within 0.17 of centre   y: from cy-0.24h up to cy-0.015h
+  // Drawn over the PRIMARY display, which is where the game is captured from; on a multi-monitor
+  // rig with SC on a second screen the outline sits on the wrong one, and that is worth knowing
+  // before trusting it as a diagnostic.
+  function drawScanBox() {
+    const el = document.getElementById("scanBox");
+    if (!el) return;
+    const ci = canvasInfo || { px: 0, py: 0, pw: window.innerWidth, ph: window.innerHeight };
+    const w = ci.pw * 0.34;                       // 0.17 either side of centre
+    const top = ci.py + ci.ph * (0.5 - 0.24);
+    const h = ci.ph * (0.24 - 0.015);
+    el.style.left = Math.round(ci.px + ci.pw / 2 - w / 2) + "px";
+    el.style.top = Math.round(top) + "px";
+    el.style.width = Math.round(w) + "px";
+    el.style.height = Math.round(h) + "px";
+  }
+  function setScanBox(on) {
+    document.body.classList.toggle("scanbox", !!on);
+    if (on) drawScanBox();
+  }
+  // Restore on load: mining.html and this page are same-origin, so its cog's flag is right here.
+  try { if (localStorage.getItem("miningScanBox") === "on") setScanBox(true); } catch { /* no storage */ }
+
   // ── The Web Page widget's native view ───────────────────────────────────────────────────
   // Its content isn't in the DOM at all: the shell paints a WebContentsView over the canvas,
   // because an iframe can't show a site that busts frames (which the RSI site does). The widget
@@ -2908,6 +2953,7 @@
     (async () => {
       try { canvasInfo = await window.overlayApi?.getCanvasInfo?.() || null; } catch { /* single-monitor fallback */ }
       applyCanvasVars(); // pin screen-anchored chrome to the primary monitor (multi-monitor void-safe)
+      drawScanBox();     // now that the real display geometry is known, not the window's guess
       let saved = null;
       // (the panel's own layout is loaded by the registry loader, keyed "blueprint")
       const q = new URLSearchParams(location.search); // test overrides
