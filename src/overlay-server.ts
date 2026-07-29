@@ -235,7 +235,9 @@ const DEFAULTS: Config = {
   partyOpen: false,
   battagliaOpen: false,
   webViewOpen: false,
-  webViewUrl: "",
+  // A first-run Web Page widget opens on the blueprint tracker rather than an empty form —
+  // it's the page most likely to be wanted beside the game, and it shows what the widget does.
+  webViewUrl: "https://subliminal.gg/blueprints",
   bindingChartOpen: false,
   miningTone: "",
   hwAccel: false,

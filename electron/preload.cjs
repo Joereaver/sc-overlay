@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // Whether the view is actually being painted right now (it stands down for arrange mode, a
   // modal, or the overlay being switched off). A hidden view can't report this about itself.
   onWebViewPainted: (cb) => ipcRenderer.on("webview:painted", (_e, s) => cb(s)),
+  // Cursor entered/left the view. The canvas can't see this itself — the view is a native
+  // surface, not an iframe — and without it the Web Page widget's bar never comes out.
+  onWebViewCursor: (cb) => ipcRenderer.on("webview:cursor", (_e, on) => cb(!!on)),
   // Per-widget canvas layout: read saved positions/sizes on load, and persist them as the
   // user drags/resizes a widget in arrange mode. Layout = { [id]: {x, y, scale, visible} }.
   getWidgets: () => ipcRenderer.invoke("overlay:get-widgets"),

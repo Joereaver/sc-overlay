@@ -143,6 +143,8 @@ let webView = null;
 let webViewBounds = { x: 0, y: 0, width: 0, height: 0 };
 let webViewWanted = false;   // the renderer wants it visible
 let webViewMasked = false;   // ...but something is drawing over it right now
+let webViewPainted = false;  // what the two above actually resolved to
+let webViewHover = false;    // is the cursor over the view right now
 
 function ensureWebView() {
   if (webView || !overlay) return webView;
@@ -196,6 +198,7 @@ function applyWebViewBounds() {
   // Echo what we actually did. Nothing inside a hidden view can report this — it keeps its last
   // size and visibility state — so the shell is the only honest source, and the widget needs it
   // to know whether the page it thinks it's showing is on screen at all.
+  webViewPainted = on;
   try {
     overlay?.webContents.send("webview:painted", { painted: on, wanted: webViewWanted, masked: webViewMasked, bounds: webViewBounds });
   } catch { /* overlay went away */ }
@@ -500,6 +503,15 @@ function pollCursor() {
       // — which is why a widget whose header was revealed by a CLICK (any page with a text field
       // reports pointerdown to reveal its bar) kept that bar out forever.
       if (!over) { try { overlay.webContents.send("overlay:cursor-away"); } catch { /* gone */ } }
+    }
+    // The Web Page widget's content is a native view, so a cursor over it never reaches the
+    // canvas DOM and :hover can never fire — that widget's bar would stay in forever while every
+    // other widget's slides out. We are the only thing that can see this cursor, so we say so.
+    // (Same reason `.touched` exists for iframes; a view is the harder version of that problem.)
+    const onView = webViewPainted && insideRegions([{ x: webViewBounds.x, y: webViewBounds.y, w: webViewBounds.width, h: webViewBounds.height }], overlay, pt);
+    if (onView !== webViewHover) {
+      webViewHover = onView;
+      try { overlay.webContents.send("webview:cursor", onView); } catch { /* gone */ }
     }
   }
 }

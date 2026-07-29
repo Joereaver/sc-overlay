@@ -2555,6 +2555,10 @@
   // nothing at all, so the bar stayed out for good. The shell's cursor poll is the only thing
   // that still knows where the pointer is.
   window.overlayApi?.onCursorAway?.(() => touchWidget(null));
+  // A cursor over the Web Page widget's native view never reaches this document, so :hover can't
+  // reveal its bar the way it does for every other widget. The shell watches the cursor and tells
+  // us; `.touched` is the same lever an embedded page pulls on pointerdown.
+  window.overlayApi?.onWebViewCursor?.((on) => { if (WBY.webView) touchWidget(on ? WBY.webView : null); });
 
   // Create the iframe (idempotent). Loading it starts whatever the page does — SSE, polling,
   // audio — so only arm it when the widget is shown, or when the shell asks for it to be armed
