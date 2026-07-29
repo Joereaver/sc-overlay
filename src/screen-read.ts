@@ -43,8 +43,34 @@ export interface RefineryRead {
   station: string | null;   // "LEVSKI"
   jobs: RefineryJobRead[];   // the PROCESSING order(s) currently on screen
 }
-/** A scanned mineable's signature number (exact-lookup happens in the tracker). */
-export interface MineableRead { kind: "mineable"; signature: number; raw: string; }
+/** A scanned mineable's signature number (exact-lookup happens in the tracker).
+ *  `pin` is where the shell should look for the scan glyph that proves this number came from a
+ *  real scan rather than being some other number the OCR happened to find near screen centre —
+ *  see glyphSearchBox(). Windows OCR is text-only and cannot see the glyph itself, so the pixel
+ *  check has to happen where the bitmap is (electron/capture.cjs). */
+export interface MineableRead { kind: "mineable"; signature: number; raw: string; pin: Rect; }
+
+/** The box to hunt the scan glyph in: immediately LEFT of the number, anchored on the number's
+ *  own OCR bbox so it travels with it — head-tracking drift and resolution both stop mattering.
+ *  Measured on a 3440×1440 frame (2026-07-24): pin 15×22px, number 37×13px, gap 11px, so the
+ *  glyph sits within ~2.5 text-heights to the left and stands ~1.7× the text height. The box is
+ *  generous on both axes because the pill is translucent and the number's bbox is only as tight
+ *  as the OCR made it. */
+export function glyphSearchBox(line: OcrLine, w: number, h: number): Rect {
+  const th = Math.max(6, line.h);           // text height drives everything; never trust a 0
+  // 3.0 rather than the 2.6 the measurements imply: at 2.6 the box lands one pixel short of the
+  // pin's left edge (964 vs 963 on the measured frame), and the gap isn't guaranteed to stay
+  // exactly 11px at other UI scales. The colour test is narrow enough that a wider box costs
+  // nothing — the pin still fills ~29% of it.
+  const boxW = Math.round(th * 3.0);
+  const boxH = Math.round(th * 2.2);
+  const x = Math.round(line.x - boxW - th * 0.15); // a hair of slack for a bbox that starts tight
+  const y = Math.round(line.y + line.h / 2 - boxH / 2);
+  // Clamp into the frame: a signature near the left edge would otherwise sample out of bounds.
+  const cx = Math.max(0, Math.min(x, w - 1));
+  const cy = Math.max(0, Math.min(y, h - 1));
+  return { x: cx, y: cy, w: Math.max(1, Math.min(boxW, w - cx)), h: Math.max(1, Math.min(boxH, h - cy)) };
+}
 export interface NoneRead { kind: "none"; }
 export type ScreenRead = FabricatorRead | MissionRead | RefineryRead | MineableRead | NoneRead;
 
@@ -480,7 +506,13 @@ export function classifyScreen(ocr: OcrResult, catalog: CatalogEntry[]): ScreenR
       .filter((c): c is { l: OcrLine; sig: number } => c.sig != null);
     if (cands.length) {
       cands.sort((a, b) => Math.abs(a.l.x - cx) - Math.abs(b.l.x - cx));
-      return { kind: "mineable", signature: cands[0].sig, raw: cands[0].l.text.trim() };
+      const best = cands[0];
+      return {
+        kind: "mineable",
+        signature: best.sig,
+        raw: best.l.text.trim(),
+        pin: glyphSearchBox(best.l, ocr.w, ocr.h),
+      };
     }
   }
 

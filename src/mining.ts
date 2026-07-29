@@ -35,7 +35,9 @@ export interface RefineryJob {
 export interface MiningView {
   rocks: { name: string; rarity: string }[]; // catalog for the target picker
   targets: string[];                          // rock names the player is hunting
-  scan: { signature: number; matches: { name: string; rarity: string; count: number }[]; at: number } | null;
+  // `confirmed`: the scan glyph was found beside the number in the frame, so this came from a
+  // real scan rather than being a number the OCR happened to find (see applyMineableRead).
+  scan: { signature: number; matches: { name: string; rarity: string; count: number }[]; at: number; confirmed: boolean } | null;
   jobs: {
     id: string; station: string | null; material: string | null; yieldScu: number | null;
     endAt: number; remainingSec: number; done: boolean;
@@ -77,14 +79,20 @@ export class MiningTracker extends EventEmitter {
 
   /** A scanned signature number -> the matching rock(s). Exact-match only (values can be
    *  5 apart, so a tolerance would pick the wrong rock). Unknown numbers are ignored. */
-  applyMineableRead(signature: number): void {
+  /** `confirmed` = the frame showed the scan glyph beside this number, so a real scan produced
+   *  it. Without that, a number matching NOTHING in the rock table is as likely to be some other
+   *  HUD number the OCR grabbed as it is salvage debris — so it is dropped here rather than
+   *  becoming a "Debris" call-out the player didn't ask for. A number that DOES resolve to a
+   *  known rock is kept either way: matching the table is its own evidence. */
+  applyMineableRead(signature: number, confirmed = false): void {
     if (!this.data) return;
     if (signature < MIN_SIGNATURE) return; // below the floor -> ignore entirely (no display, no call-out)
     const matches = this.data.index[String(signature)] ?? []; // empty = not a rock -> salvage debris
+    if (!matches.length && !confirmed) return;
     // Ignore a repeat read of the same signature (the loop polls the same rock every ~3s);
     // only a CHANGED signature is news worth re-announcing.
     if (this.scan && this.scan.signature === signature) return;
-    this.scan = { signature, matches, at: Date.now() };
+    this.scan = { signature, matches, at: Date.now(), confirmed };
     const hit = matches.find((m) => this.targets.has(m.name));
     this.emit("change");
     if (hit) this.emit("target-hit", { ...hit, signature });

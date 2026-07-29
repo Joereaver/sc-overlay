@@ -1214,7 +1214,10 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // mission/fabricator reads are routed by capture.cjs off the returned result.
     const rd = result as { kind?: string; signature?: number; name?: string; items?: string[] };
     if (rd.kind === "refinery") mining.applyRefineryRead(result as never);
-    else if (rd.kind === "mineable" && typeof rd.signature === "number") mining.applyMineableRead(rd.signature);
+    // A mineable is NOT applied here any more. The number alone doesn't prove a scan happened —
+    // that's what put "Debris" in the player's ear while they weren't scanning. The caller has
+    // the pixels, so it checks the frame for the scan glyph beside the number and comes back via
+    // POST /api/mining/scan with the verdict.
     // A fabricator display name can map to several distinct same-named items (e.g. the 3
     // sizes of "Cinch Scraper Module"). Hand back every sibling UUID so the capture loop can
     // share the one captured image across all of them (the log/kiosk can't say which size).
@@ -1610,6 +1613,19 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     const r = text ? await twitchSend(text) : { ok: false, message: "Nothing to send." };
     res.writeHead(r.ok ? 200 : 400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify(r));
+    return;
+  }
+
+  // The verdict on a signature the screen-read found: did the frame also show the scan glyph
+  // beside it? Only the caller can answer that (it holds the bitmap; this process only ever sees
+  // the OCR's text). Unconfirmed numbers still resolve a KNOWN rock — a table hit is its own
+  // evidence — but they can't announce debris, which is where the false call-outs came from.
+  if (url === "/api/mining/scan" && req.method === "POST") {
+    const body = await readBody(req);
+    const signature = Number(body?.signature);
+    if (Number.isFinite(signature)) mining.applyMineableRead(signature, body?.confirmed === true);
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 

@@ -120,6 +120,72 @@ function hasRender(image) {
   return edges / total > 0.001;
 }
 
+// Did a real SCAN produce this number, or did the OCR just find a comma-grouped number floating
+// near screen centre? A genuine mining signature is drawn beside a map-pin glyph; nothing else on
+// the HUD pairs that glyph with a number. Windows OCR is text-only and can't see icons, so this is
+// the only way to tell — and it's the difference between "Debris" meaning something and the widget
+// calling out numbers the player never scanned.
+//
+// Measured on Sub's 3440×1440 frame (2026-07-24): pin 15×22px, mean RGB (190,200,113).
+// 🔑 Colour ALONE cannot do it: G−R is +10 on the pin but −5 on the SCANNING label. What separates
+// them is BLUE — the pin is a desaturated yellow-green (B≈133) while the HUD's yellow is B≈25–43.
+// Restricting the test to a box beside a number is what makes the colour test safe.
+// ⚠ The pill is TRANSLUCENT, so what shows through varies with the backdrop. The thresholds are
+// deliberately loose and every read logs its measurements, so real scans can tighten them.
+// Which way to err: a MISSED glyph costs almost nothing — a signature that resolves to a known
+// ore is applied regardless, so ore detection can't break — it only means a real piece of debris
+// goes unannounced. A FALSE glyph puts "Debris" back in the player's ear for a number they never
+// scanned, which is the whole complaint. So the band is drawn to be sure, not to be generous...
+// except that the pill is translucent, and a pin blended halfway into dark space is a REAL scan
+// (measured 50% blend: 99,105,64). minB/minG sit just under that, still far above the HUD yellow
+// (B 25–43) that has to stay out.
+const GLYPH = {
+  minB: 60,        // above HUD yellow (25–43), under a pin blended 50% into space (64)
+  minG: 85,        // the glyph is bright; dark space behind the pill is not
+  maxGR: 60,       // green and red stay close (yellow-green), unlike a cyan/blue HUD element
+  minGR: -25,      // ...in either direction; translucency shifts this around
+  // ...and it must still BE yellow-green. Without this, white (255,255,255) passes every test
+  // above — any bright white HUD element beside a number would read as a scan glyph. The pin
+  // keeps blue well below red/green (190,200 vs 113 = 77 clear); white has no gap at all.
+  minYellow: 30,
+  minFraction: 0.04, // the pin is ~15×22 in a ~34×29 box; even heavily blended it clears this
+};
+
+/** Sample the box beside the signature number and decide whether the scan glyph is in it.
+ *  Returns the measurements too — they go in the log so the thresholds can be tuned from real
+ *  scans rather than guessed at a second time. */
+function findScanGlyph(image, rect) {
+  const { width: w, height: h } = image.getSize();
+  const x0 = Math.max(0, Math.min(Math.round(rect.x), w - 1));
+  const y0 = Math.max(0, Math.min(Math.round(rect.y), h - 1));
+  const x1 = Math.max(x0, Math.min(Math.round(rect.x + rect.w), w));
+  const y1 = Math.max(y0, Math.min(Math.round(rect.y + rect.h), h));
+  const total = (x1 - x0) * (y1 - y0);
+  if (total <= 0) return { seen: false, fraction: 0, total: 0, mean: null };
+  const bmp = image.getBitmap(); // BGRA, 4 bytes/pixel
+  let hits = 0, sr = 0, sg = 0, sb = 0, hr = 0, hg = 0, hb = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      const b = bmp[i], g = bmp[i + 1], r = bmp[i + 2];
+      sr += r; sg += g; sb += b;
+      const gr = g - r;
+      if (b >= GLYPH.minB && g >= GLYPH.minG && gr <= GLYPH.maxGR && gr >= GLYPH.minGR
+          && Math.min(r, g) - b >= GLYPH.minYellow) {
+        hits++; hr += r; hg += g; hb += b;
+      }
+    }
+  }
+  const fraction = hits / total;
+  return {
+    seen: fraction >= GLYPH.minFraction,
+    fraction: Math.round(fraction * 1000) / 1000,
+    total,
+    mean: [Math.round(sr / total), Math.round(sg / total), Math.round(sb / total)],
+    hitMean: hits ? [Math.round(hr / hits), Math.round(hg / hits), Math.round(hb / hits)] : null,
+  };
+}
+
 const SITE = "https://subliminal.gg";
 
 // Crop tight around the SUBJECT and re-centre on it, on BOTH axes. The kiosk shows the item
@@ -344,6 +410,24 @@ function startFabCapture({ port, configDir, onStatus }) {
           if (rr.kind === "fabricator" && rr.item) { read = rr; renderSrc = panel.img; } // rr.crop is panel-relative
         } catch (e) { console.warn("[fab-capture] RapidOCR re-read failed, using Windows OCR:", e && e.message); }
       }
+      // A mining signature: the sidecar deliberately does NOT act on it until we've checked the
+      // frame for the scan glyph beside the number — it has the OCR but not the pixels.
+      if (read.kind === "mineable" && typeof read.signature === "number" && read.pin) {
+        const glyph = findScanGlyph(shot, read.pin);
+        console.log(
+          `[mining] signature ${read.signature} — glyph ${glyph.seen ? "FOUND" : "not found"}` +
+          ` (${Math.round(glyph.fraction * 100)}% of ${glyph.total}px, box mean rgb ${glyph.mean}` +
+          `${glyph.hitMean ? `, matched mean rgb ${glyph.hitMean}` : ""})`,
+        );
+        try {
+          await fetch(`http://localhost:${port}/api/mining/scan`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ signature: read.signature, confirmed: glyph.seen }),
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          });
+        } catch (e) { console.warn("[mining] scan post failed:", e && e.message); }
+      }
       // A kiosk on screen -> "fabricator" context (gold diamond) even if image capture is off;
       // anything else while watching -> "watching".
       emitContext(read.kind === "fabricator" ? "fabricator" : "watching");
@@ -518,4 +602,4 @@ function startFabCapture({ port, configDir, onStatus }) {
   return () => { clearInterval(timer); clearInterval(drainTimer); };
 }
 
-module.exports = { startFabCapture, centerTighten };
+module.exports = { startFabCapture, centerTighten, findScanGlyph, GLYPH };

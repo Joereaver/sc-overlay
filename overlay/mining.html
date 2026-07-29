@@ -777,16 +777,16 @@
     // 🔑 While the widget is HIDDEN (armed for auto-show) it must be silent. It stays subscribed
     // to the event stream purely so auto-show can pop it — announcing from an invisible widget is
     // what made "debris" speak when the Mining Assistant wasn't even open.
-    if (hiddenMode) { if (sc.matches.length) maybeAutoShow(); return; }
+    // Evidence that the player is REALLY scanning is either of: the number resolved to a known
+    // ore, or the frame showed the scan glyph beside it (sc.confirmed — see findScanGlyph in
+    // capture.cjs). Debris used to be barred from auto-show because a bare number proved nothing
+    // and the widget kept popping itself up mid-flight; a confirmed glyph is proof, so confirmed
+    // debris pops again. An unconfirmed non-match never reaches here — the tracker drops it.
+    const real = (s) => s.matches.length > 0 || s.confirmed === true;
+    if (hiddenMode) { if (real(sc)) maybeAutoShow(); return; }
     const el = $("scanNow");
     const flash = () => { el.classList.remove("hit"); void el.offsetWidth; el.classList.add("hit"); };
-    // 🔑 A number that matches NOTHING in the rock table is "debris" — but it's just as likely to
-    // be an unrelated number the OCR picked up off the HUD, which is why the widget was popping
-    // itself up when the player wasn't scanning at all. So debris must NEVER trigger auto-show;
-    // only a signature that actually resolves to a known ore is good enough evidence that the
-    // player is really scanning. (Revisit once the orange scan-glyph pixel check lands — that
-    // will confirm a real scan and debris can pop again.)
-    if (!sc.matches.length) { flash(); speakClips(["n_debris"], "Debris"); return; }
+    if (!sc.matches.length) { maybeAutoShow(); flash(); speakClips(["n_debris"], "Debris"); return; }
     maybeAutoShow();                 // a REAL ore signature => the player is genuinely scanning
     const isTarget = sc.matches.some((m) => targetSet.has(m.name));
     if (isTarget) { flash(); chime(); }
