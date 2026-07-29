@@ -108,8 +108,12 @@ interface Config {
   twitchClientId: string;
   /** OAuth user token (scope chat:edit) from the device-code flow. Empty = read-only chat. */
   twitchUserToken: string;
-  /** The signed-in Twitch login that token belongs to — IRC needs it as the NICK when sending. */
+  /** The signed-in Twitch login that token belongs to — shown in the widget so you can see who
+   *  you're about to talk as. Not a secret, so unlike the token it IS returned by GET /api/config. */
   twitchUserLogin: string;
+  /** Refresh token from the device flow. A Twitch user token expires in ~4h, so without this,
+   *  sending would silently stop working mid-session and read as a bug. */
+  twitchRefreshToken: string;
   /** Remembers whether the SC Feed widget was left armed, so it's restored on launch. */
   scFeedOpen: boolean;
   /** Where a SC Feed card's click goes: "site" opens sc-feed.subliminal.gg (default - the feed
@@ -221,6 +225,7 @@ const DEFAULTS: Config = {
   twitchClientId: "44srrs673ypzr1e1y8izcfbbirkmso", // Sub's registered Twitch app
   twitchUserToken: "",
   twitchUserLogin: "",
+  twitchRefreshToken: "",
   scFeedOpen: false,
   scFeedLinkTarget: "site",
   scFeedVoice: false,
@@ -820,6 +825,213 @@ function readBody(req: import("node:http").IncomingMessage): Promise<any> {
   });
 }
 
+// ── Twitch device-code login ─────────────────────────────────────────────────
+// Sending chat needs a user token, and getting one needs an OAuth flow. The DEVICE flow is the
+// right shape for a desktop app: no redirect URI, no client secret — the user types a short code
+// on twitch.tv while we poll. It runs HERE and not in the widget for two reasons: id.twitch.tv
+// sends no CORS headers (the flow is designed for non-browser clients), and the token has to be
+// persisted, which only the sidecar can do.
+//
+// 🔑 The token NEVER leaves this process. Sending goes through Helix rather than IRC's
+// `PASS oauth:<token>`, because IRC-from-the-widget means handing the token to the renderer — and
+// this server also answers on the LAN for OBS browser sources, so anything on the network could
+// then read it. That is the same reason GET /api/config strips it. Reading chat is unchanged:
+// still anonymous IRC, still no token.
+//
+// 🔑 …but keeping the token in here is only half of it. Anything that ACTS with the token is the
+// same capability as holding it, and this server answers on the LAN by design (it advertises its
+// own LAN IP for OBS browser sources). So the three endpoints below are LOOPBACK ONLY: the
+// widgets run in the app on this machine and are unaffected, while the rest of the network can
+// still load widget pages and read chat. Without this, anything on the network could post to
+// #yourchannel as you.
+const TWITCH_SCOPES = "user:write:chat";
+
+/** True for a request that came from this machine. IPv6-mapped IPv4 (`::ffff:127.0.0.1`) is what
+ *  a loopback request usually looks like on a dual-stack listener, so match that too. */
+function fromThisMachine(req: import("node:http").IncomingMessage): boolean {
+  const a = req.socket.remoteAddress ?? "";
+  return a === "::1" || a === "127.0.0.1" || a.startsWith("::ffff:127.");
+}
+
+type TwitchLoginState =
+  | { state: "idle" }
+  | { state: "pending"; userCode: string; verificationUri: string; expiresAt: number }
+  | { state: "ok"; login: string }
+  | { state: "error"; message: string };
+
+let twitchLogin: TwitchLoginState = { state: "idle" };
+let twitchPoll: ReturnType<typeof setTimeout> | null = null;
+const twitchIdCache = new Map<string, string>(); // channel login -> broadcaster id
+
+function stopTwitchPoll() {
+  if (twitchPoll) { clearTimeout(twitchPoll); twitchPoll = null; }
+}
+
+/** Resolve a token to its login + user id. Doubles as the liveness check — an expired or revoked
+ *  token fails to validate, which is how we know to reach for the refresh token. */
+async function twitchValidate(token: string): Promise<{ login: string; userId: string } | null> {
+  if (!token) return null;
+  try {
+    const r = await fetch("https://id.twitch.tv/oauth2/validate", {
+      headers: { Authorization: "OAuth " + token },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return null;
+    const d: any = await r.json();
+    return d?.login ? { login: String(d.login), userId: String(d.user_id) } : null;
+  } catch { return null; }
+}
+
+/** Swap the refresh token for a fresh access token. A Twitch user token lasts ~4 hours, so
+ *  without this, sending would quietly stop working part-way through a session. */
+async function twitchRefreshToken(): Promise<boolean> {
+  if (!config.twitchRefreshToken) return false;
+  try {
+    const r = await fetch("https://id.twitch.tv/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: config.twitchClientId.trim(),
+        grant_type: "refresh_token",
+        refresh_token: config.twitchRefreshToken,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const d: any = await r.json();
+    if (!r.ok || !d?.access_token) return false;
+    config.twitchUserToken = String(d.access_token);
+    if (d.refresh_token) config.twitchRefreshToken = String(d.refresh_token);
+    await saveConfig();
+    return true;
+  } catch { return false; }
+}
+
+/** A usable token, refreshed if the stored one has expired. null = signed out or re-auth needed. */
+async function twitchAuth(): Promise<{ token: string; userId: string; login: string } | null> {
+  let v = await twitchValidate(config.twitchUserToken);
+  if (!v && (await twitchRefreshToken())) v = await twitchValidate(config.twitchUserToken);
+  if (!v) return null;
+  if (v.login !== config.twitchUserLogin) { config.twitchUserLogin = v.login; await saveConfig(); }
+  return { token: config.twitchUserToken, userId: v.userId, login: v.login };
+}
+
+async function startTwitchLogin(): Promise<TwitchLoginState> {
+  stopTwitchPoll();
+  const clientId = config.twitchClientId.trim();
+  if (!clientId) return (twitchLogin = { state: "error", message: "No Twitch client id is configured." });
+  try {
+    const r = await fetch("https://id.twitch.tv/oauth2/device", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: clientId, scopes: TWITCH_SCOPES }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const d: any = await r.json();
+    if (!r.ok || !d?.device_code) throw new Error(String(d?.message ?? `Twitch said ${r.status}`));
+    const intervalMs = Math.max(1000, Number(d.interval ?? 5) * 1000);
+    const expiresAt = Date.now() + Math.max(60, Number(d.expires_in ?? 1800)) * 1000;
+    twitchLogin = {
+      state: "pending",
+      userCode: String(d.user_code ?? ""),
+      // Twitch's verification_uri already carries the code, so the browser lands pre-filled.
+      verificationUri: String(d.verification_uri ?? "https://www.twitch.tv/activate"),
+      expiresAt,
+    };
+    twitchPoll = setTimeout(() => void pollTwitchDevice(String(d.device_code), intervalMs, expiresAt), intervalMs);
+  } catch (e) {
+    twitchLogin = { state: "error", message: String((e as Error)?.message || e) };
+  }
+  return twitchLogin;
+}
+
+async function pollTwitchDevice(deviceCode: string, intervalMs: number, expiresAt: number): Promise<void> {
+  twitchPoll = null;
+  if (Date.now() > expiresAt) {
+    twitchLogin = { state: "error", message: "That code expired — start again." };
+    return;
+  }
+  let d: any = null, ok = false;
+  try {
+    const r = await fetch("https://id.twitch.tv/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: config.twitchClientId.trim(),
+        device_code: deviceCode,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        scopes: TWITCH_SCOPES,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    d = await r.json();
+    ok = r.ok;
+  } catch { /* a dropped request is transient — keep polling */ }
+
+  if (ok && d?.access_token) {
+    config.twitchUserToken = String(d.access_token);
+    config.twitchRefreshToken = String(d.refresh_token ?? "");
+    const v = await twitchValidate(config.twitchUserToken);
+    config.twitchUserLogin = v?.login ?? "";
+    await saveConfig();
+    twitchLogin = v
+      ? { state: "ok", login: v.login }
+      : { state: "error", message: "Twitch returned a token that doesn't validate." };
+    return;
+  }
+  // "authorization_pending" is the normal not-yet-approved answer; "slow_down" means back off.
+  // Anything else (denied, expired, bad client) is fatal and must SAY so rather than spin forever.
+  const msg = String(d?.message ?? "");
+  if (/slow.?down/i.test(msg)) intervalMs += 1000;
+  else if (msg && !/authorization_pending/i.test(msg)) {
+    twitchLogin = { state: "error", message: msg };
+    return;
+  }
+  twitchPoll = setTimeout(() => void pollTwitchDevice(deviceCode, intervalMs, expiresAt), intervalMs);
+}
+
+async function twitchSend(text: string): Promise<{ ok: boolean; message?: string }> {
+  const auth = await twitchAuth();
+  if (!auth) return { ok: false, message: "Not signed in to Twitch." };
+  const channel = config.twitchChannel.trim().toLowerCase();
+  if (!channel) return { ok: false, message: "No channel set." };
+  const headers = {
+    Authorization: "Bearer " + auth.token,
+    "Client-Id": config.twitchClientId.trim(),
+    "Content-Type": "application/json",
+  };
+  let broadcasterId = twitchIdCache.get(channel) ?? "";
+  if (!broadcasterId) {
+    try {
+      const r = await fetch("https://api.twitch.tv/helix/users?login=" + encodeURIComponent(channel), {
+        headers, signal: AbortSignal.timeout(8000),
+      });
+      const d: any = await r.json();
+      broadcasterId = String(d?.data?.[0]?.id ?? "");
+    } catch { /* reported just below */ }
+    if (!broadcasterId) return { ok: false, message: "Couldn't find #" + channel + " on Twitch." };
+    twitchIdCache.set(channel, broadcasterId);
+  }
+  try {
+    const r = await fetch("https://api.twitch.tv/helix/chat/messages", {
+      method: "POST", headers, signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({ broadcaster_id: broadcasterId, sender_id: auth.userId, message: text }),
+    });
+    const d: any = await r.json().catch(() => null);
+    if (!r.ok) return { ok: false, message: String(d?.message ?? `Twitch said ${r.status}`) };
+    // 🔑 Helix can ACCEPT the request and still drop the message (AutoMod held it, followers-only,
+    // banned, duplicate). It reports that in the payload, not the status code — so a 200 alone is
+    // not proof it was sent, and treating it as such would look like the widget silently eating
+    // messages.
+    const sent = d?.data?.[0];
+    if (sent && sent.is_sent === false) {
+      return { ok: false, message: String(sent?.drop_reason?.message ?? "Twitch dropped that message.") };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, message: String((e as Error)?.message || e) };
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = (req.url ?? "/").split("?")[0];
 
@@ -1076,8 +1288,11 @@ const server = createServer(async (req, res) => {
     // Never echo the raw token back to the page — only a truncated preview so the settings
     // page can show "the key is in" (scbp_1a2b…wxyz) without exposing the full secret.
     // Never echo real secrets back to a page. The Twitch USER TOKEN is one (it can post as the
-    // user); the client id is not (it's public by design and the widget needs it to start login).
-    const { syncToken, twitchUserToken, ...rest } = config;
+    // user) and the REFRESH token is worse (it mints new ones indefinitely); the client id is not
+    // (it's public by design and the widget needs it to start login).
+    // ⚠️ This server also answers on the LAN for OBS browser sources, so anything omitted from
+    // this destructure is readable by every device on the network — add new secrets HERE.
+    const { syncToken, twitchUserToken, twitchRefreshToken: _refresh, ...rest } = config;
     const syncTokenPreview = syncToken ? `${syncToken.slice(0, 9)}…${syncToken.slice(-4)}` : "";
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ...rest, premium: entitled(), hasSyncToken: !!syncToken, syncTokenPreview, hasTwitchLogin: !!twitchUserToken, resolved: urls, lanHost, port: PORT }));
@@ -1328,6 +1543,60 @@ const server = createServer(async (req, res) => {
     }
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ embeddable, reason, finalUrl }));
+    return;
+  }
+
+  // Twitch sign-in, for SENDING chat only — reading needs none of this and keeps working signed
+  // out. POST starts the device flow, GET is the widget's poll, DELETE signs out.
+  // Loopback only: these speak for the signed-in account, and the server is on the LAN.
+  if (url.startsWith("/api/twitch/") && !fromThisMachine(req)) {
+    res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ ok: false, message: "Only this machine can sign in or send." }));
+    return;
+  }
+  if (url === "/api/twitch/login" && req.method === "POST") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(await startTwitchLogin()));
+    return;
+  }
+  if (url === "/api/twitch/login" && req.method === "GET") {
+    // A token revoked on twitch.tv must read as signed OUT here, or the widget offers a send box
+    // that can only fail. Checked once on the first ask after a restart, not on every poll.
+    if (twitchLogin.state === "idle" && config.twitchUserToken) {
+      const v = await twitchAuth();
+      twitchLogin = v ? { state: "ok", login: v.login } : { state: "idle" };
+    }
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(twitchLogin));
+    return;
+  }
+  if (url === "/api/twitch/login" && req.method === "DELETE") {
+    stopTwitchPoll();
+    // Best-effort revoke so signing out here actually ends the grant, not just forgets it locally.
+    if (config.twitchUserToken) {
+      void fetch("https://id.twitch.tv/oauth2/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: config.twitchClientId.trim(), token: config.twitchUserToken }),
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => { /* the local clear below is what matters */ });
+    }
+    config.twitchUserToken = "";
+    config.twitchRefreshToken = "";
+    config.twitchUserLogin = "";
+    await saveConfig();
+    twitchLogin = { state: "idle" };
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(twitchLogin));
+    return;
+  }
+  // Send a chat message as the signed-in user. 500 is Twitch's own limit for a chat message.
+  if (url === "/api/twitch/send" && req.method === "POST") {
+    const body = await readBody(req);
+    const text = String(body?.text ?? "").trim().slice(0, 500);
+    const r = text ? await twitchSend(text) : { ok: false, message: "Nothing to send." };
+    res.writeHead(r.ok ? 200 : 400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(r));
     return;
   }
 

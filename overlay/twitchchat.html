@@ -88,7 +88,8 @@
 
   /* Setup / empty state — also the "change channel" form. */
   #setup { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
-    gap: 10px; padding: 22px 18px; background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)); z-index: 5; }
+    gap: 10px; padding: 22px 18px; overflow-y: auto;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)); z-index: 5; }
   #panel.setup #setup { display: flex; }
   #setup .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
   #setup .hint { font-size: 11px; line-height: 1.6; color: var(--cyan-dim); }
@@ -99,6 +100,17 @@
   #chanInput::placeholder { color: var(--faint); font-weight: 500; }
   .row { display: flex; gap: 8px; align-items: center; }
   .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
+
+  /* Sign-in block. Reading chat never needs an account — this exists only to unhide the send bar,
+     so it sits below the channel form and stays out of the way until someone wants it. */
+  .acct { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--divider);
+    margin-top: 4px; padding-top: 12px; }
+  /* The device code the user types on twitch.tv/activate — big enough to read off a second
+     monitor, and selectable so it can be copied even though everything else in the chrome isn't. */
+  #acctCode { display: none; user-select: text; -webkit-user-select: text;
+    font-family: var(--mono); font-size: 21px; font-weight: 700; letter-spacing: 0.2em;
+    text-align: center; color: var(--cyan-bright); background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border); border-radius: 7px; padding: 9px 6px; }
 </style>
 </head>
 <body>
@@ -127,6 +139,16 @@
         <button id="saveBtn" class="hbtn" type="button">Read chat</button>
       </div>
       <div class="hint">Read any live channel's chat, styled to match the overlay. Use <b>✎ Type mode</b> to enter the name without alt-tabbing out of the game.</div>
+
+      <div class="acct">
+        <div class="lbl">Sending</div>
+        <div id="acctMsg" class="hint"></div>
+        <div id="acctCode"></div>
+        <div class="row">
+          <button id="acctBtn" class="hbtn" type="button"></button>
+          <button id="acctAlt" class="hbtn" type="button"></button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -476,6 +498,99 @@
   window.__twitchChatFocus = () => { if (typing) focusField(); };
   window.__twitchChatExitTyping = () => { if (typing) setTyping(false); };
 
+  // ── sign-in, for sending ─────────────────────────────────────────────────────
+  // Reading is anonymous and always works; this exists only to unhide the send bar. The whole
+  // OAuth flow lives in the sidecar and the token never comes back to this page — sending is a
+  // POST to /api/twitch/send, not an authenticated IRC connection (see overlay-server.ts).
+  let acct = { state: "idle" };
+  let acctTimer = null;
+
+  function renderAcct() {
+    const msg = $("acctMsg"), code = $("acctCode"), btn = $("acctBtn"), alt = $("acctAlt");
+    code.style.display = "none";
+    alt.style.display = "none";
+    $("panel").classList.toggle("cansend", acct.state === "ok");
+    if (acct.state === "ok") {
+      msg.textContent = "Signed in as " + acct.login + ".";
+      btn.textContent = "Sign out";
+    } else if (acct.state === "pending") {
+      msg.textContent = "Enter this code on Twitch to finish signing in:";
+      code.textContent = acct.userCode || "";
+      code.style.display = "block";
+      btn.textContent = "Open Twitch";
+      alt.textContent = "Cancel";
+      alt.style.display = "";
+    } else if (acct.state === "error") {
+      msg.textContent = acct.message || "Sign-in failed.";
+      btn.textContent = "Try again";
+    } else {
+      msg.textContent = "Sign in with Twitch to send messages without leaving the game.";
+      btn.textContent = "Sign in to Twitch";
+    }
+  }
+  function pollAcct() {
+    clearTimeout(acctTimer);
+    if (acct.state !== "pending") return;
+    acctTimer = setTimeout(async () => {
+      try { acct = await (await fetch("/api/twitch/login", { cache: "no-store" })).json(); }
+      catch { /* the sidecar will answer on the next tick */ }
+      renderAcct();
+      pollAcct();
+    }, 2500);
+  }
+  async function acctAction() {
+    if (acct.state === "pending") {                     // "Open Twitch"
+      const url = acct.verificationUri || "https://www.twitch.tv/activate";
+      if (host()) host().openUrl(url); else window.open(url, "_blank", "noopener");
+      return;
+    }
+    const signOut = acct.state === "ok";
+    $("acctBtn").disabled = true;
+    $("acctMsg").textContent = signOut ? "Signing out…" : "Asking Twitch for a code…";
+    try {
+      acct = await (await fetch("/api/twitch/login", { method: signOut ? "DELETE" : "POST" })).json();
+    } catch {
+      acct = { state: "error", message: "Couldn't reach the overlay service." };
+    }
+    $("acctBtn").disabled = false;
+    renderAcct();
+    pollAcct();
+  }
+  async function loadAcct() {
+    try { acct = await (await fetch("/api/twitch/login", { cache: "no-store" })).json(); }
+    catch { acct = { state: "idle" }; }
+    renderAcct();
+    pollAcct();
+  }
+  async function send() {
+    const el = $("sendInput");
+    const text = el.value.trim();
+    if (!text) return;
+    el.value = "";
+    try {
+      const r = await fetch("/api/twitch/send", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+      });
+      const d = await r.json().catch(() => null);
+      // Twitch can accept the request and still drop the message (AutoMod, followers-only, a ban),
+      // so say what happened and put the text back rather than letting it vanish.
+      if (!r.ok || !d?.ok) { sys(d?.message || "Couldn't send that message."); el.value = text; }
+    } catch {
+      sys("Couldn't reach the overlay service.");
+      el.value = text;
+    }
+  }
+
+  $("acctBtn").addEventListener("click", acctAction);
+  $("acctAlt").addEventListener("click", async () => {   // Cancel a pending sign-in
+    clearTimeout(acctTimer);
+    try { acct = await (await fetch("/api/twitch/login", { method: "DELETE" })).json(); }
+    catch { acct = { state: "idle" }; }
+    renderAcct();
+  });
+  $("sendBtn").addEventListener("click", send);
+  $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
+
   $("chanBtn").addEventListener("click", openSetup);
   $("saveBtn").addEventListener("click", saveChannel);
   $("typeBtn").addEventListener("click", () => setTyping(!typing));
@@ -488,6 +603,7 @@
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
   loadChannel();
+  loadAcct();
   try { host()?.ready?.(); } catch { /* not embedded */ }
 </script>
 </body>
