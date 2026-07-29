@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
 import { extname, join, dirname } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
@@ -1618,6 +1618,66 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     const r = text ? await twitchSend(text) : { ok: false, message: "Nothing to send." };
     res.writeHead(r.ok ? 200 : 400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify(r));
+    return;
+  }
+
+  // Everything this process can say about its own health, in one request. Support threads are
+  // otherwise a guessing game — "it stopped working" with no way to tell a dead sidecar from a
+  // missing game.log from an expired token. The Settings button copies this to the clipboard.
+  // 🔑 It must NEVER carry a secret: the sync token is reduced to a yes/no plus a live check,
+  // and the log PATH is included but never its contents.
+  if (url === "/api/diagnostics" && req.method === "GET") {
+    const logPath = config.logPath || "";
+    let logStat: { exists: boolean; sizeMB?: number; modifiedMinutesAgo?: number } = { exists: false };
+    try {
+      if (logPath && existsSync(logPath)) {
+        const st = statSync(logPath);
+        logStat = {
+          exists: true,
+          sizeMB: Math.round((st.size / 1048576) * 10) / 10,
+          modifiedMinutesAgo: Math.round((Date.now() - st.mtimeMs) / 60000),
+        };
+      }
+    } catch { /* an unreadable path is itself the answer: exists stays false */ }
+
+    // Can we actually WRITE where everything is persisted? An EPERM here (Program Files) once
+    // killed the sidecar invisibly, and it presents as "nothing saves" rather than as an error.
+    let userDirWritable = false;
+    try {
+      mkdirSync(userDir, { recursive: true });
+      const probe = join(userDir, ".write-probe");
+      await writeFile(probe, "ok");
+      rmSync(probe, { force: true });
+      userDirWritable = true;
+    } catch { /* stays false */ }
+
+    // Is the sync token still good? Ask the site rather than trusting that a non-empty string works.
+    let syncToken: "none" | "ok" | "rejected" | "unreachable" = "none";
+    if (config.syncToken) {
+      try {
+        const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
+          headers: { Authorization: `Bearer ${config.syncToken}` },
+          signal: AbortSignal.timeout(6000),
+        });
+        syncToken = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
+      } catch { syncToken = "unreachable"; }
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      app: { version: APP_VERSION || "unknown", sidecarPort: PORT, uptimeMinutes: Math.round(process.uptime() / 60) },
+      gameLog: { path: logPath || "(not set)", ...logStat, watching: watcher ? "yes" : "no" },
+      data: { patch: tracker.view().patch ?? "(none loaded)", userDir, userDirWritable },
+      sync: { enabled: config.syncEnabled === true, token: syncToken },
+      screenReading: {
+        fabCapture: config.fabCapture === true,
+        missionOcr: config.missionOcr === true,
+        miningAssistant: config.miningAssistant === true,
+        shareLogs: config.shareLogs === true,
+      },
+      display: { hwAccel: config.hwAccel === true, amdCompat: config.amdCompat === true, theme: config.theme || "mobiglas" },
+      twitch: { chatChannel: config.twitchChannel || "(none)", signedInAs: config.twitchUserLogin || "(not signed in)" },
+    }));
     return;
   }
 

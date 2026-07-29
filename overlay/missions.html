@@ -1017,6 +1017,11 @@
   .rb-cap { font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em;
     color: var(--cyan-text); opacity: 0.85; font-variant-numeric: tabular-nums; }
   .rb-cap .nx { color: var(--gold); }
+  /* What the next rank hands over (Battaglia gates ships this way). Its own line under the
+     caption: the caption is a tabular number pair and a name would push it around. */
+  .rb-unlock { margin-top: 2px; font-family: var(--sans); font-size: 9.5px; font-weight: 600;
+    letter-spacing: 0.04em; color: var(--gold); opacity: 0.9;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Collapsed "Collected" group: owned blueprints tuck under this toggle so the
      list leads with what you can still GET. Click to expand/collapse. */
@@ -1594,11 +1599,34 @@
   // open when the mission has no pool (forceOpen) so the panel isn't bare. Returns ""
   // when there's nothing to show. Payout is deliberately NOT here — it's only known
   // for sure after completion, shown by the mission-complete card.
+  /** Several awards against the SAME standing (same faction + scope) collapse to one row: the
+   *  LARGEST — which is the one the standing estimate credits — carrying the others as `extra`
+   *  so they can be disclosed rather than silently dropped or misleadingly stacked. */
+  function collapseSameStanding(list) {
+    const by = new Map();
+    for (const r of list || []) {
+      const k = (r.faction || "") + "|" + (r.scope || "");
+      const g = by.get(k);
+      if (!g) { by.set(k, Object.assign({}, r, { extra: [] })); continue; }
+      if (Number(r.amount || 0) > Number(g.amount || 0)) { g.extra.push(g.amount); g.amount = r.amount; }
+      else g.extra.push(r.amount);
+    }
+    return [...by.values()];
+  }
+  /** "· +60 also listed" — the awards this mission lists against the same standing that the
+   *  estimate does NOT count. The data says nothing about what they're for, so neither do we. */
+  function extraHint(r) {
+    if (!r.extra || !r.extra.length) return "";
+    const more = r.extra.map((a) => "+" + Number(a || 0).toLocaleString()).join(" ");
+    return ' <span class="mi-hint" title="This mission lists more than one reputation award against the same standing. ' +
+      'The game data doesn&#39;t say what the extra one is for, so the estimate counts only the largest.">' +
+      escapeHtml(more) + " also listed</span>";
+  }
   function repRows(list, neg) {
     return list.map((r) => {
       const amt = (neg ? "−" : "+") + Number(r.amount || 0).toLocaleString();
       return '<div class="mi-rep"><span class="mi-fac">' + escapeHtml(r.faction || "—") + "</span>" +
-        '<span class="mi-amt ' + (neg ? "neg" : "pos") + '">' + amt + " rep</span></div>";
+        '<span class="mi-amt ' + (neg ? "neg" : "pos") + '">' + amt + " rep" + extraHint(r) + "</span></div>";
     }).join("");
   }
   // Reputation progress bar for the tracked mission's giver: current standing NAME + a
@@ -1619,6 +1647,15 @@
       pct = Math.max(0, Math.min(100, ((rb.estimate - rb.curMin) / span) * 100));
       cap = "~" + num(rb.estimate) + " / " + num(rb.nextMin) +
         ' <span class="nx">→ ' + escapeHtml(rb.nextName || "") + "</span>";
+      // What that rank hands over. Battaglia gates ships here (Golem, Prospector, MOLE) and the
+      // bar used to be a bare number — a target with no stated prize. Named, it's a reason to grind.
+      const unlocks = rb.nextRewards || [];
+      if (unlocks.length) {
+        cap += '<div class="rb-unlock" title="Reaching ' + escapeAttr(rb.nextName || "the next rank") +
+          " with " + escapeAttr(rb.faction) + ' unlocks this.">unlocks ' +
+          escapeHtml(unlocks.slice(0, 2).join(" · ")) +
+          (unlocks.length > 2 ? " +" + (unlocks.length - 2) + " more" : "") + "</div>";
+      }
     }
     const standing = rb.noData ? "—" : escapeHtml(rb.standing);
     return '<div class="mi-row" title="Estimated standing with ' + escapeAttr(rb.faction) +
@@ -1647,11 +1684,18 @@
       // Reputation gained/lost. A single entry that just repeats the giver shown above becomes
       // a clean "Reputation gained: +N rep" row (no redundant name); multiple entries — or rep
       // with a DIFFERENT faction — keep the labeled section with per-faction names.
-      const repSection = (list, neg, label) => {
+      const repSection = (list0, neg, label) => {
+        // 🔑 A mission can list SEVERAL awards against the SAME standing — 12 of the 33 Battaglia
+        // missions do (200+40, 200+60, 100+60). Rendered raw that's two identical faction names
+        // stacked with different numbers, which reads as a bug. The game data carries nothing to
+        // say what the second one is for (same faction, same scope, no label), so we don't invent
+        // a story: show the larger — the one the standing estimate actually credits — and disclose
+        // the rest instead of hiding it. Sub's read was that they don't simply add to +360.
+        const list = collapseSameStanding(list0);
         if (!list.length) return;
         if (list.length === 1 && (!list[0].faction || list[0].faction === giver)) {
           const amt = (neg ? "−" : "+") + Number(list[0].amount || 0).toLocaleString();
-          rows.push('<div class="mi-row"><span class="mi-k">' + label + '</span><span class="mi-v ' + (neg ? "neg" : "pos") + '">' + amt + " rep</span></div>");
+          rows.push('<div class="mi-row"><span class="mi-k">' + label + '</span><span class="mi-v ' + (neg ? "neg" : "pos") + '">' + amt + " rep" + extraHint(list[0]) + "</span></div>");
         } else {
           rows.push('<div class="mi-sec">' + label + "</div>" + repRows(list, neg));
         }

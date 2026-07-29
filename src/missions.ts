@@ -68,6 +68,13 @@ export interface RepBar {
   curMin: number;
   nextMin: number | null;
   nextName: string | null;
+  /** Where the next rank sits on the ascending ladder — the index rank-gated rewards are keyed
+   *  by, so the panel can say what reaching it actually unlocks. */
+  nextRank: number | null;
+  /** What the next rank hands over, if anything (Battaglia gates SHIPS this way: Golem at 3,
+   *  Prospector at 4, MOLE at 5). The Event Tracker widget has always shown these; the panel —
+   *  where you actually spend your time — only ever showed a number with no reason to care. */
+  nextRewards: string[];
   /** True at the top of the ladder (no next rank). */
   max: boolean;
   /** No completions witnessed yet for this giver (run Verify from logs) — the UI shows an
@@ -463,9 +470,11 @@ export function repLadderPosition(
   const estimate = Math.max(0, witnessed);
   let cur = asc[0];
   let next: RepLadderRank | null = null;
-  for (const r of asc) {
+  let nextRank: number | null = null;
+  for (let i = 0; i < asc.length; i++) {
+    const r = asc[i];
     if (r.minRep <= estimate) cur = r;
-    else { next = r; break; }
+    else { next = r; nextRank = i; break; }
   }
   return {
     standing: cur.name,
@@ -473,6 +482,8 @@ export function repLadderPosition(
     curMin: cur.minRep,
     nextMin: next?.minRep ?? null,
     nextName: next?.name ?? null,
+    nextRank,
+    nextRewards: [],   // filled by the caller, which is what knows this giver's missions
     max: next == null,
     noData: witnessed <= 0,
   };
@@ -590,6 +601,9 @@ export class MissionTracker extends EventEmitter {
    *  Live real-time completions add to it; verifyFromLogs rebuilds it authoritatively
    *  from every logbackup. See accrueRep / computeRepBar. */
   private repWitnessed = new Map<string, { scope: string; sum: number }>();
+  /** giver -> rank index -> the ITEMS that rank's missions hand over. Lazily built per giver
+   *  (scanning every mission for each view build would be silly) and dropped on a new dataset. */
+  private rankRewards = new Map<string, Map<number, string[]>>();
   /** normalized mission title -> completion count (see Persisted.completedTitles). */
   private completedTitles = new Map<string, number>();
   /** dataset mission key -> completion count (see Persisted.completedKeys). */
@@ -742,6 +756,7 @@ export class MissionTracker extends EventEmitter {
         this.detail.loadForChangelist(this.dataset.changelist);
         this.buildTitleIndex();
         this.buildRepTitleIndex();
+        this.rankRewards.clear();   // keyed off dataset missions — a new dataset invalidates it
         this.reresolveAccepts();
         this.emit("change");
         return;
@@ -1419,7 +1434,30 @@ export class MissionTracker extends EventEmitter {
     if (!primary) return null;
     const pos = repLadderPosition(this.repScopes[primary.scope], this.repWitnessed.get(giver)?.sum ?? 0);
     if (!pos) return null;
-    return { scope: primary.scope, faction: giver, ...pos };
+    // What reaching the next rank actually hands over. Battaglia gates SHIPS this way and the
+    // panel never mentioned them, so the bar was a number with no stated reason to care.
+    const nextRewards = pos.nextRank == null ? [] : (this.rewardsByRank(giver).get(pos.nextRank) ?? []);
+    return { scope: primary.scope, faction: giver, ...pos, nextRewards };
+  }
+
+  /** Rank index -> item names for one giver, built once and cached. Mirrors how giverTrack()
+   *  derives its reward ladder (a mission's `items` belong to that mission's rank). */
+  private rewardsByRank(giver: string): Map<number, string[]> {
+    const key = norm(giver);
+    const hit = this.rankRewards.get(key);
+    if (hit) return hit;
+    const out = new Map<number, string[]>();
+    for (const m of Object.values(this.dataset?.missions ?? {})) {
+      if (!m.giver || norm(m.giver) !== key) continue;
+      if (typeof m.rank !== "number") continue;
+      const names = (m.items ?? []).map((i) => i.name).filter(Boolean);
+      if (!names.length) continue;
+      const at = out.get(m.rank) ?? [];
+      for (const n of names) if (!at.includes(n)) at.push(n);
+      out.set(m.rank, at);
+    }
+    this.rankRewards.set(key, out);
+    return out;
   }
 
   /** Build a mission giver's full grind track: their standing ladder, your position on it, and
@@ -1472,7 +1510,12 @@ export class MissionTracker extends EventEmitter {
     return {
       faction: canonical,
       scope,
-      bar: pos ? { scope, faction: canonical, ...pos } : null,
+      // Same shape the panel gets, including what the next rank unlocks — an empty nextRewards
+      // here while the panel's is populated would just be a trap for the next reader.
+      bar: pos
+        ? { scope, faction: canonical, ...pos,
+            nextRewards: rewards.filter((r) => r.rank === pos.nextRank).map((r) => r.name) }
+        : null,
       ranks,
       reachedRank: this.inferredRank.get(canonical) ?? this.inferredRank.get(giver) ?? -1,
       intro: missions.filter((m) => m.rank == null).sort((a, b) => a.title.localeCompare(b.title)),

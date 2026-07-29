@@ -1345,6 +1345,13 @@ if (!app.requestSingleInstanceLock()) {
   // otherwise click-through except over the widget, so the stacked mining canvas isn't blocked).
   ipcMain.on("overlay:drag-lock", (_e, on) => {
     dragging = !!on;
+    // Star Citizen recentres the cursor while IT has focus, which yanks a drag out from under
+    // you mid-gesture. We can't stop the game doing that — but it only does it while focused, so
+    // taking focus for the duration of the gesture stops it. Entering arrange mode already does
+    // this (setMoveMode); a corner-resize or a bar-drag outside arrange did not, which is where
+    // it kept biting. Focus is not handed back: the user is mid-drag on the overlay, and the
+    // notepad's typing mode has behaved this way since 0.1.33.
+    if (dragging && overlay && !overlay.isDestroyed() && !overlay.isFocused()) overlay.focus();
     applyMouse();
   });
   // The cog's "Open settings…" opens the full config window.

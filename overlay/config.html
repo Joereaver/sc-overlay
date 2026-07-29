@@ -410,6 +410,27 @@
     <div class="partner-grid" id="partnerGrid"></div>
   </div>
 
+  <!-- Diagnostics. "It stopped working" is otherwise a guessing game across a dozen messages —
+       a dead sidecar, a moved game.log, an expired token and a read-only data folder all present
+       identically to the player. One button, one paste. Deliberately carries no secrets. -->
+  <div class="card">
+    <div class="label">Diagnostics</div>
+    <div class="hint" style="margin-top:0">
+      Something not working? Copy a short report — app version, whether the background service is
+      answering, whether your <code>game.log</code> is being read, which dataset is loaded, and which
+      opt-ins are on — and paste it into your bug report or Discord. It contains no passwords or
+      tokens.
+    </div>
+    <div class="hkrow">
+      <span class="hklabel">Report</span>
+      <button type="button" id="diagBtn" class="hkbtn">Copy diagnostics</button>
+      <div class="hint" id="diagMsg"></div>
+    </div>
+    <pre id="diagOut" style="display:none; margin-top:10px; max-height:260px; overflow:auto;
+      white-space:pre-wrap; font-size:11px; line-height:1.5; background:rgba(0,0,0,0.28);
+      border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--muted)"></pre>
+  </div>
+
   <div class="card">
     <div class="label">About</div>
     <div class="hint" style="margin-top:0">
@@ -895,6 +916,59 @@
     Zygote: "Background helper",
     Sandbox: "Background helper",
   };
+  // ── Copy diagnostics ────────────────────────────────────────────────────────────────────
+  // Most of the report comes from the sidecar (it knows the log, the dataset, the token); a
+  // couple of things only the shell knows (are we elevated, what monitors are there), and the
+  // fact that the sidecar answered AT ALL is itself the first line of the report.
+  document.getElementById("diagBtn")?.addEventListener("click", async () => {
+    const msg = document.getElementById("diagMsg");
+    const out = document.getElementById("diagOut");
+    msg.textContent = "Collecting…";
+    const lines = [];
+    const add = (k, v) => lines.push(k.padEnd(18) + " " + v);
+    let d = null;
+    try {
+      const r = await fetch("/api/diagnostics", { cache: "no-store" });
+      d = await r.json();
+    } catch {
+      d = null;
+    }
+    add("Overlay service", d ? "answering on :" + d.app.sidecarPort : "NOT ANSWERING — the app cannot work without it");
+    if (d) {
+      add("App version", d.app.version + "  (up " + d.app.uptimeMinutes + " min)");
+      add("Game log", d.gameLog.path);
+      add("  found", d.gameLog.exists
+        ? "yes — " + d.gameLog.sizeMB + " MB, written " + d.gameLog.modifiedMinutesAgo + " min ago"
+        : "NO — nothing will be tracked until this points at a real game.log");
+      add("  watching", d.gameLog.watching);
+      add("Dataset", d.data.patch);
+      add("Data folder", d.data.userDir + (d.data.userDirWritable ? "" : "  NOT WRITABLE — nothing can save"));
+      add("Sync", d.sync.enabled ? "on, token " + d.sync.token : "off");
+      add("Screen reading", "fabricator=" + d.screenReading.fabCapture + " mission=" + d.screenReading.missionOcr +
+        " mining=" + d.screenReading.miningAssistant + " shareLogs=" + d.screenReading.shareLogs);
+      add("Display", "hwAccel=" + d.display.hwAccel + " amdCompat=" + d.display.amdCompat + " skin=" + d.display.theme);
+      add("Twitch", "channel=" + d.twitch.chatChannel + " signed in as " + d.twitch.signedInAs);
+    }
+    // Elevation matters because in-game hotkeys silently do nothing without it (UIPI over an
+    // elevated Star Citizen) — the single most common "hotkeys don't work" cause.
+    try { add("Running as admin", (await window.overlayConfig?.isElevated?.()) ? "yes" : "no — in-game hotkeys will not fire over an elevated Star Citizen"); }
+    catch { add("Running as admin", "unknown"); }
+    try {
+      const s = window.screen;
+      add("Primary display", s.width + "x" + s.height + " @ " + (window.devicePixelRatio || 1) + "x scaling");
+    } catch { /* not worth failing the report over */ }
+
+    const report = "SC Overlay diagnostics\n" + new Date().toISOString() + "\n\n" + lines.join("\n");
+    out.textContent = report;
+    out.style.display = "block";
+    try {
+      await navigator.clipboard.writeText(report);
+      msg.textContent = "Copied to your clipboard — paste it into your bug report.";
+    } catch {
+      msg.textContent = "Couldn't reach the clipboard — select the text below and copy it.";
+    }
+  });
+
   document.getElementById("perfBtn")?.addEventListener("click", async () => {
     const out = document.getElementById("perfOut");
     out.textContent = "Measuring…";
