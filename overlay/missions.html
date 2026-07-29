@@ -1152,15 +1152,15 @@
          here because this menu is the only chrome you can still reach when a widget has been
          dragged off the bottom of the monitor — its own bar went with it. -->
     <div class="hub-sec">Widgets</div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgBlueprint" checked /> Blueprint tracker</label><button type="button" class="hub-reset" data-w="blueprint" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgMining" /> Mining Assistant</label><button type="button" class="hub-reset" data-w="mining" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgNotepad" /> Notepad</label><button type="button" class="hub-reset" data-w="notepad" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgBlueprint" checked /> Mission &amp; BP Tracker</label><button type="button" class="hub-reset" data-w="blueprint" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgMining" /> Mining Scanner</label><button type="button" class="hub-reset" data-w="mining" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgNotepad" /> Journal</label><button type="button" class="hub-reset" data-w="notepad" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgTwitchChat" /> Twitch Chat</label><button type="button" class="hub-reset" data-w="twitchChat" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgScFeed" /> SC Feed news</label><button type="button" class="hub-reset" data-w="scFeed" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgParty" /> Party split</label><button type="button" class="hub-reset" data-w="party" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgBattaglia" /> Battaglia track</label><button type="button" class="hub-reset" data-w="battaglia" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgWebView" /> Web page</label><button type="button" class="hub-reset" data-w="webView" title="Recentre this widget on screen">↺</button></div>
-    <div class="hub-row tog"><label><input type="checkbox" id="wgBindingChart" /> Binding chart</label><button type="button" class="hub-reset" data-w="bindingChart" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgScFeed" /> SC Feed</label><button type="button" class="hub-reset" data-w="scFeed" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgParty" /> Loot Split</label><button type="button" class="hub-reset" data-w="party" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgBattaglia" /> Event Tracker</label><button type="button" class="hub-reset" data-w="battaglia" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgWebView" /> Web Page</label><button type="button" class="hub-reset" data-w="webView" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgBindingChart" /> Infographic Viewer</label><button type="button" class="hub-reset" data-w="bindingChart" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-sec">Global appearance</div>
     <div class="hub-row col"><label>Theme</label>
       <select id="hubTheme">
@@ -2047,6 +2047,8 @@
       key: "twitchChat", page: "twitchchat.html", title: "Twitch Chat",
       def: { x: 860, y: 60 }, size: { w: 340, h: 460, minW: 260, maxW: 900, minH: 220, maxH: 1100 },
       focusFn: "__twitchChatFocus",
+      // Sign-in sends the user to twitch.tv/activate — that has to open in a real browser.
+      host: () => ({ openUrl: (u) => window.overlayApi?.openUrl?.(u) }),
     },
     {
       key: "scFeed", page: "scfeed.html", title: "SC Feed",

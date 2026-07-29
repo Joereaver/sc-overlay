@@ -219,8 +219,8 @@
   <div class="card">
     <div class="label">Widgets &amp; interaction</div>
     <div class="setrow">
-      <label class="opt"><input type="checkbox" id="miningAutoShow" /> Pop the Mining Assistant open when I'm scanning or refining</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Shows the Mining Assistant on its own when the scanner or Refinement Center is detected. Only a signature matching a known ore counts — debris and stray numbers won't pop it open. If you close it, it stays away for a bit before it can pop again.</span></span>
+      <label class="opt"><input type="checkbox" id="miningAutoShow" /> Pop the Mining Scanner open when I'm scanning or refining</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Shows the Mining Scanner on its own when the scanner or Refinement Center is detected. Only a signature matching a known ore counts — debris and stray numbers won't pop it open. If you close it, it stays away for a bit before it can pop again.</span></span>
     </div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="holdToInteract" onchange="onHoldModeToggle()" /> Only let me click the overlay while I hold a key</label>
@@ -228,14 +228,14 @@
     </div>
     <div class="setrow">
       <div class="opt" style="flex-direction:column; align-items:stretch; gap:8px;">
-        <span>Binding chart</span>
+        <span>Infographic Viewer</span>
         <div class="add" style="margin-top:0">
-          <input type="text" id="bindingPng" placeholder="no PNG chosen — pick one to fill the Binding Chart widget" readonly />
+          <input type="text" id="bindingPng" placeholder="no PNG chosen — pick one to fill the Infographic Viewer" readonly />
           <button onclick="chooseBinding()">Choose PNG…</button>
           <button class="danger" onclick="clearBinding()" title="Remove">✕</button>
         </div>
       </div>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Pick a PNG (transparency supported — e.g. a joystick binding chart) and it fills the Binding Chart widget, which you place and size like any other. Toggle it with the binding hotkey (set under Hotkeys) or from the tray.</span></span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Pick a PNG (transparency supported — e.g. a joystick binding chart) and it fills the Infographic Viewer, which you place and size like any other. Toggle it with the binding hotkey (set under Hotkeys) or from the tray.</span></span>
     </div>
   </div>
 
@@ -328,13 +328,13 @@
       <div class="hint" id="webViewHotkeyHint"></div>
     </div>
     <div class="hkrow">
-      <span class="hklabel">Mining Assistant</span>
+      <span class="hklabel">Mining Scanner</span>
       <button type="button" id="miningHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('mining')">Shift + F3</button>
       <input type="hidden" id="miningHotkey" />
       <div class="hint" id="miningHotkeyHint"></div>
     </div>
     <div class="hkrow">
-      <span class="hklabel">Binding chart</span>
+      <span class="hklabel">Infographic Viewer</span>
       <button type="button" id="bindingHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('binding')">Ctrl + F3</button>
       <input type="hidden" id="bindingHotkey" />
       <div class="hint" id="bindingHotkeyHint"></div>
@@ -392,11 +392,11 @@
   <div class="card">
     <div class="label">Browser sources &amp; extra monitors</div>
     <div class="hint">Want a widget on a <strong>second monitor</strong>, or as an <strong>OBS browser source</strong>? Open one of these URLs in any browser window — it renders that widget on its own, live and transparent. This is the way to put a widget off your main screen; the in-game overlay itself stays on your primary display.</div>
-    <label class="opt" style="margin-top:6px;">Blueprint tracker
+    <label class="opt" style="margin-top:6px;">Mission &amp; BP Tracker
       <input type="text" id="srcBlueprint" readonly onclick="this.select()" style="margin-left:auto; width:230px; font-family:monospace; font-size:12px;" />
       <button type="button" class="hkbtn" style="margin-left:8px;" onclick="copySrc('srcBlueprint', this)">Copy</button>
     </label>
-    <label class="opt">Mining Assistant
+    <label class="opt">Mining Scanner
       <input type="text" id="srcMining" readonly onclick="this.select()" style="margin-left:auto; width:230px; font-family:monospace; font-size:12px;" />
       <button type="button" class="hkbtn" style="margin-left:8px;" onclick="copySrc('srcMining', this)">Copy</button>
     </label>
@@ -415,7 +415,7 @@
     <div class="hint" style="margin-top:0">
       <strong>SC Overlay</strong> is a lightweight, transparent in-game HUD for Star Citizen. It reads your
       <code>game.log</code> to show the blueprint reward pool for the mission you're tracking and checks off each
-      blueprint as you collect it — plus a <strong>Mining Assistant</strong> (signature scanner + refinery-job timers)
+      blueprint as you collect it — plus a <strong>Mining Scanner</strong> (signature scanner + refinery-job timers)
       and <strong>manufacturer skins</strong> that automatically match the ship you're flying. Opt-in screen reading
       (OCR) can detect your tracked mission in-game and help crowdsource item images for the catalog. Point it at your
       <code>game.log</code> below to get started, and optionally connect your
