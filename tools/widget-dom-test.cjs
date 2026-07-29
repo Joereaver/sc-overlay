@@ -917,7 +917,7 @@ const ANGLE = `(async () => {
   return out;
 })()`;
 
-async function run(label, script, preload) {
+async function run(label, script, preload, query) {
   const web = preload ? { preload, contextIsolation: false } : {};
   const win = new BrowserWindow({ show: false, width: 1920, height: 1080, webPreferences: web });
   // A widget that logs an error or 404s an asset is broken even when every assertion passes -
@@ -929,14 +929,17 @@ async function run(label, script, preload) {
   });
   // The third-party emote providers answer 404 for a channel that simply isn't registered with
   // them, which is the common case and not a fault - don't fail a run over it.
-  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\//;
+  // The unlock-pop suite points an <img> at a URL that must 404 — that IS the assertion (no
+  // capture for this item yet → fall back to the render). Named so it can't be mistaken for a real
+  // missing asset.
+  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp/;
   win.webContents.session.webRequest.onCompleted({ urls: ["*://*/*"] }, (d) => {
     if (d.statusCode < 400) return;
     if (d.statusCode === 404 && EXPECTED_404.test(d.url)) return;
     noise.push("HTTP " + d.statusCode + " " + d.url.replace(/^https?:\/\//, "").slice(0, 70));
   });
   try {
-    await win.loadURL(URL);
+    await win.loadURL(query ? URL + "&" + query : URL);
     const res = await win.webContents.executeJavaScript(script);
     let fails = 0;
     console.log(`\n${label}`);
@@ -951,6 +954,93 @@ async function run(label, script, preload) {
     return fails;
   } finally { win.destroy(); }
 }
+
+// The summoned cog / open hub times itself out once the GAME has focus, because that's when it
+// gets forgotten — and a forgotten hub holds setModal(true), so the canvas keeps eating clicks.
+// Driven with ?coghide=250 so the suite doesn't sit here for half a minute.
+const COGHIDE = `(async () => {
+  ${PRELUDE}
+  const gc = document.getElementById("globalCog"), hub = document.getElementById("hub");
+  const up = () => gc.classList.contains("show") || hub.classList.contains("open");
+
+  gc.classList.add("show");
+  await sleep(60);
+  ok("summoning the cog asks for foreground tracking", window.__foregroundWanted === true, window.__foregroundWanted);
+
+  // Game NOT in front: it must stay put no matter how long we wait.
+  window.__fireGameFocus?.(false);
+  await sleep(500);
+  ok("stays up while the game is not focused", up());
+
+  // Game in front: gone after the (shortened) delay.
+  window.__fireGameFocus?.(true);
+  await sleep(500);
+  ok("hides once the game has had focus", !up());
+  ok("releases foreground tracking when it hides", window.__foregroundWanted === false, window.__foregroundWanted);
+
+  // The case Sub actually hit: hub OPEN, which the 10s fade deliberately never closes.
+  gc.classList.add("show"); gc.click();
+  await sleep(60);
+  ok("hub opens", hub.classList.contains("open"));
+  window.__fireGameFocus?.(true);
+  await sleep(500);
+  ok("an OPEN hub closes too", !hub.classList.contains("open") && !up());
+
+  // Hovering it means you're using it — the clock must not run it out from under you.
+  gc.classList.add("show"); gc.click();
+  await sleep(60);
+  gc.dispatchEvent(new MouseEvent("mouseenter"));
+  window.__fireGameFocus?.(true);
+  await sleep(600);
+  ok("hovering keeps it open indefinitely", hub.classList.contains("open"));
+  gc.dispatchEvent(new MouseEvent("mouseleave"));
+  await sleep(500);
+  ok("closes once the pointer leaves", !hub.classList.contains("open"));
+  return out;
+})()`;
+
+// An unlocked blueprint must show the FABRICATOR CAPTURE, not the clay render. The render exists
+// for nearly every item but is a grey untextured mesh, and items that reuse a game model share one
+// byte-identical render — all three Scraper Modules do — so the render can't even identify what you
+// unlocked. The capture 404s until someone has captured that item, hence the fallback chain.
+// Local URLs stand in for the two endpoints so the suite doesn't depend on the network.
+const BPPOP = `(async () => {
+  ${PRELUDE}
+  const GOOD = "tape-tl.webp", GOOD2 = "anvil-bolt-tl.webp", BAD = "deliberate-404-for-test.webp";
+  const thumb = document.querySelector("#bpPop .bp-pop-thumb"), img = document.getElementById("bpPopImg");
+  const src = () => (img.getAttribute("src") || "");
+  // maybeBpPop dedupes on the receipt time, so every call needs a distinct one — and a fresh one,
+  // since it drops anything older than 2 min. Counting backwards a second at a time keeps both true.
+  let n = 0;
+  const pop = (o) => { img.onerror = null; maybeBpPop({ name: "T", at: new Date(Date.now() - (n++ * 1000)).toISOString(), ...o }); };
+
+  pop({ image: GOOD, imageFallback: GOOD2 });
+  await sleep(200);
+  ok("prefers the fabricator capture over the render", src().endsWith(GOOD), src());
+  ok("...and shows the thumb", !thumb.classList.contains("noimg"));
+
+  // No capture for this item yet (404) — must land on the render rather than a blank tile.
+  pop({ image: BAD, imageFallback: GOOD2 });
+  await sleep(400);
+  ok("falls back to the render when no capture exists", src().endsWith(GOOD2), src());
+  ok("...still shows a thumb", !thumb.classList.contains("noimg"));
+
+  // Neither resolves — glyph, and no infinite retry loop between the two.
+  pop({ image: BAD, imageFallback: BAD });
+  await sleep(500);
+  ok("falls through to the glyph when both fail", thumb.classList.contains("noimg"));
+
+  // Unresolvable name: no UUID, so neither URL exists.
+  pop({ image: null, imageFallback: null });
+  await sleep(150);
+  ok("no image at all = glyph", thumb.classList.contains("noimg"));
+
+  // Older payload shape (render only) must still work.
+  pop({ image: null, imageFallback: GOOD });
+  await sleep(200);
+  ok("render-only payload still renders", src().endsWith(GOOD), src());
+  return out;
+})()`;
 
 app.disableHardwareAcceleration();
 // Suites run one window at a time, and destroying the last open window would otherwise trigger
@@ -970,6 +1060,9 @@ app.whenReady().then(async () => {
     fails += await run("chrome anchoring + latches", ANCHOR, path.join(__dirname, "widget-dom-stub-preload.cjs"));
     fails += await run("lifecycle: closed = idle", LIFECYCLE, null);
     fails += await run("per-widget angle", ANGLE, null);
+    fails += await run("cog auto-hide on game focus", COGHIDE,
+      path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
+    fails += await run("unlock pop: capture before render", BPPOP, null);
   } catch (e) {
     console.error(`\nharness error: ${e && e.message}`);
     console.error(`is the sidecar running? \`npm run overlay\` should be listening on :${PORT}`);

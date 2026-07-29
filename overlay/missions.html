@@ -1410,8 +1410,21 @@
     const thumb = el.querySelector(".bp-pop-thumb"), img = $("bpPopImg");
     $("bpPopName").textContent = jr.name || "Blueprint";
     thumb.classList.remove("noimg");
-    if (jr.image) { img.onerror = () => thumb.classList.add("noimg"); img.src = jr.image; }
-    else { thumb.classList.add("noimg"); img.removeAttribute("src"); }
+    // Fabricator capture first, clay render second, glyph last. The capture is the picture the
+    // player actually recognises from the kiosk; the render is a grey mesh that several items can
+    // share, so it's a fallback rather than the source of truth.
+    const first = jr.image || jr.imageFallback, second = jr.image ? jr.imageFallback : null;
+    if (first) {
+      // Track the retry with a FLAG, not by comparing img.src to the fallback: reading .src gives
+      // the resolved absolute URL, so a relative fallback never compares equal and the handler
+      // re-sets the same broken source forever.
+      let triedFallback = false;
+      img.onerror = () => {
+        if (second && !triedFallback) { triedFallback = true; img.src = second; return; } // no capture — render
+        thumb.classList.add("noimg");
+      };
+      img.src = first;
+    } else { thumb.classList.add("noimg"); img.removeAttribute("src"); }
     el.classList.add("show");
     clearTimeout(bpPopTimer);
     bpPopTimer = setTimeout(() => el.classList.remove("show"), 6500);
@@ -1771,10 +1784,17 @@
       (stats.length ? '<div class="cc-stats">' + stats.join("") + '</div>' : "") +
       bpsHtml + '</div>';
   }
-  // One unlocked-blueprint tile: the item render (falls back to a glyph) + its name.
+  // One unlocked-blueprint tile: fabricator capture → clay render → glyph. Same order as the
+  // received-pop; see blueprintReward() for why the capture has to win.
   function bpTile(b){
-    const thumb = b.image
-      ? '<span class="cc-bp-thumb"><img src="' + b.image + '" alt="" onerror="this.parentElement.classList.add(\'noimg\');this.remove()"></span>'
+    const first = b.image || b.imageFallback, second = b.image ? b.imageFallback : null;
+    const onerr = second
+      ? "if(!this.dataset.fb){this.dataset.fb=1;this.src=this.getAttribute('data-alt');return;}this.parentElement.classList.add('noimg');this.remove()"
+      : "this.parentElement.classList.add('noimg');this.remove()";
+    const thumb = first
+      ? '<span class="cc-bp-thumb"><img src="' + escapeHtml(first) + '"' +
+        (second ? ' data-alt="' + escapeHtml(second) + '"' : "") +
+        ' alt="" onerror="' + onerr + '"></span>'
       : '<span class="cc-bp-thumb noimg"></span>';
     return '<div class="cc-bp">' + thumb + '<span class="cc-bp-name">' + escapeHtml(b.name || "Blueprint") + '</span></div>';
   }
@@ -2929,8 +2949,8 @@
     // While the hub is OPEN keep the window interactive (it's a corner menu off the panel, so
     // moving off it must not make it click-through and un-closeable — an outside click closes it).
     // Hovering the cog/hub also keeps the summoned cog from fading.
-    const hubEnter = () => { clearTimeout(hubLeaveT); cogHovered = true; clearTimeout(cogHideT); window.overlayApi.hover(true); };
-    const hubLeave = () => { cogHovered = false; rescheduleCogHide(); if (hubOpen) return; hubLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); };
+    const hubEnter = () => { clearTimeout(hubLeaveT); cogHovered = true; clearTimeout(cogHideT); armGameHide(); window.overlayApi.hover(true); };
+    const hubLeave = () => { cogHovered = false; rescheduleCogHide(); armGameHide(); if (hubOpen) return; hubLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); };
     gc.addEventListener("mouseenter", hubEnter); gc.addEventListener("mouseleave", hubLeave);
     hub.addEventListener("mouseenter", hubEnter); hub.addEventListener("mouseleave", hubLeave);
     function setHub(open) {
@@ -2948,9 +2968,55 @@
       window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
       window.overlayApi.setModal?.(true); window.overlayApi.hover?.(true);
     }
-    gc.addEventListener("click", (e) => { e.stopPropagation(); setHub(!hub.classList.contains("open")); });
-    hub.addEventListener("click", (e) => e.stopPropagation());
+    gc.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); setHub(!hub.classList.contains("open")); });
+    hub.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); });
     document.addEventListener("click", () => { if (hub.classList.contains("open")) setHub(false); });
+
+    // ── Time the cog out once you're back IN THE GAME ────────────────────────
+    // The 10s fade (rescheduleCogHide) deliberately never fires while the hub is open, so a hub
+    // you opened and then forgot about stayed up indefinitely. That isn't only clutter: an open
+    // hub holds setModal(true), which bypasses hold-to-interact, so the canvas keeps swallowing
+    // clicks the entire time it's forgotten. Nobody is reading the hub while Star Citizen has
+    // focus — so 30s of GAME focus closes it. Hovering or clicking it restarts the clock, and the
+    // timer only ever runs while the game is actually in front, so it can't close under you.
+    // 30s in real use; `?coghide=<ms>` shortens it so the harness doesn't have to wait half a minute.
+    const COG_GAME_HIDE_MS = +(new URLSearchParams(location.search).get("coghide")) || 30000;
+    let gameHideT = null, gameFocused = false;
+    const cogIsUp = () => gc.classList.contains("show") || hub.classList.contains("open");
+    function clearGameHide() { clearTimeout(gameHideT); gameHideT = null; }
+    function armGameHide() {
+      clearGameHide();
+      if (!gameFocused || !cogIsUp()) return;
+      gameHideT = setTimeout(() => {
+        gameHideT = null;
+        if (!gameFocused || !cogIsUp()) return;
+        if (cogHovered) { armGameHide(); return; } // pointer is on it — you're using it, wait
+        if (hubOpen) setHub(false);                // also drops setModal, so clicks pass through
+        gc.classList.remove("show", "open");
+      }, COG_GAME_HIDE_MS);
+    }
+    window.overlayApi.onGameFocus?.((on) => { gameFocused = on; armGameHide(); });
+
+    // Only pay for the foreground helper while the cog is up — same opt-in contract the OCR loop
+    // and hold-to-interact use, so with the cog down this costs nothing. Watching the CLASS
+    // catches every path that summons or hides it (widget cog, panel pointerdown, arrange mode,
+    // the Mining window over IPC) without each call site having to remember this exists.
+    let cogWanted = null;
+    const syncCogWant = () => {
+      const up = cogIsUp();
+      if (up === cogWanted) return;
+      cogWanted = up;
+      if (!up) clearGameHide();
+      Promise.resolve(window.overlayApi.wantForeground?.(up)).then((now) => {
+        // null = the helper hasn't answered yet; leave gameFocused alone rather than guessing.
+        if (typeof now === "boolean") gameFocused = now;
+        armGameHide();
+      }).catch(() => { /* no shell (browser preview) — the timer just never arms */ });
+    };
+    const cogWatch = new MutationObserver(syncCogWant);
+    cogWatch.observe(gc, { attributes: true, attributeFilter: ["class"] });
+    cogWatch.observe(hub, { attributes: true, attributeFilter: ["class"] });
+    syncCogWant();
     // Widget on/off. Blueprint hides in-page; Mining is a separate window (via the shell). The
     // Binding chart is hotkey-only (nobody keeps it visible), so it's not a hub toggle.
     $("wgBlueprint").addEventListener("change", () => setBlueprintVisible($("wgBlueprint").checked));

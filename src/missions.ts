@@ -212,8 +212,14 @@ export interface BlueprintReward {
   name: string;
   /** Resolved item UUID (the image key), or null if the name couldn't be resolved. */
   item: string | null;
-  /** Full item-render URL on the site, or null when there's no UUID. */
+  /** Preferred image: the crowdsourced FABRICATOR capture — the same picture the site's
+   *  blueprint pages show, and the one players recognise from the in-game kiosk. Null when
+   *  there's no UUID. 404s for any item nobody has captured yet, hence `imageFallback`. */
   image: string | null;
+  /** The generated clay RENDER, used only when no capture exists. Distinct items can share a
+   *  render (all three Scraper Modules reuse one game mesh, so their renders are byte-identical)
+   *  — which is exactly why the capture has to be tried first. */
+  imageFallback: string | null;
 }
 
 export interface TrackedView {
@@ -993,11 +999,26 @@ export class MissionTracker extends EventEmitter {
     return out;
   }
 
-  /** Resolve a received blueprint name to its item UUID + site render URL for display. */
+  /** Resolve a received blueprint name to its item UUID + the images to display it with.
+   *
+   *  🔑 TWO sources, and the order matters. `/api/fab-img/<uuid>` is the crowdsourced capture of
+   *  the real in-game fabricator entry — what the site's blueprint pages show, and what a player
+   *  recognises. `/sc/items/<uuid>.webp` is a generated clay render, which exists for nearly
+   *  everything but is a grey untextured mesh AND is shared between items that reuse a model:
+   *  Abrade / Cinch / Trawler Scraper Module all return the byte-identical render, so the render
+   *  alone can't even tell you which of the three you unlocked. The capture 404s for anything
+   *  nobody has captured yet, so the client tries `image` first and falls back to `imageFallback`. */
   private blueprintReward(name: string): BlueprintReward {
     const item = this.itemUuidsForName(name)[0] ?? null;
     const base = this.remoteBaseUrl ?? "https://subliminal.gg/sc";
-    return { name, item, image: item ? `${base}/items/${item}.webp` : null };
+    // `base` points at the /sc asset root; the capture endpoint is a sibling API route.
+    const site = base.replace(/\/sc\/?$/, "");
+    return {
+      name,
+      item,
+      image: item ? `${site}/api/fab-img/${item}` : null,
+      imageFallback: item ? `${base}/items/${item}.webp` : null,
+    };
   }
 
   /** Record a completed mission into the capped, newest-first history (deduped by

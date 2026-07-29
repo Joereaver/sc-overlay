@@ -1119,7 +1119,18 @@ if (!app.requestSingleInstanceLock()) {
     // runs while one of them actually wants it (see foreground.want). Alt-tabbing in or out of the
     // game changes whether the hold is required, so re-evaluate on every change rather than
     // waiting for something else to notice.
-    foreground.onChange(() => applyMouse());
+    foreground.onChange(() => {
+      applyMouse();
+      // The canvas needs the same answer for its own reason: a summoned cog / open hub should
+      // time itself out once you're back in the GAME, since that's when it's forgotten about.
+      // Pushed rather than polled — the page can't see the desktop, and this fires only on an
+      // actual change of foreground window.
+      try {
+        if (overlay && !overlay.isDestroyed()) {
+          overlay.webContents.send("overlay:game-focus", foreground.gameInFront());
+        }
+      } catch { /* window gone */ }
+    });
     startServer();
     const up = await waitForServer();
     if (!up) console.error("[electron] server did not come up on :" + PORT);
@@ -1269,6 +1280,14 @@ if (!app.requestSingleInstanceLock()) {
   // Hold-to-interact opt-in: when off (default), the overlay is clickable whenever the cursor is
   // over a widget; when on, it's passive unless the interact key is held.
   ipcMain.handle("app:set-hold-mode", (_e, on) => { holdMode = !!on; foreground.want("hold", holdMode); applyMouse(); return holdMode; });
+  // The canvas asks for foreground tracking only while its cog is actually up (see the cog
+  // auto-hide in missions.html). Same opt-in contract as hold-to-interact: with the cog down and
+  // hold off, the PowerShell helper isn't running at all. Answers immediately so a page that
+  // arrives after the last change still learns the current state instead of waiting for the next.
+  ipcMain.handle("app:want-foreground", (_e, on) => {
+    foreground.want("cog", !!on);
+    return foreground.ready() ? foreground.gameInFront() : null; // null = not known yet
+  });
 
   // Legacy hover signal — hover is now driven by pollCursor() hit-testing the reported regions,
   // so this is a no-op (kept so the preload bridge / page calls don't error).

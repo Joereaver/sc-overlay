@@ -23,6 +23,17 @@ const real = {
   // Held so a test can fire it: this signal only ever comes from the shell's cursor poll, which
   // is the whole point of it — the page has no way to notice the cursor leaving on its own.
   onCursorAway: (cb) => { window.__fireCursorAway = cb; },
+  // The hub awaits this on open. The catch-all Proxy below returns `() => {}` for anything not
+  // named here, and `undefined.then` throws — so every member the page CHAINS off has to be real,
+  // not just callable.
+  widgetStates: async () => ({
+    mining: true, notepad: true, twitchChat: false, scFeed: false,
+    party: true, battaglia: false, webView: false, bindingChart: false,
+  }),
+  // Same deal for "is the game in front" — only the shell can know, so a test drives it directly.
+  // wantForeground resolves null (helper hasn't answered), which is what a real cold start does.
+  onGameFocus: (cb) => { window.__fireGameFocus = cb; },
+  wantForeground: (on) => { window.__foregroundWanted = !!on; return Promise.resolve(null); },
 };
 window.overlayApi = new Proxy(real, {
   get(t, k) { return k in t ? t[k] : () => {}; },

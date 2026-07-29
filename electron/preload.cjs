@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // Force this window interactive for the duration of a drag/resize gesture so it can't drop.
   dragLock: (on) => ipcRenderer.send("overlay:drag-lock", !!on),
   onMoveMode: (cb) => ipcRenderer.on("overlay:move-mode", (_e, on) => cb(!!on)),
+  // Foreground tracking, opt-in. Returns the current answer (true/false), or null if the helper
+  // hasn't reported yet — callers should treat null as "don't act on it".
+  wantForeground: (on) => ipcRenderer.invoke("app:want-foreground", !!on),
+  onGameFocus: (cb) => ipcRenderer.on("overlay:game-focus", (_e, on) => cb(!!on)),
   // The app version (authoritative), for the "what's new" card.
   getVersion: () => ipcRenderer.invoke("app:version"),
   // While a modal (what's-new card) is open, keep the HUD hover-interactive even when
