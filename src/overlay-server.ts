@@ -1032,7 +1032,18 @@ async function twitchSend(text: string): Promise<{ ok: boolean; message?: string
   }
 }
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
+  // One route throwing must not take the whole sidecar down with it. This handler is async, so
+  // an unhandled rejection here IS a process exit — and the app can't tell the difference between
+  // a dead sidecar and a slow one, so it just quietly stops working.
+  void handleRequest(req, res).catch((e) => {
+    console.error(`[server] ${req.method} ${req.url} failed:`, (e as Error)?.stack ?? String(e));
+    if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    if (!res.writableEnded) res.end(JSON.stringify({ error: "server_error" }));
+  });
+});
+
+async function handleRequest(req: import("node:http").IncomingMessage, res: ServerResponse) {
   const url = (req.url ?? "/").split("?")[0];
 
   // Live event stream for the overlay.
@@ -1695,6 +1706,19 @@ const server = createServer(async (req, res) => {
       res.end(buf);
     }
   });
+}
+
+// Last line of defence. Node exits on an unhandled rejection, and this process is spawned with no
+// terminal — so without this, a stray throw anywhere (a timer, the watcher, an SSE write to a
+// socket that just went away) ends the sidecar leaving nothing behind to say why. Log the stack,
+// then exit so the shell's restart takes over: a crashed sidecar that stays dead is worse.
+process.on("uncaughtException", (e) => {
+  console.error("[server] uncaught exception:", e?.stack ?? String(e));
+  process.exit(1);
+});
+process.on("unhandledRejection", (e) => {
+  console.error("[server] unhandled rejection:", (e as Error)?.stack ?? String(e));
+  process.exit(1);
 });
 
 server.on("error", (err: NodeJS.ErrnoException) => {

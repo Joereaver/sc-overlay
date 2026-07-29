@@ -126,24 +126,71 @@ let manualCheck = false; // true while a tray-triggered update check is in fligh
 let updateDownload = null;
 
 // ── server lifecycle ────────────────────────────────────────────────────────
+// The sidecar's console, kept on disk. It used to be spawned with stdio:"ignore", so when it
+// died it died silently: the app stayed up, every already-loaded widget kept rendering, and the
+// first sign of trouble was a fetch failing minutes later ("couldn't reach the overlay service").
+// Truncated per launch — this is for diagnosing the session you're in, not history.
+const SIDECAR_LOG = path.join(process.env.APPDATA || process.env.HOME || ".", "sc-blueprint-tracker", "sidecar.log");
+
+let sidecarLogOpened = false;
+
+function sidecarLogStream() {
+  try {
+    fs.mkdirSync(path.dirname(SIDECAR_LOG), { recursive: true });
+    // Truncate once per APP launch, then append. A respawn must not erase the crash it is
+    // recovering from — that stack is the entire reason this file exists.
+    const fd = fs.openSync(SIDECAR_LOG, sidecarLogOpened ? "a" : "w");
+    sidecarLogOpened = true;
+    return fd;
+  } catch (e) {
+    console.error("[electron] could not open the sidecar log:", String(e));
+    return "ignore";
+  }
+}
+
+/** Write a line from the SHELL into the sidecar's log, so a crash and its restart read as one
+ *  timeline instead of being split across two places the user can't see. */
+function noteInSidecarLog(line) {
+  try { fs.appendFileSync(SIDECAR_LOG, `\n[electron ${new Date().toISOString()}] ${line}\n`); } catch { /* best effort */ }
+}
+
+// Restart backoff. A sidecar that crashes on startup (a bad dataset, a port fight) must not be
+// respawned in a tight loop — back off, and give up loudly rather than churning forever.
+let serverRestarts = 0;
+let serverRestartTimer = null;
+
 function startServer() {
+  const out = sidecarLogStream();
+  const stdio = out === "ignore" ? "ignore" : ["ignore", out, out];
   if (app.isPackaged) {
     // Prod: the bun-compiled server binary shipped as an extraResource (no Node/tsx
     // on the user's machine). cwd = its dir so assetDir finds overlay/ + data/.
     const exe = path.join(process.resourcesPath, "server", "sc-overlay-server.exe");
     // Inject the authoritative app version — the bun sidecar can't read package.json.
-    server = spawn(exe, { cwd: path.dirname(exe), env: { ...process.env, APP_VERSION }, stdio: "ignore" });
+    server = spawn(exe, { cwd: path.dirname(exe), env: { ...process.env, APP_VERSION }, stdio });
   } else {
     // Dev: run the TS server via tsx.
     server = spawn("npx tsx src/overlay-server.ts", {
       cwd: ROOT,
       shell: true,
       env: { ...process.env, APP_VERSION },
-      stdio: "ignore",
+      stdio,
     });
   }
-  server.on("exit", (code) => {
-    if (code && !app.isQuitting) console.error(`[electron] server exited (${code})`);
+  server.on("exit", (code, signal) => {
+    if (app.isQuitting) return;
+    // Everything the app can do depends on it, so bring it back rather than leaving a window
+    // that looks healthy and answers nothing.
+    if (serverRestarts >= 5) {
+      noteInSidecarLog(`server exited (code ${code}, signal ${signal}) — 5 crashes, not restarting again`);
+      console.error("[electron] server has crashed 5 times — not restarting it again");
+      return;
+    }
+    const wait = Math.min(30000, 1000 * 2 ** serverRestarts);
+    serverRestarts += 1;
+    noteInSidecarLog(`server exited (code ${code}, signal ${signal}) — restarting in ${wait}ms (attempt ${serverRestarts})`);
+    console.error(`[electron] server exited (code ${code}) — restarting in ${wait}ms, see ${SIDECAR_LOG}`);
+    serverRestartTimer = setTimeout(startServer, wait);
   });
 }
 
@@ -1247,6 +1294,7 @@ if (!app.requestSingleInstanceLock()) {
     app.isQuitting = true;
     hotkeys.unregisterAll();
     foreground.stop(); // a piped child would otherwise outlive us
+    if (serverRestartTimer) clearTimeout(serverRestartTimer); // don't respawn one on the way out
     if (server) server.kill();
     if (tray) tray.destroy();
   });
