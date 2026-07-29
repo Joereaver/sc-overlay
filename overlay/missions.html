@@ -1619,7 +1619,8 @@
     if (!r.extra || !r.extra.length) return "";
     const more = r.extra.map((a) => "+" + Number(a || 0).toLocaleString()).join(" ");
     return ' <span class="mi-hint" title="This mission lists more than one reputation award against the same standing. ' +
-      'The game data doesn&#39;t say what the extra one is for, so the estimate counts only the largest.">' +
+      'Checked against the in-game standing bar (2026-07-29): the extra one is NOT added to your standing, ' +
+      'so only the largest is counted here.">' +
       escapeHtml(more) + " also listed</span>";
   }
   function repRows(list, neg) {

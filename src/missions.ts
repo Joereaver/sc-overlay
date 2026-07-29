@@ -1328,7 +1328,15 @@ export class MissionTracker extends EventEmitter {
 
   /** The primary, mobiGlas-facing rep entry a mission grants: an org-scope gain (in
    *  rep-scopes.json, not an internal modifier), picked by scope priority then amount.
-   *  null when the mission grants no rankable rep (intro/story/pure-item missions). */
+   *  null when the mission grants no rankable rep (intro/story/pure-item missions).
+   *
+   *  🔑 Taking only the LARGEST when a mission lists several against the same standing is
+   *  MEASURED, not a guess (2026-07-29). Sub's in-game Battaglia bar sat at 60.1% of the
+   *  Prestige 1→2 band (10,800→30,000), implying ~22,334 rep. Counting the largest gives
+   *  21,900 — 434 under, inside the ±326 slop of reading a bar off a screenshot and explained
+   *  by this estimate being a documented lower bound. Adding the second entries as well would
+   *  give 23,540: 1,206 OVER what the game shows, four times outside that slop. So whatever
+   *  the second entry is for, it does not land in your standing. Don't "fix" this by summing. */
   private primaryRep(m: DatasetMission | undefined): { scope: string; faction: string; amount: number } | null {
     const rankOf = (s: string) => {
       const i = REP_SCOPE_PRIORITY.indexOf(s);
