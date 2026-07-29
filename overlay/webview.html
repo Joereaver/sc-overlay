@@ -46,8 +46,13 @@
   .hbtn.active { background: rgba(var(--accent-rgb), 0.28); border-color: var(--cyan); }
 
   #body { flex: 1; min-height: 0; position: relative; }
-  #frame { display: block; width: 100%; height: 100%; border: 0; background: #0b1119; }
+  /* The hole the shell's view fills. Transparent on purpose — anything painted here would sit
+     behind the view and only ever show through as a flash while a page loads. */
+  #frame { display: block; width: 100%; height: 100%; border: 0; background: transparent; }
   #frame.hide { display: none; }
+  /* Only ever seen when there's no shell to paint the view (a plain browser tab). */
+  #frameNote { display: none; margin: 0; padding: 22px 18px; font-size: 11px; line-height: 1.6; color: var(--faint); }
+  body:not(.embedded) #frameNote { display: block; }
 
   #setup { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
     gap: 10px; padding: 22px 18px; background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)); z-index: 5; }
@@ -78,9 +83,14 @@
     </div>
 
     <div id="body">
-      <!-- No sandbox: single-page apps (erkul among them) break under it, and the user picks
-           the site themselves - same trust model as the Twitch embed. -->
-      <iframe id="frame" class="hide" title="Web Page" referrerpolicy="no-referrer"></iframe>
+      <!-- Not an iframe any more. The site is a native view the shell paints over this exact
+           rectangle, because an iframe can only show sites willing to be framed and the RSI site
+           is not one of them (it delivers the document and then renders nothing). This element is
+           the HOLE: it stays empty and transparent, and its position is reported to the shell.
+           Standalone (no shell — a browser tab, the test harness), it shows why it's blank. -->
+      <div id="frame" class="hide">
+        <p id="frameNote">The web page is drawn by the app itself, so this widget only works inside SC Overlay.</p>
+      </div>
       <div id="setup">
         <div class="lbl">Web page</div>
         <input id="urlInput" type="text" placeholder="e.g. subliminal.gg/blueprints" spellcheck="false" autocomplete="off" />
@@ -90,7 +100,7 @@
         </div>
         <div class="quick" id="quick"></div>
         <div class="warn" id="warn"></div>
-        <div class="hint">Plenty of sites refuse to be embedded — <b>erkul</b>, <b>UEX</b>, <b>starcitizen.tools</b>, Google and YouTube all do. This checks before loading and tells you, instead of leaving you with a blank box.</div>
+        <div class="hint">Any site works here now, including the ones that refuse to be embedded — the <b>RSI site</b>, <b>UEX</b>, <b>erkul</b>, <b>starcitizen.tools</b>. Sign-ins work too, in their own cookie jar, separate from your browser.</div>
       </div>
     </div>
   </div>
@@ -103,14 +113,16 @@
   const host = () => (EMBEDDED && window.parent) ? window.parent.__webViewHost : null;
   const host_ = host; // alias: `host` is shadowed by a local in go()
 
-  // A few SC-flavoured starting points so the empty state isn't a bare box.
-  // Only sites VERIFIED to allow framing. Checked 2026-07-24: uexcorp.space sends
-  // X-Frame-Options: SAMEORIGIN and starcitizen.tools sends DENY, so both would just sit
-  // blank - they are called out in the hint instead of being offered as a chip.
+  // A few SC-flavoured starting points so the empty state isn't a bare box. These used to be
+  // restricted to sites VERIFIED to allow framing (uexcorp.space sends X-Frame-Options:
+  // SAMEORIGIN, starcitizen.tools sends DENY) — but the page is top-level in the shell's view
+  // now, not framed, so the ones that were excluded are exactly the ones worth offering.
   const QUICK = [
+    ["RSI", "https://robertsspaceindustries.com"],
+    ["UEX", "https://uexcorp.space"],
+    ["erkul", "https://www.erkul.games"],
     ["SC Feed", "https://sc-feed.subliminal.gg"],
     ["Blueprints", "https://subliminal.gg/blueprints"],
-    ["Projects", "https://subliminal.gg/projects"],
   ];
 
   let url = "";
@@ -131,40 +143,55 @@
     const f = $("frame");
     $("siteTag").textContent = url ? (() => { try { return new URL(url).host; } catch { return url; } })() : "No page set";
     if (url) {
-      if (f.dataset.for !== url) { f.src = url; f.dataset.for = url; }
+      if (f.dataset.for !== url) { host()?.viewLoad?.(url); f.dataset.for = url; }
       f.classList.remove("hide");
       $("panel").classList.remove("setup");
     } else {
       f.classList.add("hide");
       $("panel").classList.add("setup");
     }
+    reportHole();
   }
+
+  /** Tell the shell where to paint the page — this element's box, in THIS page's coordinates.
+   *  The canvas adds the widget's own position before passing it on. */
+  function reportHole() {
+    const f = $("frame");
+    const h = host();
+    if (!h) return;                                   // standalone: there is no view to place
+    if (f.classList.contains("hide")) { h.viewShow?.(false); return; }
+    const r = f.getBoundingClientRect();
+    h.viewBounds?.({ x: r.left, y: r.top, width: r.width, height: r.height });
+  }
+  // The hole moves when the widget is resized (the page reflows inside a fixed frame), so watch
+  // the element itself rather than trying to catch every cause.
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(reportHole).observe(document.documentElement);
+  window.addEventListener("resize", reportHole);
 
   function openSetup() {
     $("urlInput").value = url;
     $("panel").classList.add("setup");
-    $("frame").classList.add("hide"); // don't leave the page swallowing pointer events behind the form
+    // The form has to be readable: with the site up, the shell's view would cover it.
+    $("frame").classList.add("hide");
+    reportHole();
   }
 
   async function go() {
     const u = normalizeUrl($("urlInput").value);
     if (!u) { $("warn").textContent = "That doesn't look like a web address."; $("urlInput").focus(); return; }
-    $("warn").textContent = "Checking…";
-    // Ask the sidecar whether this page allows embedding before we hand it to the iframe.
-    try {
-      const c = await (await fetch("/api/can-embed?url=" + encodeURIComponent(u))).json();
-      if (!c.embeddable) {
-        $("warn").textContent = "";
-        const host = (() => { try { return new URL(u).host; } catch { return u; } })();
-        const msg = document.createElement("span");
-        msg.textContent = host + " can't be embedded — it " + (c.reason || "blocks being framed") + ". ";
-        const b = document.createElement("button");
-        b.type = "button"; b.className = "chip"; b.textContent = "Open in browser";
-        b.addEventListener("click", () => { if (host_()) host_().openUrl(u); else window.open(u, "_blank", "noopener"); });
-        $("warn").append(msg, b);
-        return;
-      }
-    } catch { /* check failed - let the iframe try anyway */ }
+    // No embeddability check any more: the page is loaded as top-level content in the shell's own
+    // view, so X-Frame-Options and frame-ancestors don't apply and the sites this used to refuse
+    // (the RSI site, UEX, starcitizen.tools) now work. Standalone, there's no view to load into.
+    if (!host()) {
+      $("warn").textContent = "";
+      const msg = document.createElement("span");
+      msg.textContent = "This widget draws its page through the app — open it in SC Overlay. ";
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.textContent = "Open in browser";
+      b.addEventListener("click", () => window.open(u, "_blank", "noopener"));
+      $("warn").append(msg, b);
+      return;
+    }
     $("warn").textContent = "";
     url = u;
     if (typing) setTyping(false);
@@ -208,7 +235,7 @@
 
   $("editBtn").addEventListener("click", openSetup);
   $("goBtn").addEventListener("click", go);
-  $("reloadBtn").addEventListener("click", () => { const f = $("frame"); if (f.dataset.for) f.src = f.dataset.for; });
+  $("reloadBtn").addEventListener("click", () => { if ($("frame").dataset.for) host()?.viewReload?.(); });
   $("typeBtn").addEventListener("click", () => setTyping(!typing));
   $("urlInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && typing) { e.preventDefault(); setTyping(false); } });

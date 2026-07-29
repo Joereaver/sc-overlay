@@ -2083,12 +2083,30 @@
       key: "webView", page: "webview.html", title: "Web Page",
       def: { x: 480, y: 120 }, size: { w: 420, h: 520, minW: 260, maxW: 6000, minH: 200, maxH: 3000 },
       focusFn: "__webViewFocus",
-      // A page that refuses to be framed gets an "Open in browser" escape hatch instead.
-      host: () => ({ openUrl: (u) => window.overlayApi?.openUrl?.(u) }),
+      // No tilt: somebody else's website is not ours to skew, and a tilted page is just harder
+      // to read. (Sub, 2026-07-29 — the angle control is per-widget, and these two don't get one.)
+      noAngle: true,
+      // The page itself is a native view owned by the shell (an iframe can't show sites that
+      // refuse framing). The widget page keeps its chrome and reports the HOLE to fill; these
+      // relay it, converting the page's own coordinates into canvas ones.
+      host: (w) => ({
+        openUrl: (u) => window.overlayApi?.openUrl?.(u),
+        viewBounds: (r) => reportWebViewHole(w, r),
+        viewShow: (on) => { if (on) scheduleWebViewSync(w); else window.overlayApi?.webViewShow?.(false); },
+        viewLoad: (u) => window.overlayApi?.webViewLoad?.(u),
+        viewReload: () => window.overlayApi?.webViewReload?.(),
+        viewBack: () => window.overlayApi?.webViewBack?.(),
+      }),
+      // Tabbed away, closed, or the whole overlay hidden: the view must go with it, or someone
+      // else's website floats over the game with nothing behind it.
+      onShow: (w) => scheduleWebViewSync(w),
+      onHide: () => window.overlayApi?.webViewShow?.(false),
     },
     {
       key: "bindingChart", page: "bindingwidget.html", title: "Infographic Viewer",
       def: { x: 120, y: 120 }, size: { w: 620, h: 340, minW: 260, maxW: 6000, minH: 160, maxH: 3000 },
+      // Same reasoning: a binding chart is dense reference art. Tilting it only costs legibility.
+      noAngle: true,
       // Re-read the PNG each time it's summoned, so a re-exported chart appears without a restart.
       onShow: (w) => { try { frameWin(w)?.__bindingReload?.(); } catch { /* not loaded yet */ } },
     },
@@ -2178,10 +2196,11 @@
         + '<button type="button" class="wh-btn wcfg-dn" title="Smaller text">A−</button>'
         + '<button type="button" class="wh-btn wcfg-up" title="Bigger text">A+</button>'
         + '<span class="wcfg-val"></span></div>'
-        + '<div class="wcfg-row wcfg-angrow"><span class="wcfg-lbl">Angle</span>'
-        + '<input type="range" class="wcfg-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1" value="0"'
-        + ' title="Tilt this widget left or right" />'
-        + '<span class="wcfg-angv"></span></div>'
+        + (w.noAngle ? ''
+          : '<div class="wcfg-row wcfg-angrow"><span class="wcfg-lbl">Angle</span>'
+          + '<input type="range" class="wcfg-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1" value="0"'
+          + ' title="Tilt this widget left or right" />'
+          + '<span class="wcfg-angv"></span></div>')
         + '</div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -2214,6 +2233,10 @@
   // share a box, so letting each tab carry its own would tilt the frame every time you switched
   // tab. Range matches the old global overlayTwist config at ±ANGLE_MAX (declared above).
   const wAngle = (w) => {
+    // A widget that doesn't tilt reads as flat everywhere — including inside a tilted GROUP, and
+    // including a value saved back when it did have a slider. Otherwise removing the control
+    // would strand someone's Web Page or chart crooked with no way to straighten it.
+    if (w.noAngle) return 0;
     const g = groupOf(w);
     if (g && g.angle != null) return g.angle;
     return w.s.angle != null ? w.s.angle : (w.angle != null ? w.angle : 0);
@@ -2251,6 +2274,9 @@
     }
     el.classList.toggle("grouped", !!g);
     el.classList.toggle("scaled", w.shape === "scaled" && !g);
+    // The Web Page widget's content is a native view the shell paints at coordinates we hand it,
+    // so it can't follow the widget on its own — every geometry change has to re-report.
+    if (w.key === "webView") scheduleWebViewSync(w);
   }
   function applyAllFrames() { for (const w of WIDGETS) applyFrame(w); renderGroupTabs(); }
   function applyGroup(g) { for (const k of g.members) { const w = WBY[k]; if (w) applyFrame(w); } renderGroupTabs(); }
@@ -2362,6 +2388,45 @@
     const r = wSettingsRoot(w); const inj = r?.querySelector(".wtext-val"); if (inj) out.push(inj);
     return out;
   };
+  // ── The Web Page widget's native view ───────────────────────────────────────────────────
+  // Its content isn't in the DOM at all: the shell paints a WebContentsView over the canvas,
+  // because an iframe can't show a site that busts frames (which the RSI site does). The widget
+  // page leaves a hole and tells us where it is IN ITS OWN coordinates; add the frame's position
+  // to get canvas coordinates, which is what the shell wants.
+  //
+  // Everything that moves a widget has to re-report: dragging, resizing, tab switches, show/hide.
+  let webViewHole = null;   // last rect the page told us, in page coordinates
+  function reportWebViewHole(w, r) {
+    if (r) webViewHole = r;
+    const el = wEl(w);
+    const frame = document.getElementById("wf-" + w.key);
+    // Hidden, or tabbed to the back of a stack: nothing to paint.
+    if (!webViewHole || !el || !frame || el.style.display === "none") {
+      window.overlayApi?.webViewShow?.(false);
+      return;
+    }
+    const box = frame.getBoundingClientRect();
+    window.overlayApi?.webViewBounds?.({
+      x: box.left + webViewHole.x,
+      y: box.top + webViewHole.y,
+      width: webViewHole.width,
+      height: webViewHole.height,
+    });
+    window.overlayApi?.webViewShow?.(true);
+  }
+  // Drag/resize fire continuously; one rAF-coalesced update per frame is enough and keeps the
+  // view glued to the widget instead of trailing it.
+  // The shell tells us whether the view is actually on screen — the only reliable source, since a
+  // hidden view keeps reporting its last size from the inside.
+  let webViewPainted = null;
+  window.overlayApi?.onWebViewPainted?.((s) => { webViewPainted = s; });
+  let webViewSync = 0;
+  function scheduleWebViewSync(w) {
+    const widget = w || WBY.webView;
+    if (!widget || webViewSync) return;
+    webViewSync = requestAnimationFrame(() => { webViewSync = 0; reportWebViewHole(widget, null); });
+  }
+
   // ── Per-widget angle, part 2: the controls ──────────────────────────────────────────────
   // Every place an angle can be read or driven from, for ONE widget: the popover on its own bar,
   // the row injected into a page that has its own settings menu, and — for the two widgets that
@@ -2401,7 +2466,8 @@
     const root = wSettingsRoot(w);
     // Nothing to do for a page that already has its own angle slider (Mining), or the Blueprint
     // panel, whose cog menu carries one — a second control for the same value reads as a bug.
-    if (!root || root.querySelector(".wang-row") || root.querySelector("#cogAngle")) return;
+    // Nor for a widget that doesn't tilt at all (see noAngle).
+    if (w.noAngle || !root || root.querySelector(".wang-row") || root.querySelector("#cogAngle")) return;
     const doc = root.ownerDocument;
     const row = doc.createElement("div");
     row.className = "wang-row";

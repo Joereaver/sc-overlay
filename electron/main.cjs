@@ -125,6 +125,95 @@ let manualCheck = false; // true while a tray-triggered update check is in fligh
 // progress line in the tray menu + the tray tooltip. null when idle.
 let updateDownload = null;
 
+// ── the Web Page widget's actual web page ───────────────────────────────────
+// It used to be an iframe, which meant it could only show sites willing to be framed — and the
+// site a Star Citizen player most wants pinned over the game, robertsspaceindustries.com, is not
+// one of them. Stripping X-Frame-Options isn't enough either: measured 2026-07-29, RSI delivers
+// 710KB of HTML into a frame and then renders NOTHING (it busts frames client-side), while the
+// same URL top-level in the same session paints the real site.
+//
+// So the page lives in a WebContentsView owned by main, where it IS top-level. The widget's
+// chrome (URL bar, quick chips, header, resize handle) stays in the renderer, and the renderer
+// tells us the rectangle to fill — a hole it leaves in its own layout.
+//
+// A view is an axis-aligned native rectangle painted ABOVE all page content, which is why this
+// widget doesn't tilt (noAngle in the registry) and why the view must be HIDDEN whenever
+// something needs to draw over it: arrange mode, an open modal, or a group tab-switch.
+let webView = null;
+let webViewBounds = { x: 0, y: 0, width: 0, height: 0 };
+let webViewWanted = false;   // the renderer wants it visible
+let webViewMasked = false;   // ...but something is drawing over it right now
+
+function ensureWebView() {
+  if (webView || !overlay) return webView;
+  const { WebContentsView } = require("electron");
+  webView = new WebContentsView({
+    webPreferences: {
+      // Someone else's website: no preload, no node, and its own jar so third-party cookies
+      // never mix with the app's session.
+      partition: "persist:webwidget",
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  // Target=_blank and window.open must not spawn a second frameless always-on-top window over
+  // the game — send those to the real browser instead.
+  webView.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
+  // Keep the widget's chrome honest about what it's showing.
+  const report = () => {
+    try {
+      overlay?.webContents.send("webview:state", {
+        url: webView.webContents.getURL(),
+        title: webView.webContents.getTitle(),
+        loading: webView.webContents.isLoading(),
+        canGoBack: webView.webContents.navigationHistory.canGoBack(),
+      });
+    } catch { /* overlay went away */ }
+  };
+  webView.webContents.on("did-stop-loading", report);
+  webView.webContents.on("did-navigate", report);
+  webView.webContents.on("did-navigate-in-page", report);
+  webView.webContents.on("did-fail-load", (_e, code, desc, url, isMainFrame) => {
+    if (!isMainFrame) return;
+    try { overlay?.webContents.send("webview:state", { url, failed: `${desc} (${code})` }); } catch { /* gone */ }
+  });
+  overlay.contentView.addChildView(webView);
+  applyWebViewBounds();
+  return webView;
+}
+
+/** Painted only when the renderer wants it AND nothing is drawing over it. Zero-size bounds is
+ *  how a view is hidden — setVisible exists, but a 0×0 rect also stops it eating the cursor. */
+function applyWebViewBounds() {
+  if (!webView) return;
+  const on = webViewWanted && !webViewMasked && overlayEnabled;
+  webView.setVisible(on);
+  webView.setBounds(on ? webViewBounds : { x: 0, y: 0, width: 0, height: 0 });
+  // Echo what we actually did. Nothing inside a hidden view can report this — it keeps its last
+  // size and visibility state — so the shell is the only honest source, and the widget needs it
+  // to know whether the page it thinks it's showing is on screen at all.
+  try {
+    overlay?.webContents.send("webview:painted", { painted: on, wanted: webViewWanted, masked: webViewMasked, bounds: webViewBounds });
+  } catch { /* overlay went away */ }
+}
+
+function destroyWebView() {
+  if (!webView) return;
+  try { overlay?.contentView.removeChildView(webView); } catch { /* window already gone */ }
+  try { webView.webContents.close(); } catch { /* already closed */ }
+  webView = null;
+}
+
+/** Arrange mode, a modal, or the overlay being switched off must all cover the view. */
+function maskWebView(on) {
+  webViewMasked = !!on;
+  applyWebViewBounds();
+}
+
 // ── server lifecycle ────────────────────────────────────────────────────────
 // The sidecar's console, kept on disk. It used to be spawned with stdio:"ignore", so when it
 // died it died silently: the app stayed up, every already-loaded widget kept rendering, and the
@@ -1178,6 +1267,9 @@ if (!app.requestSingleInstanceLock()) {
   // A HUD modal (what's-new card / hub) opened/closed → keep it clickable even under lock.
   ipcMain.on("overlay:modal", (_e, on) => {
     modalOpen = !!on;
+    // A modal (what's-new card, the hub) renders in the canvas and would be painted UNDER a
+    // native view, so the view stands down while one is up.
+    maskWebView(modalOpen);
     applyMouse();
   });
   // Notepad "typing mode" on/off. ON: bring the overlay foreground so the note field gets the
@@ -1211,8 +1303,37 @@ if (!app.requestSingleInstanceLock()) {
   });
   // Any widget's grab handle (or the global cog's Arrange button) enters GLOBAL arrange —
   // all visible widgets become movable; either "Done" exits for all.
-  ipcMain.on("overlay:begin-move", () => setArrangeAll(true));
-  ipcMain.on("overlay:end-move", () => setArrangeAll(false));
+  // Arrange draws drag banners and handles OVER the widgets; a native view would sit on top of
+  // all of it, so it steps aside for the duration.
+  ipcMain.on("overlay:begin-move", () => { maskWebView(true); setArrangeAll(true); });
+  ipcMain.on("overlay:end-move", () => { maskWebView(false); setArrangeAll(false); });
+
+  // ── the Web Page widget's view ──────────────────────────────────────────────
+  // The renderer owns the widget's chrome and geometry and leaves a hole; these carry the hole's
+  // rect, what to load in it, and whether it should be painted at all.
+  ipcMain.on("webview:bounds", (_e, r) => {
+    if (!r || typeof r.x !== "number") return;
+    // Round: fractional bounds make a native view blurry against the game.
+    webViewBounds = { x: Math.round(r.x), y: Math.round(r.y), width: Math.max(0, Math.round(r.width)), height: Math.max(0, Math.round(r.height)) };
+    applyWebViewBounds();
+  });
+  ipcMain.on("webview:show", (_e, on) => {
+    webViewWanted = !!on;
+    if (webViewWanted) ensureWebView();
+    applyWebViewBounds();
+  });
+  ipcMain.on("webview:load", (_e, url) => {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return;
+    ensureWebView();
+    webView?.webContents.loadURL(url).catch((e) => {
+      try { overlay?.webContents.send("webview:state", { url, failed: String(e).split("\n")[0] }); } catch { /* gone */ }
+    });
+  });
+  ipcMain.on("webview:reload", () => { try { webView?.webContents.reload(); } catch { /* none yet */ } });
+  ipcMain.on("webview:back", () => {
+    try { if (webView?.webContents.navigationHistory.canGoBack()) webView.webContents.navigationHistory.goBack(); } catch { /* none yet */ }
+  });
+  ipcMain.on("webview:close", () => { webViewWanted = false; destroyWebView(); });
   // Per-widget layout (canvas model): the page fetches saved widget layouts on load and
   // saves them back as the user drags/resizes. Scale is now a property of each widget inside
   // the full-screen canvas, not a resize of the overlay window (which is fixed full-screen).

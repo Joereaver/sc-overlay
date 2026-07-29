@@ -26,6 +26,19 @@ contextBridge.exposeInMainWorld("overlayApi", {
   openSettings: () => ipcRenderer.send("overlay:open-settings"),
   // Open an external URL in the default browser (e.g. the live-on-Twitch diamond).
   openUrl: (url) => ipcRenderer.send("overlay:open-url", url),
+  // The Web Page widget's content is a native WebContentsView owned by main, not an iframe —
+  // an iframe can't show sites that refuse framing (RSI busts frames client-side). The widget
+  // keeps its chrome here and leaves a HOLE; these report where that hole is and what goes in it.
+  webViewBounds: (r) => ipcRenderer.send("webview:bounds", r),
+  webViewShow: (on) => ipcRenderer.send("webview:show", !!on),
+  webViewLoad: (url) => ipcRenderer.send("webview:load", url),
+  webViewReload: () => ipcRenderer.send("webview:reload"),
+  webViewBack: () => ipcRenderer.send("webview:back"),
+  webViewClose: () => ipcRenderer.send("webview:close"),
+  onWebViewState: (cb) => ipcRenderer.on("webview:state", (_e, s) => cb(s)),
+  // Whether the view is actually being painted right now (it stands down for arrange mode, a
+  // modal, or the overlay being switched off). A hidden view can't report this about itself.
+  onWebViewPainted: (cb) => ipcRenderer.on("webview:painted", (_e, s) => cb(s)),
   // Per-widget canvas layout: read saved positions/sizes on load, and persist them as the
   // user drags/resizes a widget in arrange mode. Layout = { [id]: {x, y, scale, visible} }.
   getWidgets: () => ipcRenderer.invoke("overlay:get-widgets"),

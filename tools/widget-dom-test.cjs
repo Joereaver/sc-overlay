@@ -813,33 +813,52 @@ const LIFECYCLE = `(async () => {
 // sliders that existed moved a value nothing read, and the seven widgets added since never got a
 // control at all. These assertions are per-widget on purpose: a fix that only works for the
 // Blueprint panel is the bug again.
+//
+// Two widgets opt OUT (noAngle, Sub 2026-07-29): Web Page hosts somebody else's site, and the
+// Infographic Viewer shows dense reference art — tilting either only costs legibility. They must
+// stay flat AND show no control, which is what TILTING/FLAT below separate.
 const ANGLE = `(async () => {
   ${PRELUDE}
   for (const w of WIDGETS) setWidgetVisible(w, true);
   await sleep(1200);                       // iframes must LOAD before their settings rows exist
   for (const w of WIDGETS) probeSettings(w);
   const tf = (w) => getComputedStyle(el(w)).transform;
+  const TILTING = WIDGETS.filter((w) => !w.noAngle);
+  const FLAT = WIDGETS.filter((w) => w.noAngle);
 
   // ── it applies at all ───────────────────────────────────────────────────────
   const deaf = [], flat0 = new Map();
   for (const w of WIDGETS) flat0.set(w.key, tf(w));
-  for (const w of WIDGETS) {
+  for (const w of TILTING) {
     setWidgetAngle(w, 20);
     const t = tf(w);
     if (cs(w, "--wangle").trim() !== "20deg") deaf.push(w.key + " var=" + cs(w, "--wangle"));
     else if (t === "none" || t === flat0.get(w.key)) deaf.push(w.key + " transform unchanged (" + t + ")");
   }
-  ok("every widget actually tilts when its angle changes", deaf.length === 0, deaf.slice(0, 4).join(" | "));
+  ok("every tilting widget tilts when its angle changes", deaf.length === 0, deaf.slice(0, 4).join(" | "));
 
   const neg = [];
-  for (const w of WIDGETS) { setWidgetAngle(w, -20); if (cs(w, "--wangle").trim() !== "-20deg") neg.push(w.key); }
+  for (const w of TILTING) { setWidgetAngle(w, -20); if (cs(w, "--wangle").trim() !== "-20deg") neg.push(w.key); }
   ok("...in both directions", neg.length === 0, neg.join(","));
+
+  // The opt-outs must IGNORE the angle, not merely lack a slider — a stale saved value or a
+  // tilted group would otherwise leave them crooked with no way back.
+  const stuck = [];
+  for (const w of FLAT) {
+    setWidgetAngle(w, 20);
+    if (cs(w, "--wangle").trim() !== "0deg") stuck.push(w.key + " var=" + cs(w, "--wangle"));
+  }
+  ok("a no-angle widget stays flat when something tries to tilt it", stuck.length === 0, stuck.join(",") || FLAT.map(w => w.key).join(","));
   ok("angle is clamped to the slider range", setWidgetAngle(WBY.notepad, 400) === 35 && setWidgetAngle(WBY.notepad, -400) === -35);
   ok("a junk angle reads as flat, not NaNdeg", setWidgetAngle(WBY.notepad, "banana") === 0 && cs(WBY.notepad, "--wangle") === "0deg", cs(WBY.notepad, "--wangle"));
 
   // ── every widget offers a way to change it ──────────────────────────────────
-  const noCtl = [], dead = [];
-  for (const w of WIDGETS) {
+  const noCtl = [], dead = [], strayCtl = [];
+  for (const w of FLAT) {
+    if (angleControls(w).filter(c => c.input).length) strayCtl.push(w.key);
+  }
+  ok("...and offers no angle control at all", strayCtl.length === 0, strayCtl.join(",") || FLAT.map(w => w.key).join(","));
+  for (const w of TILTING) {
     const ctls = angleControls(w).filter(c => c.input);
     if (!ctls.length) { noCtl.push(w.key); continue; }
     // and the control is wired: driving the input must move the widget
@@ -849,12 +868,12 @@ const ANGLE = `(async () => {
     await sleep(20);
     if (cs(w, "--wangle").trim() !== "12deg") dead.push(w.key + " -> " + cs(w, "--wangle"));
   }
-  ok("every widget exposes an angle control", noCtl.length === 0, noCtl.join(",") || "all nine");
+  ok("every tilting widget exposes an angle control", noCtl.length === 0, noCtl.join(",") || TILTING.map(w => w.key).join(","));
   ok("...and driving that control tilts the widget", dead.length === 0, dead.slice(0, 4).join(" | "));
 
   // every control on a widget shows the SAME number (bespoke slider + injected row + popover)
   const desync = [];
-  for (const w of WIDGETS) {
+  for (const w of TILTING) {
     setWidgetAngle(w, -7);
     for (const c of angleControls(w)) if (c.input && Number(c.input.value) !== -7) desync.push(w.key);
   }
