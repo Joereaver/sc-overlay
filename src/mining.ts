@@ -90,7 +90,55 @@ export function classifySignature(signature: number, isOre: boolean, maxSignatur
 
 /** What a read did, so the sidecar can log it — this is the only place that knows the rules, so it
  *  is the only place that can explain them. `why` lands in sidecar.log for every single read. */
-export interface ScanOutcome { verdict: ScanVerdict | null; announced: boolean; why: string; }
+export interface ScanOutcome {
+  verdict: ScanVerdict | null;
+  /** A fresh call-out went out for this read. */
+  announced: boolean;
+  /** The read was USED — it is what the scanner is showing now. Distinct from `announced`, because
+   *  the loop re-reads the same rock every poll: the second read of a rock you are still looking at
+   *  announces nothing but is entirely valid. Conflating the two made the readout strike out the
+   *  live number a second after it appeared, which read as "sometimes it just shows a crossed out
+   *  number" (Sub, 2026-07-29). Struck through = NOT used, and nothing else. */
+  used: boolean;
+  why: string;
+  repairedFrom?: number;
+}
+
+/** Digits the OCR confuses in the HUD's font. Sub, 2026-07-29: sixes and eights "are the only two
+ *  numbers that are consistently making it so that it reads the wrong number". */
+const CONFUSABLE_DIGITS: Record<string, string> = { "6": "8", "8": "6" };
+
+/** Fix a confused digit by CONSTRAINING the read to values the game can actually show.
+ *
+ *  This is the answer to "can you train it better": the OCR can't be trained, but it doesn't need to
+ *  be. A signature is one of only ~165 legal values spread over 2,000–25,800 — **0.69% of that
+ *  range** — so a wrong digit almost always lands on a number that cannot exist, and usually exactly
+ *  one legal value is a single 6/8 swap away. Measured over the real table: of the 81 misreads a
+ *  single 6↔8 slip can produce, **75 have exactly one candidate** and are repaired here.
+ *
+ *  Three rules keep it honest:
+ *  - **One digit only.** Allowing two swaps repairs a handful more but starts inventing answers for
+ *    reads that were wrong for some other reason.
+ *  - **A value that is already legal is never touched** — 6,800 (Lindinium ×2) is taken at face
+ *    value, not "corrected" to 8,600 (Ice ×2). An exact match is evidence in its own right.
+ *  - **Ambiguity is left alone, never guessed.** Only two pairs collide: 16,000 (Savrilium ×5) vs
+ *    18,000 (Bexalite ×5), and 6,000 vs 8,000 — and the second is debris either way, so it changes
+ *    nothing. Naming the wrong rock is worse than naming none.
+ *
+ *  Returns the repaired value, or null if the read should stand as it is. */
+export function repairConfusableDigits(signature: number, isLegal: (n: number) => boolean): number | null {
+  if (!Number.isInteger(signature) || signature < 0) return null;
+  if (isLegal(signature)) return null;               // already a value the game can show — trust it
+  const s = String(signature);
+  const found = new Set<number>();
+  for (let i = 0; i < s.length; i++) {
+    const alt = CONFUSABLE_DIGITS[s[i]];
+    if (!alt) continue;
+    const n = Number(s.slice(0, i) + alt + s.slice(i + 1));
+    if (isLegal(n)) found.add(n);
+  }
+  return found.size === 1 ? [...found][0] : null;    // 0 = nothing plausible, 2+ = don't guess
+}
 
 export class MiningTracker extends EventEmitter {
   private data: MineablesData | null = null;
@@ -133,37 +181,58 @@ export class MiningTracker extends EventEmitter {
     return this.maxSig;
   }
 
+  /** Is this a value the game can actually put on screen — a rock signature, or a whole number of
+   *  debris panels, inside the range? This is the vocabulary a misread gets constrained to. */
+  private isLegalSignature(n: number): boolean {
+    if (n < MIN_SIGNATURE || n > this.maxSignature()) return false;
+    return (this.data?.index[String(n)] ?? []).length > 0 || isDebrisValue(n);
+  }
+
   /** A scanned signature number -> a verdict (see classifySignature) plus the matching rock(s).
    *  Exact-match only against the table (values can be 5 apart, so a tolerance would pick the
-   *  wrong rock).
+   *  wrong rock) — with one exception: a single confused 6/8 digit is repaired when exactly one
+   *  legal value is reachable (see repairConfusableDigits). That is a CONSTRAINT, not a tolerance;
+   *  it can only ever land on a value the game could have shown.
    *
    *  `confirmed` = the frame showed the scan glyph beside this number, so a real scan produced it.
    *  A verdict that names a rock is applied either way — matching the table is its own evidence —
    *  but `debris` and `unknown` need that glyph, because without it a bare number is as likely to
    *  be some other bit of HUD the OCR grabbed as it is a contact. */
   applyMineableRead(signature: number, confirmed = false): ScanOutcome {
-    if (!this.data) return { verdict: null, announced: false, why: "no rock table loaded" };
+    if (!this.data) return { verdict: null, announced: false, used: false, why: "no rock table loaded" };
+    // 🔑 A repair needs the GLYPH. An exact table hit is evidence on its own, but a repaired one is
+    // weaker — without this, any stray HUD number one digit away from an ore signature would be
+    // announced as that ore, which is the false-call-out class this whole area keeps relapsing into.
+    const repaired = confirmed ? repairConfusableDigits(signature, (n) => this.isLegalSignature(n)) : null;
+    const read = signature;
+    if (repaired !== null) signature = repaired;
     const matches = this.data.index[String(signature)] ?? [];
     const verdict = classifySignature(signature, matches.length > 0, this.maxSignature());
+    // Every line says so, because a repair changes which rock gets named and that must never be
+    // silent — it is the one thing in here that could be confidently wrong.
+    const fix = repaired !== null ? ` [repaired ${read.toLocaleString()} → ${signature.toLocaleString()}, one 6/8 digit]` : "";
+    const out = (o: ScanOutcome): ScanOutcome =>
+      (repaired !== null ? { ...o, repairedFrom: read, why: o.why + fix } : o);
     if (!verdict) {
-      return { verdict, announced: false, why: signature < MIN_SIGNATURE
+      return out({ verdict, announced: false, used: false, why: signature < MIN_SIGNATURE
         ? `ignored (below the ${MIN_SIGNATURE.toLocaleString()} floor)`
-        : `ignored (above ${this.maxSignature().toLocaleString()}, the largest signature the game can show — misread)` };
+        : `ignored (above ${this.maxSignature().toLocaleString()}, the largest signature the game can show — misread)` });
     }
     if (!matches.length && !confirmed) {
-      return { verdict, announced: false, why: `${verdict}, not announced (no scan glyph beside the number)` };
+      return out({ verdict, announced: false, used: false, why: `${verdict}, not announced (no scan glyph beside the number)` });
     }
     // Ignore a repeat read of the same signature (the loop polls the same rock every ~3s);
     // only a CHANGED signature is news worth re-announcing.
     if (this.scan && this.scan.signature === signature) {
-      return { verdict, announced: false, why: `${verdict}, already announced (unchanged since the last read)` };
+      // USED, not refused: this is the reading the scanner is currently showing.
+      return out({ verdict, announced: false, used: true, why: `${verdict}, already announced (unchanged since the last read)` });
     }
     this.scan = { signature, matches, at: Date.now(), confirmed, verdict };
     const hit = matches.find((m) => this.targets.has(m.name));
     this.emit("change");
     if (hit) this.emit("target-hit", { ...hit, signature });
     const named = matches.length ? ` — ${matches.map((m) => `${m.name} ×${m.count}`).join(" / ")}` : "";
-    return { verdict, announced: true, why: `${verdict}, announced${named}` };
+    return out({ verdict, announced: true, used: true, why: `${verdict}, announced${named}` });
   }
 
   setTarget(name: string, on: boolean): void {

@@ -10,7 +10,7 @@
 // than a missed piece of debris. The two values where both readings are live (16,000 Savrilium ×5
 // and 18,000 Bexalite ×5) are the interesting cases and are checked against the real dataset.
 import { readFileSync } from "node:fs";
-import { classifySignature, isDebrisValue } from "./mining.js";
+import { classifySignature, isDebrisValue, repairConfusableDigits } from "./mining.js";
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail = "") => {
@@ -72,6 +72,61 @@ check("in range, no rock, not a panel count -> unknown",
   "4,001 was 'debris' under the old rule");
 check("...including a near-miss on a real rock signature",
   verdict(3171) === "unknown", "Quantainium ×1 is 3,170");
+
+// ── the 6/8 repair ────────────────────────────────────────────────────────────
+// Sub: sixes and eights are the only digits that consistently come out wrong. The OCR can't be
+// trained, but it doesn't need to be — a signature is one of ~165 legal values across 2,000-25,800,
+// so a wrong digit almost always lands on a number that cannot exist. This asserts the repair over
+// the REAL table, including that it refuses to guess where two rocks collide.
+console.log("\nrepairing a confused 6/8 digit");
+const legal = (n: number) => n >= 2000 && n <= MAX && (ore(n) || isDebrisValue(n));
+const fix = (n: number) => repairConfusableDigits(n, legal);
+
+check("3,565 -> 3,585 (Gold ×1)", fix(3565) === 3585, String(fix(3565)));
+check("3,165 -> 3,185 (Stileron ×1)", fix(3165) === 3185, String(fix(3165)));
+check("3,800 -> 3,600 (Bexalite ×1) — the swap goes both ways", fix(3800) === 3600, String(fix(3800)));
+check("a value that is ALREADY legal is never touched",
+  fix(3585) === null && fix(6800) === null && fix(2000) === null,
+  "6,800 is Lindinium ×2 and must not become Ice ×2");
+check("a number nothing can explain is left alone", fix(3566) === null && fix(9999) === null, String(fix(9999)));
+check("a read with no 6 or 8 is left alone", fix(3577) === null && fix(12345) === null);
+check("out of range stays out of range", fix(88) === null && fix(68888) === null, String(fix(68888)));
+check("non-integers and negatives are refused", fix(NaN) === null && fix(3585.5) === null && fix(-3685) === null);
+
+// The two collisions. Neither may ever be auto-corrected; the second is debris either way.
+check("16,000 and 18,000 are left as they are (Savrilium ×5 vs Bexalite ×5)",
+  fix(16000) === null && fix(18000) === null);
+check("6,000 and 8,000 too (both debris, so it changes nothing anyway)",
+  fix(6000) === null && fix(8000) === null);
+
+// Exhaustive: every single-digit 6/8 misread of every legal value.
+const swap1 = (s: string) => {
+  const out: string[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "6" || c === "8") out.push(s.slice(0, i) + (c === "6" ? "8" : "6") + s.slice(i + 1));
+  }
+  return out;
+};
+const all = [...new Set([...Object.keys(data.index).map(Number),
+  ...Array.from({ length: Math.floor(MAX / 2000) }, (_, i) => (i + 1) * 2000)])].filter(legal);
+let recovered = 0, refused = 0, wrong = 0;
+for (const v of all) {
+  for (const mis of swap1(String(v))) {
+    const n = Number(mis);
+    if (legal(n)) continue;                       // collides with a real value — untouchable by design
+    const got = fix(n);
+    if (got === v) recovered++;
+    else if (got === null) refused++;
+    else { wrong++; console.log(`       ${n} -> ${got}, expected ${v}`); }
+  }
+}
+check("a repair NEVER lands on the wrong value", wrong === 0, wrong + " wrong");
+check(`most single-digit slips are recovered (${recovered} recovered, ${refused} refused as ambiguous)`,
+  recovered >= 70 && refused <= 10, recovered + "/" + (recovered + refused));
+// And a repair can only ever produce something the game could have shown.
+check("every repair output is itself a legal signature",
+  all.flatMap((v) => swap1(String(v))).map(Number).map(fix).filter((n): n is number => n !== null).every(legal));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

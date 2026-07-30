@@ -2538,7 +2538,10 @@
     // Sits under the box, so a box dragged to the bottom of the screen would put it off-screen.
     const ci = scanDisplay(), r = el.getBoundingClientRect();
     el.classList.toggle("read-above", r.bottom + 26 > ci.py + ci.ph);
-    el.classList.toggle("refused", info.announced !== true);
+    // Struck through = the read was NOT USED. 🔑 Off `used`, never `announced`: the loop re-reads the
+    // same rock every poll, and those repeats announce nothing while being perfectly valid — driving
+    // this off `announced` struck out the live number a second after it appeared.
+    el.classList.toggle("refused", info.used === false);
     el.classList.add("has-read");
     clearTimeout(scanReadTimer);
     scanReadTimer = setTimeout(() => el.classList.remove("has-read"), SCAN_READ_TTL_MS);

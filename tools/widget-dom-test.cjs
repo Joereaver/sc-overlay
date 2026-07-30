@@ -810,7 +810,7 @@ const SCANBOX = `(async () => {
   const val = document.getElementById("sbReadVal"), read = document.getElementById("sbRead");
   ok("nothing is shown before a read arrives", getComputedStyle(read).display === "none");
   showScanRead({ signature: 16000, raw: "16,000", box: { x: 0.5, y: 0.3, w: 0.03, h: 13 / 1440 },
-                 verdict: "ore-or-debris", announced: true, why: "ore-or-debris, announced" });
+                 verdict: "ore-or-debris", announced: true, used: true, why: "ore-or-debris, announced" });
   await sleep(60);
   ok("the read is shown", getComputedStyle(read).display === "flex", getComputedStyle(read).display);
   ok("...as the number and NOTHING else", val.textContent === "16,000", JSON.stringify(val.textContent));
@@ -820,7 +820,7 @@ const SCANBOX = `(async () => {
   // render at 31-46px — "way too big". One fixed, legible size now, whatever the bbox says.
   const fsBig = parseFloat(getComputedStyle(val).fontSize);
   showScanRead({ signature: 4001, raw: "4,001", box: { x: 0.5, y: 0.3, w: 0.2, h: 33 / 1440 },
-                 verdict: "unknown", announced: true, why: "unknown, announced" });
+                 verdict: "unknown", announced: true, used: true, why: "unknown, announced" });
   await sleep(60);
   ok("the size does NOT follow the OCR bbox", parseFloat(getComputedStyle(val).fontSize) === fsBig,
      fsBig + "px both times");
@@ -832,7 +832,7 @@ const SCANBOX = `(async () => {
   ok("...and sits OUTSIDE it, below", read.getBoundingClientRect().top >= box.getBoundingClientRect().bottom - 1,
      Math.round(read.getBoundingClientRect().top) + " vs " + Math.round(box.getBoundingClientRect().bottom));
   // A refused read is the diagnostic case: it must appear, and be tellable apart without words.
-  showScanRead({ signature: 30000, raw: "3O,OOO", box: null, verdict: null, announced: false,
+  showScanRead({ signature: 30000, raw: "3O,OOO", box: null, verdict: null, announced: false, used: false,
                  why: "ignored (above 25,800, the largest signature the game can show — misread)" });
   await sleep(60);
   ok("a REFUSED read is shown too", getComputedStyle(read).display === "flex" && val.textContent === "30,000",
@@ -840,6 +840,16 @@ const SCANBOX = `(async () => {
   ok("...told apart by styling, not by more text", box.classList.contains("refused")
      && getComputedStyle(val).textDecorationLine === "line-through");
   ok("...and still says only the number", read.textContent.trim() === "30,000", JSON.stringify(read.textContent));
+  // 🔑 A REPEAT read of the rock you are still looking at announces nothing but IS the live reading,
+  // so it must not be struck through. Driving the strike off announced= instead of used= is what
+  // Sub saw as "sometimes it just shows a crossed out number".
+  showScanRead({ signature: 16000, raw: "16,000", box: null, verdict: "ore-or-debris",
+                 announced: false, used: true, why: "already announced (unchanged since the last read)" });
+  await sleep(60);
+  ok("a re-read of the SAME rock is NOT struck through", !box.classList.contains("refused"),
+     "announced=false, used=true");
+  ok("...and a struck-through read means only one thing: it was not used",
+     getComputedStyle(val).textDecorationLine === "none", getComputedStyle(val).textDecorationLine);
   if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
   syncScanBox();
 

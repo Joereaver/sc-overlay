@@ -1738,10 +1738,13 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       const frac = t && fr?.w && fr?.h
         ? { x: (t.x ?? 0) / fr.w, y: (t.y ?? 0) / fr.h, w: (t.w ?? 0) / fr.w, h: (t.h ?? 0) / fr.h }
         : null;
+      // `signature` stays what the OCR actually read — that is the whole point of the readout. When
+      // a 6/8 digit was repaired, `repairedFrom` carries the original so the two can be told apart.
       miningSend({
         kind: "read", signature, raw: typeof body?.raw === "string" ? body.raw : null,
-        box: frac, confirmed: body?.confirmed === true,
-        verdict: outcome.verdict, announced: outcome.announced, why: outcome.why, at: Date.now(),
+        box: frac, confirmed: body?.confirmed === true, repairedFrom: outcome.repairedFrom ?? null,
+        verdict: outcome.verdict, announced: outcome.announced, used: outcome.used,
+        why: outcome.why, at: Date.now(),
       });
     }
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
