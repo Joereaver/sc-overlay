@@ -1,6 +1,6 @@
 {
   "0.1.35": {
-    "date": "2026-07-29T21:30:00Z",
+    "date": "2026-07-30T04:41:57Z",
     "notes": [
       "New widget — Unlock Alerts. The \"Blueprint Received\" pop used to be stuck to the bottom of the tracker panel, which is the one place you never look mid-mission. It is now its own widget you drag wherever you actually watch, it shows the item's picture, and several unlocks at once queue up instead of stepping on each other.",
       "The Web Page widget can show ANY site now. Sites that refuse to be embedded — the RSI site above all, plus UEX, erkul and starcitizen.tools — used to come up as a blank box. They work. Sign-ins work too, in their own cookie jar, kept separate from your normal browser.",
