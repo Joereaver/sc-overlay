@@ -262,15 +262,26 @@ function startServer() {
     // Prod: the bun-compiled server binary shipped as an extraResource (no Node/tsx
     // on the user's machine). cwd = its dir so assetDir finds overlay/ + data/.
     const exe = path.join(process.resourcesPath, "server", "sc-overlay-server.exe");
+    // 🔑 `windowsHide` is NOT optional here. The bun-compiled sidecar is a CONSOLE-subsystem
+    // executable, and this app is a GUI process with no console of its own — so without
+    // CREATE_NO_WINDOW, Windows hands the child a brand new console, which appears as a terminal
+    // window sitting on the user's desktop for as long as the app runs (0.1.35 shipped exactly that;
+    // on a machine whose default terminal is Windows Terminal it opens as a WT window titled
+    // "…\sc-overlay-server.exe"). Every OTHER spawn in this codebase already sets it; this one was
+    // missed, and it only became visible when the sidecar stopped being spawned stdio:"ignore".
     // Inject the authoritative app version — the bun sidecar can't read package.json.
-    server = spawn(exe, { cwd: path.dirname(exe), env: { ...process.env, APP_VERSION }, stdio });
+    server = spawn(exe, {
+      cwd: path.dirname(exe), env: { ...process.env, APP_VERSION }, stdio, windowsHide: true,
+    });
   } else {
-    // Dev: run the TS server via tsx.
+    // Dev: run the TS server via tsx. Same flag, same reason — `shell:true` means cmd.exe, which is
+    // a console app too.
     server = spawn("npx tsx src/overlay-server.ts", {
       cwd: ROOT,
       shell: true,
       env: { ...process.env, APP_VERSION },
       stdio,
+      windowsHide: true,
     });
   }
   server.on("exit", (code, signal) => {

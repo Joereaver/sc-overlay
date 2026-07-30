@@ -1,4 +1,10 @@
 {
+  "0.1.36": {
+    "date": "2026-07-30T05:33:31Z",
+    "notes": [
+      "Fixes the terminal window that 0.1.35 left sitting on your desktop. The overlay runs a small background service, and on Windows a service like that gets given a console window unless the app explicitly says not to — 0.1.35 stopped hiding it. Nothing was wrong with the service itself; it just became visible. It is hidden again."
+    ]
+  },
   "0.1.35": {
     "date": "2026-07-30T04:41:57Z",
     "notes": [
