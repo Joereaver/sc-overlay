@@ -544,6 +544,64 @@ const SWEEPS = `(async () => {
   return out;
 })()`;
 
+// ── Suite: the patch-notes card fits the MONITOR ──────────────────────────────
+// This card has trapped a user once already (0.1.31: close controls below the screen, with an
+// always-on-top overlay over Task Manager). The 0.1.32 fix pinned the header/footer and capped the
+// card at 82vh — but `vh` is this WINDOW, and this window is the whole multi-monitor canvas. With a
+// taller second display the cap exceeded the monitor the card centres on and the trap reopened.
+// So the assertion is against --prim-h (the primary monitor) with the REAL changelog loaded, and
+// the failing condition is simulated directly: a primary shorter than the canvas.
+const PATCHNOTES = `(async () => {
+  ${PRELUDE}
+  // Render the list exactly the way showWhatsNew does. Its own path needs overlayApi.getVersion,
+  // which this suite has no shell for — but the CONTENT is what makes the card tall, so it has to
+  // be the real changelog and not a two-line fixture.
+  const data = await (await fetch("/api/changelog?v=0.1.35")).json();
+  const entries = (Array.isArray(data.entries) ? data.entries : []).filter(e => Array.isArray(e.notes) && e.notes.length);
+  ok("the sidecar serves real patch notes to size against", entries.length > 0, entries.length + " versions");
+  document.getElementById("wnList").innerHTML = entries.map((e, i) => {
+    const bullets = "<ul>" + e.notes.map(n => "<li>" + escapeHtml(n) + "</li>").join("") + "</ul>";
+    const head = "v" + escapeHtml(e.version) + ' <span class="wn-date">Jan 1, 2026 · 00:00 UTC</span>';
+    return i === 0 ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + bullets + "</div>"
+                   : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + bullets + "</details>";
+  }).join("");
+  document.getElementById("whatsnew").classList.add("show");
+
+  const card = document.querySelector("#whatsnew .wn-card");
+  const list = document.getElementById("wnList");
+  const headEl = document.querySelector("#whatsnew .wn-head");
+  const footEl = document.querySelector("#whatsnew .wn-foot");
+  // Every display worth designing for, plus the one that broke: a primary SHORTER than the canvas
+  // window is exactly the multi-monitor case, and 720 is the ceiling a 1080p screen sets.
+  const CASES = [
+    { label: "1080p", h: 1080, top: 0 },
+    { label: "primary shorter than the canvas (portrait side monitor)", h: 900, top: 90 },
+    { label: "a small laptop panel", h: 768, top: 0 },
+  ];
+  for (const c of CASES) {
+    const s = document.documentElement.style;
+    s.setProperty("--prim-top", c.top + "px");
+    s.setProperty("--prim-left", "0px");
+    s.setProperty("--prim-w", "1600px");
+    s.setProperty("--prim-h", c.h + "px");
+    await sleep(60);
+    const r = card.getBoundingClientRect();
+    const hTop = headEl.getBoundingClientRect().top, fBot = footEl.getBoundingClientRect().bottom;
+    ok("[" + c.label + "] the card fits inside the monitor", r.height <= c.h,
+       Math.round(r.height) + "px tall in " + c.h + "px");
+    ok("[" + c.label + "] the ✕ is on screen", hTop >= c.top, Math.round(hTop) + " >= " + c.top);
+    ok("[" + c.label + "] \\"Got it\\" is on screen", fBot <= c.top + c.h,
+       Math.round(fBot) + " <= " + (c.top + c.h));
+    // Capping without a scroll would just hide notes, which is NOT the ask ("I don't want to just
+    // cut it off"): the overflow has to be reachable.
+    ok("[" + c.label + "] the notes scroll rather than being cut off",
+       list.scrollHeight > list.clientHeight && getComputedStyle(list).overflowY === "auto",
+       list.clientHeight + " of " + list.scrollHeight + "px shown");
+  }
+  document.getElementById("whatsnew").classList.remove("show");
+  return out;
+})()`;
+
 // ── Suite: the "scan read area" outline ───────────────────────────────────────
 // The Mining Scanner cog can draw a box showing where the app reads for a signature. A
 // diagnostic that lies is worse than none, so the drawn rect is asserted against the SAME
@@ -607,6 +665,69 @@ const SCANBOX = `(async () => {
   await sleep(100);
   ok("...and turns back off", getComputedStyle(box).display === "none");
   ok("...and stops taking the pointer once off", getComputedStyle(box).pointerEvents === "none");
+
+  // ── it belongs to the Mining Scanner, so it goes when the scanner goes ────────
+  // Closing the scanner (hotkey, hub, tray, or a stack bringing another member forward) used to
+  // leave the dashed outline on the game with nothing left on screen to explain or remove it.
+  const userPref = localStorage.getItem("miningScanBox");
+  localStorage.setItem("miningScanBox", "on");
+  setWidgetVisible(WBY.mining, true);
+  await sleep(120);
+  syncScanBox();
+  await sleep(60);
+  ok("with the pref on and the scanner open, the outline is up", getComputedStyle(box).display === "block");
+  setWidgetVisible(WBY.mining, false);   // exactly what the hotkey / hub toggle / ✕ do
+  await sleep(120);
+  ok("closing the Mining Scanner takes the outline with it", getComputedStyle(box).display === "none");
+  ok("...without clearing the pref, so reopening restores it",
+     localStorage.getItem("miningScanBox") === "on");
+  setWidgetVisible(WBY.mining, true);
+  await sleep(120);
+  ok("...and reopening brings it back", getComputedStyle(box).display === "block");
+  localStorage.setItem("miningScanBox", "off");
+  syncScanBox();
+  await sleep(60);
+  ok("the pref still wins on its own", getComputedStyle(box).display === "none");
+  if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
+
+  // ── what the OCR read, printed at roughly the size the game drew it ───────────
+  // The whole value of this is comparison, so the number has to be legible at HUD scale and a
+  // REFUSED read has to show too — a number the app threw away is exactly the one worth seeing.
+  localStorage.setItem("miningScanBox", "on");
+  syncScanBox();
+  await sleep(60);
+  const val = document.getElementById("sbReadVal"), read = document.getElementById("sbRead");
+  ok("nothing is shown before a read arrives", getComputedStyle(read).display === "none");
+  // 13px of text on a 1440-tall frame is the measured HUD signature (see glyphSearchBox).
+  showScanRead({ signature: 16000, raw: "16,000", box: { x: 0.5, y: 0.3, w: 0.03, h: 13 / 1440 },
+                 verdict: "ore-or-debris", announced: true, why: "ore-or-debris, announced" });
+  await sleep(60);
+  const ci2 = canvasInfo || { px: 0, py: 0, pw: innerWidth, ph: innerHeight };
+  ok("the read is shown", getComputedStyle(read).display === "flex" && val.textContent.includes("16,000"),
+     val.textContent);
+  const fs = parseFloat(getComputedStyle(val).fontSize);
+  const wantFs = (13 / 1440) * ci2.ph * 1.4;
+  ok("...at roughly the size the game drew it", Math.abs(fs - wantFs) <= 2,
+     fs.toFixed(1) + "px vs " + wantFs.toFixed(1) + "px from the OCR bbox");
+  ok("...and an accepted read isn't struck through", !box.classList.contains("refused"));
+  ok("...and it stays inside the box's own rect (the shell only hit-tests that)",
+     (() => { const rr = read.getBoundingClientRect(), br = box.getBoundingClientRect();
+              return rr.left >= br.left - 1 && rr.right <= br.right + 1 && rr.bottom <= br.bottom + 1; })());
+  // A refused read is the diagnostic case: it must appear, and look refused.
+  showScanRead({ signature: 30000, raw: "3O,OOO", box: null, verdict: null, announced: false,
+                 why: "ignored (above 25,800, the largest signature the game can show — misread)" });
+  await sleep(60);
+  ok("a REFUSED read is shown too", getComputedStyle(read).display === "flex" && val.textContent.includes("30,000"));
+  ok("...marked as refused", box.classList.contains("refused"));
+  ok("...with the reason", document.getElementById("sbReadWhy").textContent.includes("25,800"));
+  ok("...and the raw OCR text, because that's where the mistake is visible",
+     val.textContent.includes("3O,OOO"), val.textContent);
+  showScanRead({ signature: 16000, raw: "16,000", box: null, verdict: "ore-or-debris", announced: true, why: "x" });
+  await sleep(60);
+  ok("a clean read does NOT repeat itself as raw text", !val.textContent.includes("("), val.textContent);
+  ok("...and falls back to a sane size with no bbox", parseFloat(getComputedStyle(val).fontSize) >= 9);
+  if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
+  syncScanBox();
 
   // Hand the user's own calibration back — see the note at the top of this suite.
   saveScanRegion(userRegion);
@@ -1179,6 +1300,7 @@ app.whenReady().then(async () => {
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
+    fails += await run("patch notes fit the monitor", PATCHNOTES, null);
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
     // hunting that by bisection wastes a run each time.

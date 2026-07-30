@@ -37,7 +37,9 @@ export interface MiningView {
   targets: string[];                          // rock names the player is hunting
   // `confirmed`: the scan glyph was found beside the number in the frame, so this came from a
   // real scan rather than being a number the OCR happened to find (see applyMineableRead).
-  scan: { signature: number; matches: { name: string; rarity: string; count: number }[]; at: number; confirmed: boolean } | null;
+  // `verdict`: what the number MEANS — see classifySignature. The widget renders and speaks off
+  // this rather than re-deriving it from `matches.length`, so there is one rule, not two.
+  scan: { signature: number; matches: { name: string; rarity: string; count: number }[]; at: number; confirmed: boolean; verdict: ScanVerdict } | null;
   jobs: {
     id: string; station: string | null; material: string | null; yieldScu: number | null;
     endAt: number; remainingSec: number; done: boolean;
@@ -49,16 +51,46 @@ const DONE_KEEP_MS = 6 * 3600 * 1000; // keep a finished job visible ~6h, then a
 // and no scanner display. Filters out low-value noise (tiny/distant contacts) the player doesn't
 // want announced; only 2,000+ signatures get a response.
 const MIN_SIGNATURE = 2000;
+// One salvage panel of debris. Debris comes in whole panels, so a debris signature is always a
+// MULTIPLE of this — that, and not "it isn't in the rock table", is what identifies debris
+// (Sub, 2026-07-29).
+const DEBRIS_STEP = 2000;
 
-/** Which signature VALUES a real piece of debris can actually have: 2,000 exactly, or anything
- *  from 4,000 up (Sub, 2026-07-29 — "2000 and 4000 will be labeled as debris and then anything
- *  above 4000"). Everything between is a gap debris never lands in, so a non-ore number in there
- *  is much more likely to be the OCR reading something else on the HUD than a real contact. This
- *  only gates the DEBRIS call-out; a signature that matches a known rock is always honoured,
- *  whatever its value. */
-export function isDebrisSignature(signature: number): boolean {
-  return signature === 2000 || signature >= 4000;
+/** What a scanned number means.
+ *  - `ore` — it resolves to a rock, and no amount of debris lands on that value. Say the rock.
+ *  - `ore-or-debris` — it resolves to a rock AND is a whole number of debris panels. Genuinely
+ *    ambiguous, and only flying over will settle it, so it is announced either way: the player
+ *    has to go look regardless.
+ *  - `debris` — a whole number of panels, no rock at that value.
+ *  - `unknown` — in range, but neither. Not ore, not debris; a real scan of something we can't
+ *    name (or an OCR read that came out wrong).
+ *  A read outside [MIN_SIGNATURE, maxSignature] gets no verdict at all — see classifySignature. */
+export type ScanVerdict = "ore" | "ore-or-debris" | "debris" | "unknown";
+
+/** Is this value a whole number of debris panels? Replaces the old "2,000 or anything ≥4,000"
+ *  rule, which let every large stray HUD number through as debris. Between 2,000 and the ceiling
+ *  there are only 13 debris values, so this is a far tighter filter than a floor ever was. */
+export function isDebrisValue(signature: number): boolean {
+  return signature >= DEBRIS_STEP && signature % DEBRIS_STEP === 0;
 }
+
+/** Classify a scanned signature. `null` means the number cannot be a contact at all — below the
+ *  floor, or above the largest signature the game can show — so it is a misread and gets no
+ *  response of any kind.
+ *
+ *  🔑 The asymmetry that decides everything here: a value matching the rock table is honoured
+ *  whatever else is true of it, because losing a real ore call-out is far worse than a stray
+ *  debris one. Only the non-ore verdicts have to earn their announcement. */
+export function classifySignature(signature: number, isOre: boolean, maxSignature: number): ScanVerdict | null {
+  if (!Number.isFinite(signature) || signature < MIN_SIGNATURE || signature > maxSignature) return null;
+  const debris = isDebrisValue(signature);
+  if (isOre) return debris ? "ore-or-debris" : "ore";
+  return debris ? "debris" : "unknown";
+}
+
+/** What a read did, so the sidecar can log it — this is the only place that knows the rules, so it
+ *  is the only place that can explain them. `why` lands in sidecar.log for every single read. */
+export interface ScanOutcome { verdict: ScanVerdict | null; announced: boolean; why: string; }
 
 export class MiningTracker extends EventEmitter {
   private data: MineablesData | null = null;
@@ -68,6 +100,7 @@ export class MiningTracker extends EventEmitter {
   private readonly stateDir: string;
   private readonly statePath: string;
   private ticker: ReturnType<typeof setInterval> | null = null;
+  private maxSig: number | null = null; // lazily derived from the table — see maxSignature()
   private seq = 0;
 
   constructor(opts: { dataDir: string; stateDir: string }) {
@@ -87,34 +120,50 @@ export class MiningTracker extends EventEmitter {
 
   // ---- signature scanner ----
 
-  /** A scanned signature number -> the matching rock(s). Exact-match only (values can be
-   *  5 apart, so a tolerance would pick the wrong rock). Unknown numbers are ignored. */
-  /** `confirmed` = the frame showed the scan glyph beside this number, so a real scan produced
-   *  it. Without that, a number matching NOTHING in the rock table is as likely to be some other
-   *  HUD number the OCR grabbed as it is salvage debris — so it is dropped here rather than
-   *  becoming a "Debris" call-out the player didn't ask for. A number that DOES resolve to a
-   *  known rock is kept either way: matching the table is its own evidence. */
-  applyMineableRead(signature: number, confirmed = false): void {
-    if (!this.data) return;
-    if (signature < MIN_SIGNATURE) return; // below the floor -> ignore entirely (no display, no call-out)
-    const matches = this.data.index[String(signature)] ?? []; // empty = not a rock -> salvage debris
-    // Two independent things have to hold before a non-ore number is called debris: the frame
-    // showed the scan glyph (it came from a real scan), AND the value is one debris actually
-    // takes. Either alone still let noise through.
-    if (!matches.length && (!confirmed || !isDebrisSignature(signature))) return;
+  /** The largest signature the game can put on screen: the richest cluster of the highest-base
+   *  rock. Derived from the table rather than written down, so it tracks the data. Anything above
+   *  it is a misread by definition — which also caps debris, since debris values are multiples of
+   *  2,000 (so the biggest field this will accept is 12 panels). Every rejection is logged, so if
+   *  a real field ever reads higher, sidecar.log will say so and this can be raised on evidence
+   *  instead of a guess. */
+  maxSignature(): number {
+    if (this.maxSig === null) {
+      this.maxSig = Math.max(0, ...(this.data?.rocks ?? []).flatMap((r) => r.sigs));
+    }
+    return this.maxSig;
+  }
+
+  /** A scanned signature number -> a verdict (see classifySignature) plus the matching rock(s).
+   *  Exact-match only against the table (values can be 5 apart, so a tolerance would pick the
+   *  wrong rock).
+   *
+   *  `confirmed` = the frame showed the scan glyph beside this number, so a real scan produced it.
+   *  A verdict that names a rock is applied either way — matching the table is its own evidence —
+   *  but `debris` and `unknown` need that glyph, because without it a bare number is as likely to
+   *  be some other bit of HUD the OCR grabbed as it is a contact. */
+  applyMineableRead(signature: number, confirmed = false): ScanOutcome {
+    if (!this.data) return { verdict: null, announced: false, why: "no rock table loaded" };
+    const matches = this.data.index[String(signature)] ?? [];
+    const verdict = classifySignature(signature, matches.length > 0, this.maxSignature());
+    if (!verdict) {
+      return { verdict, announced: false, why: signature < MIN_SIGNATURE
+        ? `ignored (below the ${MIN_SIGNATURE.toLocaleString()} floor)`
+        : `ignored (above ${this.maxSignature().toLocaleString()}, the largest signature the game can show — misread)` };
+    }
+    if (!matches.length && !confirmed) {
+      return { verdict, announced: false, why: `${verdict}, not announced (no scan glyph beside the number)` };
+    }
     // Ignore a repeat read of the same signature (the loop polls the same rock every ~3s);
     // only a CHANGED signature is news worth re-announcing.
-    if (this.scan && this.scan.signature === signature) return;
-    this.scan = { signature, matches, at: Date.now(), confirmed };
+    if (this.scan && this.scan.signature === signature) {
+      return { verdict, announced: false, why: `${verdict}, already announced (unchanged since the last read)` };
+    }
+    this.scan = { signature, matches, at: Date.now(), confirmed, verdict };
     const hit = matches.find((m) => this.targets.has(m.name));
     this.emit("change");
     if (hit) this.emit("target-hit", { ...hit, signature });
-  }
-
-  /** Does this signature resolve to a rock in the table? Used by the log line that explains why a
-   *  read was or wasn't announced — a known ore is applied regardless of the glyph. */
-  knowsSignature(signature: number): boolean {
-    return (this.data?.index[String(signature)] ?? []).length > 0;
+    const named = matches.length ? ` — ${matches.map((m) => `${m.name} ×${m.count}`).join(" / ")}` : "";
+    return { verdict, announced: true, why: `${verdict}, announced${named}` };
   }
 
   setTarget(name: string, on: boolean): void {

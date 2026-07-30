@@ -139,6 +139,16 @@
   .hkrow .hkbtn { margin-left: auto; }
   .hkrow .hint { flex-basis: 100%; width: 100%; margin-top: 0; }
   .hkrow .hint:empty { display: none; }
+  /* Remove the hotkey entirely. Its own control, because there is no keypress that means "none" —
+     the capture flow can only ever ASSIGN one, so without this a hotkey could be changed forever
+     but never taken away. Hidden on a row that has no hotkey to remove. */
+  .hkrow .hkclear { flex: none; width: 26px; height: 26px; padding: 0; display: grid; place-items: center;
+    font-size: 12px; line-height: 1; color: var(--muted); cursor: pointer;
+    background: var(--field); border: 1px solid var(--line); border-radius: 6px; }
+  .hkrow .hkclear:hover { color: #ff8a8a; border-color: #7a3b3b; }
+  .hkrow .hkclear.hidden { visibility: hidden; }
+  /* A row with no hotkey set: the button still opens capture, it just doesn't pretend to be a key. */
+  .hkrow .hkbtn.unset { color: var(--muted); font-style: italic; }
 
   /* Performance readout (Settings -> Performance & fixes -> Measure now). */
   #perfOut { margin-top: 10px; }
@@ -318,36 +328,42 @@
     <div class="hkrow">
       <span class="hklabel">Show / hide overlay</span>
       <button type="button" id="overlayHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('overlay')">F3</button>
+      <button type="button" class="hkclear" id="overlayHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('overlay')">✕</button>
       <input type="hidden" id="overlayHotkey" />
       <div class="hint" id="overlayHotkeyHint"></div>
     </div>
     <div class="hkrow">
       <span class="hklabel">Web Page</span>
       <button type="button" id="webViewHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('webView')">Ctrl + Shift + F3</button>
+      <button type="button" class="hkclear" id="webViewHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('webView')">✕</button>
       <input type="hidden" id="webViewHotkey" />
       <div class="hint" id="webViewHotkeyHint"></div>
     </div>
     <div class="hkrow">
       <span class="hklabel">Mining Scanner</span>
       <button type="button" id="miningHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('mining')">Shift + F3</button>
+      <button type="button" class="hkclear" id="miningHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('mining')">✕</button>
       <input type="hidden" id="miningHotkey" />
       <div class="hint" id="miningHotkeyHint"></div>
     </div>
     <div class="hkrow">
       <span class="hklabel">Infographic Viewer</span>
       <button type="button" id="bindingHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('binding')">Ctrl + F3</button>
+      <button type="button" class="hkclear" id="bindingHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('binding')">✕</button>
       <input type="hidden" id="bindingHotkey" />
       <div class="hint" id="bindingHotkeyHint"></div>
     </div>
     <div class="hkrow">
       <span class="hklabel">Hold-to-interact key</span>
       <button type="button" id="interactHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('interact')">F</button>
+      <button type="button" class="hkclear" id="interactHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('interact')">✕</button>
       <input type="hidden" id="interactHotkey" />
       <div class="hint" id="interactHotkeyHint"></div>
     </div>
     <div class="hkrow">
       <span class="hklabel">Move / arrange</span>
       <button type="button" id="moveHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('move')">Ctrl + Alt + M</button>
+      <button type="button" class="hkclear" id="moveHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('move')">✕</button>
       <input type="hidden" id="moveHotkey" />
       <div class="hint" id="moveHotkeyHint"></div>
     </div>
@@ -549,12 +565,12 @@
     document.getElementById("hwAccel").checked = !!cfg.hwAccel;
     document.getElementById("amdCompat").checked = !!cfg.amdCompat;
     document.getElementById("bindingPng").value = cfg.bindingPng || "";
-    setHotkeyDisplay("overlay", cfg.overlayHotkey || "F3");
-    setHotkeyDisplay("binding", cfg.bindingHotkey || "Ctrl+F3");
-    setHotkeyDisplay("mining", cfg.miningHotkey || "Shift+F3");
-    setHotkeyDisplay("webView", cfg.webViewHotkey || "Ctrl+Shift+F3");
-    setHotkeyDisplay("interact", cfg.interactHotkey || "F");
-    setHotkeyDisplay("move", cfg.moveHotkey || "Ctrl+Alt+M");
+    // `?? def`, NOT `|| def`: "" is a hotkey the user deliberately REMOVED and has to survive a
+    // reload; only a missing field means "never set" and takes the default.
+    for (const which of Object.keys(HOTKEYS)) {
+      const saved = cfg[which + "Hotkey"];
+      setHotkeyDisplay(which, typeof saved === "string" ? saved : HOTKEYS[which].def);
+    }
     document.getElementById("holdToInteract").checked = !!cfg.holdToInteract;
     document.getElementById("revertThemeOnFoot").checked = !!cfg.revertThemeOnFoot;
     document.body.classList.toggle("show-loadout", !!cfg.showLoadout);
@@ -650,14 +666,16 @@
       hwAccel: document.getElementById("hwAccel").checked,
       amdCompat: document.getElementById("amdCompat").checked,
       bindingPng: document.getElementById("bindingPng").value,
-      overlayHotkey: document.getElementById("overlayHotkey").value.trim() || "F3",
-      bindingHotkey: document.getElementById("bindingHotkey").value.trim() || "Ctrl+F3",
-      miningHotkey: document.getElementById("miningHotkey").value.trim() || "Shift+F3",
-      webViewHotkey: document.getElementById("webViewHotkey").value.trim() || "Ctrl+Shift+F3",
-      interactHotkey: document.getElementById("interactHotkey").value.trim() || "F",
+      // Saved verbatim, empty included — a removed hotkey stays removed. Coercing "" back to the
+      // default here is what made clearing one impossible in the first place.
+      overlayHotkey: document.getElementById("overlayHotkey").value.trim(),
+      bindingHotkey: document.getElementById("bindingHotkey").value.trim(),
+      miningHotkey: document.getElementById("miningHotkey").value.trim(),
+      webViewHotkey: document.getElementById("webViewHotkey").value.trim(),
+      interactHotkey: document.getElementById("interactHotkey").value.trim(),
       holdToInteract: document.getElementById("holdToInteract").checked,
       revertThemeOnFoot: document.getElementById("revertThemeOnFoot").checked,
-      moveHotkey: document.getElementById("moveHotkey").value.trim() || "Ctrl+Alt+M",
+      moveHotkey: document.getElementById("moveHotkey").value.trim(),
       syncEnabled: document.getElementById("syncEnabled").checked,
       fabCapture: document.getElementById("fabCapture").checked,
       missionOcr: document.getElementById("missionOcr").checked,
@@ -737,8 +755,35 @@
   }
   function setHotkeyDisplay(which, accel) {
     const h = HOTKEYS[which];
-    document.getElementById(h.input).value = accel;
-    document.getElementById(h.btn).textContent = prettyHotkey(accel);
+    document.getElementById(h.input).value = accel || "";
+    const btn = document.getElementById(h.btn);
+    btn.textContent = accel ? prettyHotkey(accel) : "None — click to set";
+    btn.classList.toggle("unset", !accel);
+    // Nothing to clear on a row that's already empty.
+    document.getElementById(h.input + "Clear")?.classList.toggle("hidden", !accel);
+  }
+  /** Remove a hotkey. "" is a real, saved value meaning "this action has no hotkey" — distinct from
+   *  the field being absent, which still means "never set, use the default". The shell treats an
+   *  empty accel as unregister, so applying it takes effect immediately. */
+  async function clearHotkey(which) {
+    const h = HOTKEYS[which];
+    if (capturing === which) { capturing = null; document.getElementById(h.btn).classList.remove("capturing"); }
+    setHotkeyDisplay(which, "");
+    if (h.apply) { try { await h.apply(""); } catch { /* shell gone; the saved value still sticks */ } }
+    let extra = "";
+    // 🔑 Don't let removing a key lock the user out of their own overlay. Hold-to-interact means
+    // widgets are ONLY clickable while that key is held, so clearing it with the mode on would
+    // leave nothing on screen clickable and no way in Settings to notice why. The mode exists
+    // because of the key, so it goes with it — and hover mode needs no key at all.
+    const hold = document.getElementById("holdToInteract");
+    if (which === "interact" && hold && hold.checked) {
+      hold.checked = false;
+      try { window.overlayConfig?.setHoldMode?.(false); } catch { /* saved below anyway */ }
+      extra = " Hold-to-interact was turned off too — without that key it would have left nothing on the overlay clickable.";
+    }
+    document.getElementById(h.hint).textContent =
+      "Removed — this action has no hotkey now. Click the button to set one." + extra;
+    save();
   }
   function startCaptureHotkey(which) {
     capturing = which;

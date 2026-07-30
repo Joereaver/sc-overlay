@@ -10,7 +10,7 @@ import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
 import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
-import { MiningTracker, isDebrisSignature } from "./mining.js";
+import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
@@ -1455,13 +1455,17 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.hwAccel === "boolean") config.hwAccel = body.hwAccel;
     if (typeof body.amdCompat === "boolean") config.amdCompat = body.amdCompat;
     if (typeof body.bindingPng === "string") config.bindingPng = body.bindingPng;
-    if (typeof body.bindingHotkey === "string" && body.bindingHotkey.trim()) config.bindingHotkey = body.bindingHotkey.trim();
-    if (typeof body.overlayHotkey === "string" && body.overlayHotkey.trim()) config.overlayHotkey = body.overlayHotkey.trim();
-    if (typeof body.miningHotkey === "string" && body.miningHotkey.trim()) config.miningHotkey = body.miningHotkey.trim();
-    if (typeof body.webViewHotkey === "string" && body.webViewHotkey.trim()) config.webViewHotkey = body.webViewHotkey.trim();
-    if (typeof body.interactHotkey === "string" && body.interactHotkey.trim()) config.interactHotkey = body.interactHotkey.trim();
+    // 🔑 An EMPTY hotkey is a real value: "this action has no hotkey". The `&& .trim()` guard these
+    // used to carry silently discarded it, so Settings could clear a hotkey, the shell would
+    // unregister it, and the next config read handed the old key straight back. A hotkey is
+    // rebindable and now also REMOVABLE; only an absent field falls back to the default.
+    if (typeof body.bindingHotkey === "string") config.bindingHotkey = body.bindingHotkey.trim();
+    if (typeof body.overlayHotkey === "string") config.overlayHotkey = body.overlayHotkey.trim();
+    if (typeof body.miningHotkey === "string") config.miningHotkey = body.miningHotkey.trim();
+    if (typeof body.webViewHotkey === "string") config.webViewHotkey = body.webViewHotkey.trim();
+    if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
-    if (typeof body.moveHotkey === "string" && body.moveHotkey.trim()) config.moveHotkey = body.moveHotkey.trim();
+    if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();
     if (typeof body.timeRelative === "boolean") config.timeRelative = body.timeRelative;
     if (typeof body.shareLogs === "boolean") config.shareLogs = body.shareLogs;
     if (typeof body.showLoadout === "boolean") config.showLoadout = body.showLoadout;
@@ -1716,17 +1720,29 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // frame it was built from.
     const g = body?.glyph as { fraction?: number; total?: number; mean?: number[]; hitMean?: number[] } | undefined;
     if (Number.isFinite(signature)) {
-      const known = mining.knowsSignature(signature);
+      // The tracker owns the rules, so it also says what it did with the read — one place to
+      // change, and the log can never drift out of step with the behaviour it describes.
+      const outcome = mining.applyMineableRead(signature, body?.confirmed === true);
       console.log(
         `[mining] signature ${signature} — glyph ${body?.confirmed === true ? "FOUND" : "not found"}` +
         (g ? ` (${Math.round((g.fraction ?? 0) * 100)}% of ${g.total}px, box mean rgb ${g.mean}` +
              `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""})` : "") +
-        ` — ${known ? "known ore, announced regardless"
-            : body?.confirmed !== true ? "not announced (no glyph)"
-            : isDebrisSignature(signature) ? "debris, announced"
-            : "not announced (value isn't one debris takes — 2,000 or 4,000+)"}`,
+        ` — ${outcome.why}`,
       );
-      mining.applyMineableRead(signature, body?.confirmed === true);
+      // Every read, ANNOUNCED OR NOT, so the "scan read area" outline can print what the OCR saw.
+      // The rejected ones are the whole point: a number the app refused is exactly what a player
+      // needs to see next to the one on their screen. Rect goes out as FRACTIONS of the frame so
+      // the canvas can place and size it on any resolution.
+      const t = body?.text as { x?: number; y?: number; w?: number; h?: number } | undefined;
+      const fr = body?.frame as { w?: number; h?: number } | undefined;
+      const frac = t && fr?.w && fr?.h
+        ? { x: (t.x ?? 0) / fr.w, y: (t.y ?? 0) / fr.h, w: (t.w ?? 0) / fr.w, h: (t.h ?? 0) / fr.h }
+        : null;
+      miningSend({
+        kind: "read", signature, raw: typeof body?.raw === "string" ? body.raw : null,
+        box: frac, confirmed: body?.confirmed === true,
+        verdict: outcome.verdict, announced: outcome.announced, why: outcome.why, at: Date.now(),
+      });
     }
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ ok: true }));

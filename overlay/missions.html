@@ -627,6 +627,21 @@
     background: rgba(8, 17, 26, 0.85); }
   #scanBox .sb-reset:hover { color: var(--cyan-bright); }
   body.scanbox.sb-dragging #scanBox { border-style: solid; background: rgba(var(--accent-rgb), 0.10); }
+  /* The last thing the OCR read, printed at roughly the size the game drew the signature (the font
+     size comes from the number's own OCR bbox — see showScanRead). Bottom-LEFT: the grip owns the
+     bottom-right corner, and the middle is where the real number sits, which is the one place this
+     must not cover. Hidden until a read arrives, and it expires, because a stale number sitting
+     under a live HUD is worse than no number at all. */
+  #scanBox .sb-read { display: none; position: absolute; left: 5px; bottom: 4px; max-width: calc(100% - 30px);
+    align-items: baseline; gap: 7px; pointer-events: none; }
+  #scanBox.has-read .sb-read { display: flex; }
+  #scanBox .sb-read-lbl { flex: none; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+  #scanBox .sb-read-val { flex: none; font-family: var(--mono); font-weight: 700; line-height: 1;
+    color: var(--gold); text-shadow: 0 0 6px rgba(0, 0, 0, 0.9), 0 0 14px rgba(255, 210, 122, 0.25); }
+  #scanBox.refused .sb-read-val { color: var(--cyan-dim); text-decoration: line-through; }
+  #scanBox .sb-read-why { flex: 1 1 auto; min-width: 0; font-family: var(--sans); font-size: 9.5px;
+    color: var(--cyan-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* 🔑 Drag shield. A widget's neighbours are IFRAMES, and pointer events over an iframe go to
      ITS document — window.pointermove in this one simply stops firing, so a drag froze the
@@ -968,8 +983,16 @@
     background: rgba(4, 10, 16, 0.5); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
   #whatsnew.show { display: flex; }
   /* Flex column with a capped height: header + footer are PINNED (flex:none) and only #wnList
-     scrolls, so the ✕ and "Got it" are ALWAYS on screen no matter how many versions are shown. */
-  #whatsnew .wn-card { width: 400px; max-width: 88vw; max-height: 82vh; display: flex; flex-direction: column;
+     scrolls, so the ✕ and "Got it" are ALWAYS on screen no matter how many versions are shown.
+     🔑 The cap is measured against the PRIMARY MONITOR (--prim-h), never `vh`. `vh` is this
+     window, and this window is the whole multi-monitor CANVAS — on a rig with a taller second
+     display (Sub's is a portrait 1080×1920 beside a 3440×1440, canvas 1928 tall) `82vh` came out
+     to 1581px, 141px TALLER than the screen the card is centered on, so it hung ~70px off the top
+     AND bottom and took the ✕ and "Got it" with it. That is the same trap as the live 0.1.31 bug,
+     reopened by using the wrong unit. 720px is the absolute cap: a size that leaves room on a
+     1080p monitor, which is the smallest thing worth designing for. */
+  #whatsnew .wn-card { width: 400px; max-width: 88vw; display: flex; flex-direction: column;
+    max-height: min(720px, calc(var(--prim-h, 100vh) - 96px));
     border: 1px solid var(--cyan); border-radius: 10px; padding: 16px 18px 18px;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 26px rgba(var(--accent-rgb), 0.18); }
@@ -1155,6 +1178,13 @@
   <div id="scanBox">
     <span class="sb-tag">Scan read area · drag to move</span>
     <span class="sb-reset" id="sbReset" title="Put the read area back to its default position and size">Reset</span>
+    <!-- What the OCR read, at roughly the size the game drew it, so it can be compared against the
+         real number on screen. Present for EVERY read, including ones the app refused. -->
+    <span class="sb-read" id="sbRead">
+      <span class="sb-read-lbl">I read</span>
+      <span class="sb-read-val" id="sbReadVal"></span>
+      <span class="sb-read-why" id="sbReadWhy"></span>
+    </span>
     <span class="sb-grip" title="Drag to resize"></span>
   </div>
 
@@ -2070,13 +2100,20 @@
       // A hidden-but-ARMED mining widget stays subscribed so auto-show can pop it on a scan — so
       // it has to be TOLD it's hidden or it announces from off-screen. The rule for every widget:
       // invisible means no sound and no work beyond whatever is needed to un-hide itself.
-      onShow: (w) => { try { frameWin(w)?.__miningSetHidden?.(false); } catch { /* not ready */ } },
-      onHide: (w) => { try { frameWin(w)?.__miningSetHidden?.(true); } catch { /* not ready */ } },
+      // The scan read area goes wherever this widget goes — see syncScanBox. Closing the scanner
+      // (hotkey, hub, tray, or a stack bringing another member forward) used to leave the outline
+      // sitting on the game with nothing left to explain it.
+      onShow: (w) => { try { frameWin(w)?.__miningSetHidden?.(false); } catch { /* not ready */ } syncScanBox(); },
+      onHide: (w) => { try { frameWin(w)?.__miningSetHidden?.(true); } catch { /* not ready */ } syncScanBox(); },
       host: (w) => ({
         setModal: (on) => window.overlayApi?.setModal?.(!!on),
         requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
-        // "Show the scan read area": drawn here, because only the canvas spans the screen.
-        scanBox: (on) => setScanBox(on),
+        // "Show the scan read area": drawn here, because only the canvas spans the screen. The page
+        // has already written the pref, and syncScanBox reads it — one rule for the toggle, the
+        // widget being closed, and startup, instead of three places that can disagree.
+        scanBox: () => syncScanBox(),
+        // Every signature read, announced or not, so the box can show what the OCR actually saw.
+        scanRead: (info) => showScanRead(info),
         // Mining's settings menu has its own angle slider; it drives the parent's state like every
         // other widget's does, so a stacked Mining tilts the whole stack.
         getAngle: () => wAngle(w),
@@ -2478,6 +2515,49 @@
     document.body.classList.toggle("scanbox", !!on);
     if (on) drawScanBox();
   }
+  /** The one rule for whether the outline is up: the Mining Scanner's own pref says so AND that
+   *  widget is actually on screen. It is a calibration overlay for that widget — leaving it behind
+   *  when the scanner is closed (or is the hidden member of a stack) puts an unexplained dashed
+   *  box over the game with no control anywhere to remove it. Hiding it does NOT clear the pref, so
+   *  reopening the scanner brings it back exactly as the player left it. */
+  function syncScanBox() {
+    let pref = false;
+    try { pref = localStorage.getItem("miningScanBox") === "on"; } catch { /* no storage */ }
+    setScanBox(pref && wShown(WBY.mining));
+  }
+  // ── What the OCR read, printed in the box ───────────────────────────────────────────────────
+  // The point is comparison: a player looks at the real signature and at this, and a discrepancy
+  // explains itself ("I read 15,000, the screen says 16,000" — that's a 6 read as a 5). So it shows
+  // for EVERY read, including the ones the app refused, and it shows the RAW OCR text when that
+  // differs from the value that came out of it.
+  const SCAN_READ_TTL_MS = 12000; // a number from a minute ago would be read as current. It isn't.
+  // The measured signature text height on a 3440×1440 frame is 13px (see glyphSearchBox), i.e.
+  // ~0.9% of frame height — the fallback for a read that arrives without a bbox.
+  const SCAN_READ_H = 13 / 1440;
+  // An OCR bbox hugs the digits, so it is about cap height; a font-size is taller than its caps by
+  // roughly a third. "Roughly the same size" is the ask, and this lands within a pixel or two.
+  const SCAN_READ_FONT = 1.4;
+  let scanReadTimer = null;
+  function showScanRead(info) {
+    const el = document.getElementById("scanBox"); if (!el || !info) return;
+    const val = document.getElementById("sbReadVal"), why = document.getElementById("sbReadWhy");
+    const n = Number(info.signature);
+    const shown = Number.isFinite(n) ? n.toLocaleString() : String(info.raw || "?");
+    // The raw text only earns space when it differs from the number we made of it — that gap IS the
+    // mis-read, and printing it always would just be noise.
+    const raw = typeof info.raw === "string" ? info.raw.trim() : "";
+    const rawDiffers = raw && raw.replace(/[^0-9]/g, "") !== String(Number.isFinite(n) ? n : "");
+    val.textContent = shown + (rawDiffers ? "  (" + raw + ")" : "");
+    const ci = scanDisplay();
+    const h = (info.box && info.box.h > 0 ? info.box.h : SCAN_READ_H) * ci.ph;
+    val.style.fontSize = Math.max(9, Math.round(h * SCAN_READ_FONT)) + "px";
+    why.textContent = info.why || "";
+    el.classList.toggle("refused", info.announced !== true);
+    el.classList.add("has-read");
+    clearTimeout(scanReadTimer);
+    scanReadTimer = setTimeout(() => el.classList.remove("has-read"), SCAN_READ_TTL_MS);
+  }
+
   /** Persist the dragged region (or null to reset). The SIDECAR owns it — it's what runs the
    *  classifier — so this is the same POST the settings page uses, not a local-only pref. */
   function saveScanRegion(f) {
@@ -2539,9 +2619,9 @@
     });
   })();
 
-  // Restore on load: the toggle is the mining cog's (same-origin localStorage), the REGION is the
-  // sidecar's, since that's what actually reads the screen.
-  try { if (localStorage.getItem("miningScanBox") === "on") setScanBox(true); } catch { /* no storage */ }
+  // The toggle is the mining cog's (same-origin localStorage) and is applied by syncScanBox once the
+  // layout loader has settled visibility. The REGION is the sidecar's, since that's what actually
+  // reads the screen.
   fetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((c) => {
     if (c && c.scanRegion) { scanRegion = c.scanRegion; drawScanBox(); }
   }).catch(() => { /* default band it is */ });
@@ -2925,6 +3005,10 @@
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
       renderGroupTabs();
+      // Now that visibility is settled, decide whether the scan read area is up. It can't be
+      // decided at parse time: the widget's frame doesn't exist yet, so it would always come out
+      // "hidden" and a player who left the outline on would find it gone.
+      syncScanBox();
     })();
 
     for (const w of WIDGETS) {

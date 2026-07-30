@@ -461,6 +461,12 @@ function startFabCapture({ port, configDir, onStatus }) {
               signature: read.signature,
               confirmed: glyph.seen,
               glyph: { fraction: glyph.fraction, total: glyph.total, mean: glyph.mean, hitMean: glyph.hitMean },
+              // For the "scan read area" outline: the text the OCR actually saw, and where/how big
+              // it was. Sent as the raw frame rect plus the frame size, because only this process
+              // knows the captured frame's dimensions — the sidecar turns it into fractions.
+              raw: read.raw,
+              text: read.text,
+              frame: { w: shot.getSize().width, h: shot.getSize().height },
             }),
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           });

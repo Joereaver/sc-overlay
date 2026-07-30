@@ -364,6 +364,12 @@
   @keyframes flashhit { 0% { background: rgba(255, 210, 122, 0.55); } 100% { background: rgba(var(--accent-rgb), 0.05); } }
   .rk-pill { display: inline-block; font-size: 8.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
     padding: 1px 6px; border-radius: 8px; margin-left: 6px; vertical-align: 1px; }
+  /* "or debris": a signature that is BOTH a rock and a whole number of salvage panels. Reads as a
+     caveat on the name rather than replacing it — the ore is the useful half, and the only way to
+     settle it is to go and look. */
+  .scan-now .maybe { display: inline-block; font-size: 8.5px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; padding: 1px 6px; border-radius: 8px; margin-left: 6px; vertical-align: 2px;
+    color: var(--cyan-dim); border: 1px solid var(--divider); }
 
   /* Target picker — two columns to keep the panel short. Rarity headers span both. */
   .tgt-lbl { font-size: 8.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
@@ -420,8 +426,8 @@
       <div class="cog-tone">Alert tone <span class="lnk" id="toneBtn">choose WAV…</span><span class="lnk clr hidden" id="toneClr">reset</span></div>
       <div class="cog-sec">Announce</div>
       <div class="cog-seg"><span class="seg" id="segTarget" data-m="target">Targets only</span><span class="seg" id="segEvery" data-m="every">Every rock</span></div>
-      <label class="cog-opt" title="Say &quot;Debris&quot; when a scan reads a signature that isn't a known ore. Turn this off if you only care about rocks.">
-        <input type="checkbox" id="debrisChk" /> Call out debris
+      <label class="cog-opt" title="Speak up for a scan that isn't the ore you came for: debris, a signature I can't identify, or a value that could be either a rock or a debris field. Turn this off if you only care about rocks. Rocks you've targeted are always called out.">
+        <input type="checkbox" id="debrisChk" /> Call out debris &amp; unknown
       </label>
       <div class="cog-sec">Tools</div>
       <label class="cog-opt" title="Draws a box on screen showing the area the app reads for a scan signature. Nothing outside it is looked at.">
@@ -502,9 +508,10 @@
   // a master gain so the volume slider scales tones + clips + the alarm.
   const getVol = () => { const v = parseFloat(localStorage.getItem("miningVol")); return isNaN(v) ? 1 : Math.max(0, Math.min(1, v)); };
   const voiceOn = () => localStorage.getItem("miningVoice") !== "off";
-  // Debris call-outs, ON by default (they're the confirmation that a scan registered at all).
-  // Sub asked for the switch because a signature that isn't a known ore is often not worth
-  // hearing about — and because a false one is worse than silence.
+  // Call-outs for anything that ISN'T the ore you came for — debris, an unidentifiable signature,
+  // and an ambiguous one you aren't hunting. ON by default (they're the confirmation that a scan
+  // registered at all). Sub asked for the switch because those are often not worth hearing about —
+  // and because a false one is worse than silence.
   const debrisOn = () => localStorage.getItem("miningDebris") !== "off";
 
   function speak(text) {
@@ -606,6 +613,23 @@
     speakClips(slugs, fb);
   }
 
+  // What the scanned number means. The sidecar decides (src/mining.ts classifySignature) and sends
+  // it with the scan; this only falls back for a frame from an older sidecar, where the old rule
+  // was "no table match = debris".
+  const verdictOf = (sc) => sc.verdict || (sc.matches.length ? "ore" : "debris");
+
+  // "I don't know what that is, but it's not ore" — Sub's line, five ways, picked at random so a
+  // stubborn unidentifiable contact doesn't repeat the same sentence at you. Each is ONE clip
+  // (whole sentences, unlike the name call-outs, which are stitched); the text is also the
+  // Windows-TTS fallback for anyone whose build has no clips.
+  const UNKNOWN_LINES = [
+    ["c_unknown1", "I don't know what that is, but it's not ore."],
+    ["c_unknown2", "That is not ore. Beyond that, I have no idea."],
+    ["c_unknown3", "I'm unable to identify that. I can tell you it isn't ore."],
+    ["c_unknown4", "No match in my records. Whatever it is, it isn't ore."],
+    ["c_unknown5", "I don't recognize that signature. It is not ore."],
+  ];
+
   // ---- render ----
   function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
   function rarPill(rar) { return '<span class="rk-pill" style="color:var(' + (RAR[rar] || "--common") + ');background:rgba(120,210,235,.12)">' + escapeHtml(rar) + '</span>'; }
@@ -622,20 +646,28 @@
     if (!sc) { el.className = "scan-now empty"; el.textContent = "Scan a rock — I'll name it here."; return; }
     el.className = "scan-now";
     const m = sc.matches;
+    const sig = '<div class="sig">signature ' + sc.signature.toLocaleString();
     if (!m.length) {
-      // Not in the rock table -> salvage debris.
-      el.innerHTML = '<div class="rock" style="color:var(--cyan-dim)">Debris</div>' +
-        '<div class="meta">Salvageable — not a mineable rock</div>' +
-        '<div class="sig">signature ' + sc.signature.toLocaleString() + '</div>';
+      // No rock at this value. Which of the two non-ore verdicts it is matters: debris is a whole
+      // number of salvage panels, and anything else is a real scan of something we can't name —
+      // saying "Debris" for that is the guess this replaced.
+      const unknown = verdictOf(sc) === "unknown";
+      el.innerHTML = '<div class="rock" style="color:var(--cyan-dim)">' + (unknown ? "Unknown" : "Debris") + '</div>' +
+        '<div class="meta">' + (unknown ? "Not ore — and not a debris signature either"
+                                       : "Salvageable — not a mineable rock") + '</div>' +
+        sig + '</div>';
       return;
     }
-    const main = m[0];
     const isTarget = m.some(x => targetSet.has(x.name));
-    let html = '<div class="rock">' + escapeHtml(main.name) + rarPill(main.rarity) + '</div>' +
+    // Lead with what the player is hunting. At 19,200 the table holds Savrilium ×6 AND Aslarite ×5,
+    // and naming the first one meant a targeted Aslarite was announced as Savrilium.
+    const main = m.find(x => targetSet.has(x.name)) || m[0];
+    const rest = m.filter(x => x !== main);
+    const maybe = verdictOf(sc) === "ore-or-debris" ? '<span class="maybe">or debris</span>' : '';
+    el.innerHTML = '<div class="rock">' + escapeHtml(main.name) + maybe + rarPill(main.rarity) + '</div>' +
       '<div class="meta">' + main.count + (main.count > 1 ? " rocks" : " rock") + ' in cluster' +
-      (m.length > 1 ? ' · or ' + m.slice(1).map(x => escapeHtml(x.name) + " ×" + x.count).join(", ") : '') + '</div>' +
-      '<div class="sig">signature ' + sc.signature.toLocaleString() + (isTarget ? ' · TARGET' : '') + '</div>';
-    el.innerHTML = html;
+      (rest.length ? ' · or ' + rest.map(x => escapeHtml(x.name) + " ×" + x.count).join(", ") : '') + '</div>' +
+      sig + (isTarget ? ' · TARGET' : '') + '</div>';
   }
 
   function renderTargets() {
@@ -809,10 +841,18 @@
     if (jc > lastJobCount) maybeAutoShow(); // a newly-read refinery job -> pop up
     lastJobCount = jc;
   }
-  // A newly-scanned rock: flash + chime + speak on a target (always), or on any rock in
-  // "every" announce mode. Debris (no table match) flashes + says "Debris" so it's clear the
-  // scan registered — without the target chime, so debris and a target hit stay distinct.
+  // A newly-scanned contact, by verdict (src/mining.ts):
+  //   ore            -> flash + chime + name it, on a target (always) or any rock in "every" mode
+  //   ore-or-debris  -> the value is both a rock and a whole number of salvage panels. ALWAYS
+  //                     announced, because the player has to fly over and look either way. On a
+  //                     TARGET the prefix changes to "This could be <ore>" — hopeful, not
+  //                     dismissive — which is the case Sub asked to make easier (Savrilium ×5 is
+  //                     16,000, and someone hunting Savrilium must not hear it called debris).
+  //   debris         -> "Debris", flash, no chime, so it stays distinct from a target hit
+  //   unknown        -> one of five HAL ways of saying it isn't ore and it isn't identifiable
   function onNewScan(sc) {
+    const v = verdictOf(sc);
+    const isTarget = sc.matches.some((m) => targetSet.has(m.name));
     // 🔑 While the widget is HIDDEN (armed for auto-show) it must be silent. It stays subscribed
     // to the event stream purely so auto-show can pop it — announcing from an invisible widget is
     // what made "debris" speak when the Mining Assistant wasn't even open.
@@ -822,19 +862,34 @@
     // and the widget kept popping itself up mid-flight; a confirmed glyph is proof, so confirmed
     // debris pops again. An unconfirmed non-match never reaches here — the tracker drops it.
     const real = (s) => s.matches.length > 0 || s.confirmed === true;
-    // Debris switched off: a non-ore signature is not worth a word, a flash, or popping the
-    // widget open. Known ores are unaffected — this only governs the "Debris" call-out.
-    if (!sc.matches.length && !debrisOn()) return;
+    // The switch governs everything that ISN'T the ore you came for: debris, an unidentifiable
+    // contact, and an ambiguous one you aren't hunting. None of those is worth a word, a flash, or
+    // popping the widget open if you've said you only care about rocks. A target — even an
+    // ambiguous target — is never suppressed by it.
+    if ((v === "debris" || v === "unknown" || (v === "ore-or-debris" && !isTarget)) && !debrisOn()) return;
     if (hiddenMode) { if (real(sc)) maybeAutoShow(); return; }
     const el = $("scanNow");
     const flash = () => { el.classList.remove("hit"); void el.offsetWidth; el.classList.add("hit"); };
-    if (!sc.matches.length) { maybeAutoShow(); flash(); speakClips(["n_debris"], "Debris"); return; }
+    if (v === "debris") { maybeAutoShow(); flash(); speakClips(["n_debris"], "Debris"); return; }
+    if (v === "unknown") {
+      maybeAutoShow(); flash();
+      const line = UNKNOWN_LINES[Math.floor(Math.random() * UNKNOWN_LINES.length)];
+      speakClips([line[0]], line[1]);
+      return;
+    }
     maybeAutoShow();                 // a REAL ore signature => the player is genuinely scanning
-    const isTarget = sc.matches.some((m) => targetSet.has(m.name));
     if (isTarget) { flash(); chime(); }
+    // Lead with the hunted rock when a value matches more than one (19,200 is Savrilium ×6 AND
+    // Aslarite ×5 — naming matches[0] announced the wrong one at a player targeting Aslarite).
+    const name = (sc.matches.find((m) => targetSet.has(m.name)) || sc.matches[0]).name;
+    if (v === "ore-or-debris") {
+      if (isTarget) speakClips(["c_thiscouldbe", nameSlug(name)], "This could be " + name);
+      else { flash(); speakClips(["c_debrisor", nameSlug(name)], "Debris, or " + name); }
+      return;
+    }
     const mode = localStorage.getItem("miningSpeakMode") || "target";
     if (mode === "every" || isTarget) {
-      speakClips(["c_thatlookslike", nameSlug(sc.matches[0].name)], "That looks like " + sc.matches[0].name);
+      speakClips(["c_thatlookslike", nameSlug(name)], "That looks like " + name);
     }
   }
 
@@ -978,6 +1033,11 @@
       let msg; try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.kind === "state") applyState(msg.view);
       else if (msg.kind === "appearance") applyMiningAppearance(msg);
+      // Every signature read, including the ones the tracker refused. Purely a diagnostic: it goes
+      // to the canvas's "scan read area" outline so the player can hold what the OCR read up
+      // against what is on their screen. Never announced, never rendered in this panel — a refused
+      // read is not a scan, and the panel must keep showing the last real one.
+      else if (msg.kind === "read") { try { host()?.scanRead?.(msg); } catch { /* standalone */ } }
       else if (msg.kind === "refinery-done") {
         // A finished refinery job is worth popping the widget for, but a HIDDEN widget stays quiet
         // until it's actually on screen.

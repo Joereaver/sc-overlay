@@ -48,7 +48,10 @@ export interface RefineryRead {
  *  real scan rather than being some other number the OCR happened to find near screen centre —
  *  see glyphSearchBox(). Windows OCR is text-only and cannot see the glyph itself, so the pixel
  *  check has to happen where the bitmap is (electron/capture.cjs). */
-export interface MineableRead { kind: "mineable"; signature: number; raw: string; pin: Rect; }
+/** `text` is the number's OWN bbox in frame pixels. It travels back to the canvas so the "scan read
+ *  area" outline can print what the OCR read at roughly the size the game drew it — which is the
+ *  only way a player can see WHY a read came out wrong (a 5 read as an 8, a comma eaten). */
+export interface MineableRead { kind: "mineable"; signature: number; raw: string; pin: Rect; text: Rect; }
 
 /** The box to hunt the scan glyph in: immediately LEFT of the number, anchored on the number's
  *  own OCR bbox so it travels with it — head-tracking drift and resolution both stop mattering.
@@ -670,6 +673,7 @@ export function classifyScreen(
         signature: best.sig,
         raw: best.l.text.trim(),
         pin: glyphSearchBox(best.l, ocr.w, ocr.h),
+        text: { x: best.l.x, y: best.l.y, w: best.l.w, h: best.l.h },
       };
     }
   }

@@ -1173,12 +1173,16 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const p = path.join(process.env.APPDATA || process.env.HOME || ".", "sc-blueprint-tracker", "config.json");
       const c = JSON.parse(fs.readFileSync(p, "utf8"));
-      if (c.overlayHotkey) overlayKey = c.overlayHotkey;
-      if (c.bindingHotkey) bindKey = c.bindingHotkey;
-      if (c.webViewHotkey) registerWebViewHotkey(c.webViewHotkey);
-      if (c.miningHotkey) miningKey = c.miningHotkey;
-      if (c.interactHotkey) interactKey = c.interactHotkey;
-      if (c.moveHotkey) moveKey = c.moveHotkey;
+      // 🔑 `typeof === "string"`, not truthiness: a hotkey the user CLEARED is saved as "", and a
+      // falsy test read that as "not configured" and handed the default straight back — so a
+      // removed hotkey came back on the next launch. Absent (undefined) means never set, and only
+      // that takes the default. Registering "" is already a no-op, so no other change is needed.
+      if (typeof c.overlayHotkey === "string") overlayKey = c.overlayHotkey;
+      if (typeof c.bindingHotkey === "string") bindKey = c.bindingHotkey;
+      if (typeof c.webViewHotkey === "string") registerWebViewHotkey(c.webViewHotkey);
+      if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
+      if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
+      if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
       if (c.holdToInteract === true) holdMode = true; // opt-in: require holding the interact key
     } catch { /* defaults */ }
     foreground.want("hold", holdMode); // only track the foreground app if something asks
