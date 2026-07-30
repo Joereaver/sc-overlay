@@ -10,7 +10,7 @@ import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
 import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
-import { MiningTracker } from "./mining.js";
+import { MiningTracker, isDebrisSignature } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
@@ -1721,7 +1721,10 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
         `[mining] signature ${signature} — glyph ${body?.confirmed === true ? "FOUND" : "not found"}` +
         (g ? ` (${Math.round((g.fraction ?? 0) * 100)}% of ${g.total}px, box mean rgb ${g.mean}` +
              `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""})` : "") +
-        ` — ${known ? "known ore, announced regardless" : body?.confirmed === true ? "debris, announced" : "debris, SUPPRESSED (no glyph)"}`,
+        ` — ${known ? "known ore, announced regardless"
+            : body?.confirmed !== true ? "not announced (no glyph)"
+            : isDebrisSignature(signature) ? "debris, announced"
+            : "not announced (value isn't one debris takes — 2,000 or 4,000+)"}`,
       );
       mining.applyMineableRead(signature, body?.confirmed === true);
     }

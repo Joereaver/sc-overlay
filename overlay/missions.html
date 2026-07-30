@@ -608,13 +608,20 @@
     border: 1px dashed rgba(var(--accent-rgb), 0.55); border-radius: 4px;
     background: rgba(var(--accent-rgb), 0.05); }
   body.scanbox #scanBox { display: block; pointer-events: auto; cursor: move; }
-  #scanBox .sb-tag { position: absolute; left: 0; top: -17px; font-family: var(--sans);
+  /* Also inside: a label above the edge is fine (it can't be clicked), but it gets clipped off
+     screen when the box is dragged to the top, and it looked detached from what it names. */
+  #scanBox .sb-tag { position: absolute; left: 5px; top: 5px; font-family: var(--sans);
     font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--cyan-dim); white-space: nowrap; pointer-events: none; }
   #scanBox .sb-grip { position: absolute; right: -1px; bottom: -1px; width: 16px; height: 16px;
     cursor: nwse-resize; border-right: 2px solid rgba(var(--accent-rgb), 0.8);
     border-bottom: 2px solid rgba(var(--accent-rgb), 0.8); border-bottom-right-radius: 4px; }
-  #scanBox .sb-reset { position: absolute; right: 0; top: -19px; font-family: var(--sans);
+  /* INSIDE the box on purpose. It used to sit above the top edge, outside the box's own rect —
+     and the shell hit-tests the rect the page reports, so the cursor over the button was over
+     nothing the shell knew about: the window flipped back to click-through and the click went to
+     the game. It read as the button "flashing" and being impossible to hit. Same trap as widget
+     chrome that hangs outside its widget. */
+  #scanBox .sb-reset { position: absolute; right: 4px; top: 4px; font-family: var(--sans);
     font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--cyan-dim);
     cursor: pointer; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px;
     background: rgba(8, 17, 26, 0.85); }

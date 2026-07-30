@@ -50,6 +50,16 @@ const DONE_KEEP_MS = 6 * 3600 * 1000; // keep a finished job visible ~6h, then a
 // want announced; only 2,000+ signatures get a response.
 const MIN_SIGNATURE = 2000;
 
+/** Which signature VALUES a real piece of debris can actually have: 2,000 exactly, or anything
+ *  from 4,000 up (Sub, 2026-07-29 — "2000 and 4000 will be labeled as debris and then anything
+ *  above 4000"). Everything between is a gap debris never lands in, so a non-ore number in there
+ *  is much more likely to be the OCR reading something else on the HUD than a real contact. This
+ *  only gates the DEBRIS call-out; a signature that matches a known rock is always honoured,
+ *  whatever its value. */
+export function isDebrisSignature(signature: number): boolean {
+  return signature === 2000 || signature >= 4000;
+}
+
 export class MiningTracker extends EventEmitter {
   private data: MineablesData | null = null;
   private jobs = new Map<string, RefineryJob>();
@@ -88,7 +98,10 @@ export class MiningTracker extends EventEmitter {
     if (!this.data) return;
     if (signature < MIN_SIGNATURE) return; // below the floor -> ignore entirely (no display, no call-out)
     const matches = this.data.index[String(signature)] ?? []; // empty = not a rock -> salvage debris
-    if (!matches.length && !confirmed) return;
+    // Two independent things have to hold before a non-ore number is called debris: the frame
+    // showed the scan glyph (it came from a real scan), AND the value is one debris actually
+    // takes. Either alone still let noise through.
+    if (!matches.length && (!confirmed || !isDebrisSignature(signature))) return;
     // Ignore a repeat read of the same signature (the loop polls the same rock every ~3s);
     // only a CHANGED signature is news worth re-announcing.
     if (this.scan && this.scan.signature === signature) return;
