@@ -544,6 +544,102 @@ const SWEEPS = `(async () => {
   return out;
 })()`;
 
+// ── Suite: what the Mining Scanner SAYS for each verdict ──────────────────────
+// The verdict model is the whole point of the feature, and the part Sub judges is what he HEARS.
+// Runs against mining.html standalone with the speech calls stubbed — a real one would make the
+// hidden test window talk out loud, which is how a synthetic "Debris" once spoke at Sub mid-session.
+const MININGSAY = `(async () => {
+  const out = [];
+  const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  await sleep(400);
+  // Stub BOTH speech paths (clips, and the Windows-TTS fallback) plus the sound cue, and record.
+  let said = null, chimed = false;
+  window.speakClips = (slugs, fallback) => { said = { slugs, fallback }; };
+  window.speak = (text) => { said = { slugs: null, fallback: text }; };
+  window.cue = async () => { chimed = true; };
+  const scan = (v, sig, matches, confirmed) => ({ signature: sig, matches, at: Date.now(), confirmed, verdict: v });
+  const say = (sc) => { said = null; chimed = false; view = { rocks: [], targets: [...targetSet], scan: sc, jobs: [] }; renderScan(); onNewScan(sc); };
+  const rock = (name, count) => ({ name, rarity: "Legendary", count });
+
+  localStorage.setItem("miningDebris", "on");
+  localStorage.setItem("miningSpeakMode", "target");
+  targetSet.clear();
+
+  // ore, not a target, targets-only mode -> shown, not announced (unchanged behaviour)
+  say(scan("ore", 3170, [rock("Quantainium", 1)], true));
+  await sleep(30);
+  ok("a non-target rock in targets-only mode stays quiet", said === null, JSON.stringify(said));
+  ok("...but the panel still names it", document.getElementById("scanNow").textContent.includes("Quantainium"));
+
+  // ore, targeted
+  targetSet.add("Quantainium");
+  say(scan("ore", 3170, [rock("Quantainium", 1)], true));
+  await sleep(30);
+  ok("a TARGET is announced", said && said.slugs && said.slugs[0] === "c_thatlookslike"
+     && said.slugs[1] === "n_quantainium", JSON.stringify(said && said.slugs));
+
+  // 19,200 = Savrilium x6 OR Aslarite x5 — the TARGET has to win, not matches[0]
+  targetSet.clear(); targetSet.add("Aslarite");
+  say(scan("ore", 19200, [rock("Savrilium", 6), rock("Aslarite", 5)], true));
+  await sleep(30);
+  ok("when two rocks share a signature, the TARGETED one is named",
+     said && said.slugs && said.slugs[1] === "n_aslarite", JSON.stringify(said && said.slugs));
+  ok("...and the panel leads with it too",
+     document.getElementById("scanNow").querySelector(".rock").textContent.includes("Aslarite"));
+
+  // 16,000 = Savrilium x5 AND eight debris panels
+  targetSet.clear();
+  say(scan("ore-or-debris", 16000, [rock("Savrilium", 5)], true));
+  await sleep(30);
+  ok("an ambiguous value is announced even in targets-only mode",
+     said && said.slugs && said.slugs[0] === "c_debrisor" && said.slugs[1] === "n_savrilium",
+     JSON.stringify(said && said.slugs));
+  ok("...and the panel flags it as maybe-debris",
+     !!document.getElementById("scanNow").querySelector(".maybe"));
+  targetSet.add("Savrilium");
+  say(scan("ore-or-debris", 16000, [rock("Savrilium", 5)], true));
+  await sleep(30);
+  ok("...and on a TARGET the prefix is hopeful, not dismissive",
+     said && said.slugs && said.slugs[0] === "c_thiscouldbe", JSON.stringify(said && said.slugs));
+  ok("...with the target chime", chimed);
+
+  // debris and unknown
+  targetSet.clear();
+  say(scan("debris", 6000, [], true));
+  await sleep(30);
+  ok("debris says Debris", said && said.slugs && said.slugs[0] === "n_debris", JSON.stringify(said && said.slugs));
+  ok("...without the target chime", !chimed);
+  const UNK = ["c_unknown1", "c_unknown2", "c_unknown3", "c_unknown4", "c_unknown5"];
+  const seen = new Set();
+  for (let i = 0; i < 60; i++) { say(scan("unknown", 2500 + i, [], true)); await sleep(2); if (said && said.slugs) seen.add(said.slugs[0]); }
+  ok("unknown says it doesn't know — and varies", seen.size >= 3 && [...seen].every(s => UNK.includes(s)),
+     [...seen].sort().join(", "));
+  ok("...and the panel says Unknown, not Debris",
+     document.getElementById("scanNow").textContent.includes("Unknown"),
+     document.getElementById("scanNow").textContent.slice(0, 60));
+
+  // the switch
+  localStorage.setItem("miningDebris", "off");
+  say(scan("debris", 8000, [], true));
+  await sleep(30);
+  ok("the switch silences debris", said === null);
+  say(scan("unknown", 9999, [], true));
+  await sleep(30);
+  ok("...and unknown", said === null);
+  say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
+  await sleep(30);
+  ok("...and an ambiguous read you aren't hunting", said === null);
+  targetSet.add("Bexalite");
+  say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
+  await sleep(30);
+  ok("...but NEVER a target", said && said.slugs && said.slugs[0] === "c_thiscouldbe",
+     JSON.stringify(said && said.slugs));
+  localStorage.setItem("miningDebris", "on");
+  targetSet.clear();
+  return out;
+})()`;
+
 // ── Suite: the patch-notes card fits the MONITOR ──────────────────────────────
 // This card has trapped a user once already (0.1.31: close controls below the screen, with an
 // always-on-top overlay over Task Manager). The 0.1.32 fix pinned the header/footer and capped the
@@ -1301,6 +1397,7 @@ app.whenReady().then(async () => {
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
+    fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
     // hunting that by bisection wastes a run each time.
