@@ -8,6 +8,12 @@
 //
 // Suite 1 runs with no shell API (fresh install) and exercises grouping.
 // Suite 2 injects a stub preload reporting a saved layout, and checks the restore path.
+//
+// ⚠️ EVERY SUITE BODY IS A TEMPLATE LITERAL, so a backtick anywhere inside one — including in a
+// comment, e.g. quoting a variable name the way the rest of this codebase does — ENDS the string and
+// the whole file fails to parse. That failure is easy to miss: `npm run test:widgets` exits 0 and
+// prints an "App threw an error during load" stack instead of any assertions, so a run that tested
+// NOTHING reads as a quiet success. Use plain words inside a suite; `node --check` catches it.
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
 
@@ -710,7 +716,15 @@ const SCANBOX = `(async () => {
   // ⚠️ This suite drives the REAL control, which persists to the REAL sidecar config — including
   // a Reset. Remember whatever the user has calibrated and put it back at the end, or running the
   // tests silently destroys their scan region.
-  const userRegion = (typeof scanRegion !== "undefined" && scanRegion) ? JSON.parse(JSON.stringify(scanRegion)) : null;
+  // 🔑 Read it from the SIDECAR, not from this page's own scanRegion variable. That one is filled by
+  // an async /api/config fetch which may not have landed yet, so the suite could capture null (or a
+  // half-applied value), "restore" that at the end, and its own restore assertion would still pass
+  // while the user's calibration quietly drifted a little on every run. It did drift.
+  // (No backticks anywhere in a suite body — these are template literals, and one ends the string.)
+  const cfg0 = await (await fetch("/api/config", { cache: "no-store" })).json();
+  const userRegion = cfg0 && cfg0.scanRegion ? JSON.parse(JSON.stringify(cfg0.scanRegion)) : null;
+  ok("the user's calibrated region was captured from the sidecar before touching anything",
+     cfg0 != null, JSON.stringify(userRegion));
   ok("...and is off until asked for", getComputedStyle(box).display === "none");
 
   setScanBox(true);
@@ -786,50 +800,57 @@ const SCANBOX = `(async () => {
   ok("the pref still wins on its own", getComputedStyle(box).display === "none");
   if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
 
-  // ── what the OCR read, printed at roughly the size the game drew it ───────────
-  // The whole value of this is comparison, so the number has to be legible at HUD scale and a
-  // REFUSED read has to show too — a number the app threw away is exactly the one worth seeing.
+  // ── the number the OCR read, centered under the box ──────────────────────────
+  // Just the number: Sub asked for it outside the box, centered, without the labels the first
+  // version carried. A REFUSED read still has to show — a number the app threw away is exactly
+  // the one worth seeing next to the real signature.
   localStorage.setItem("miningScanBox", "on");
   syncScanBox();
   await sleep(60);
   const val = document.getElementById("sbReadVal"), read = document.getElementById("sbRead");
   ok("nothing is shown before a read arrives", getComputedStyle(read).display === "none");
-  // 13px of text on a 1440-tall frame is the measured HUD signature (see glyphSearchBox).
   showScanRead({ signature: 16000, raw: "16,000", box: { x: 0.5, y: 0.3, w: 0.03, h: 13 / 1440 },
                  verdict: "ore-or-debris", announced: true, why: "ore-or-debris, announced" });
   await sleep(60);
-  const ci2 = canvasInfo || { px: 0, py: 0, pw: innerWidth, ph: innerHeight };
-  ok("the read is shown", getComputedStyle(read).display === "flex" && val.textContent.includes("16,000"),
-     val.textContent);
-  const fs = parseFloat(getComputedStyle(val).fontSize);
-  const wantFs = (13 / 1440) * ci2.ph * 1.4;
-  ok("...at roughly the size the game drew it", Math.abs(fs - wantFs) <= 2,
-     fs.toFixed(1) + "px vs " + wantFs.toFixed(1) + "px from the OCR bbox");
-  ok("...and an accepted read isn't struck through", !box.classList.contains("refused"));
-  ok("...and it stays inside the box's own rect (the shell only hit-tests that)",
-     (() => { const rr = read.getBoundingClientRect(), br = box.getBoundingClientRect();
-              return rr.left >= br.left - 1 && rr.right <= br.right + 1 && rr.bottom <= br.bottom + 1; })());
-  // A refused read is the diagnostic case: it must appear, and look refused.
+  ok("the read is shown", getComputedStyle(read).display === "flex", getComputedStyle(read).display);
+  ok("...as the number and NOTHING else", val.textContent === "16,000", JSON.stringify(val.textContent));
+  ok("...and the whole readout is just that one number",
+     read.textContent.trim() === "16,000", JSON.stringify(read.textContent));
+  // 🔑 Was sized off the OCR bbox, which made a refused read (big HUD lettering, measured 22-33px)
+  // render at 31-46px — "way too big". One fixed, legible size now, whatever the bbox says.
+  const fsBig = parseFloat(getComputedStyle(val).fontSize);
+  showScanRead({ signature: 4001, raw: "4,001", box: { x: 0.5, y: 0.3, w: 0.2, h: 33 / 1440 },
+                 verdict: "unknown", announced: true, why: "unknown, announced" });
+  await sleep(60);
+  ok("the size does NOT follow the OCR bbox", parseFloat(getComputedStyle(val).fontSize) === fsBig,
+     fsBig + "px both times");
+  ok("...and stays modest", fsBig <= 18, fsBig + "px");
+  // Centered on the box, and below it — the middle of the box is where the real signature sits.
+  const cBox = (b) => (b.left + b.right) / 2;
+  ok("it is centered on the box", Math.abs(cBox(read.getBoundingClientRect()) - cBox(box.getBoundingClientRect())) <= 1,
+     Math.round(cBox(read.getBoundingClientRect())) + " vs " + Math.round(cBox(box.getBoundingClientRect())));
+  ok("...and sits OUTSIDE it, below", read.getBoundingClientRect().top >= box.getBoundingClientRect().bottom - 1,
+     Math.round(read.getBoundingClientRect().top) + " vs " + Math.round(box.getBoundingClientRect().bottom));
+  // A refused read is the diagnostic case: it must appear, and be tellable apart without words.
   showScanRead({ signature: 30000, raw: "3O,OOO", box: null, verdict: null, announced: false,
                  why: "ignored (above 25,800, the largest signature the game can show — misread)" });
   await sleep(60);
-  ok("a REFUSED read is shown too", getComputedStyle(read).display === "flex" && val.textContent.includes("30,000"));
-  ok("...marked as refused", box.classList.contains("refused"));
-  ok("...with the reason", document.getElementById("sbReadWhy").textContent.includes("25,800"));
-  ok("...and the raw OCR text, because that's where the mistake is visible",
-     val.textContent.includes("3O,OOO"), val.textContent);
-  showScanRead({ signature: 16000, raw: "16,000", box: null, verdict: "ore-or-debris", announced: true, why: "x" });
-  await sleep(60);
-  ok("a clean read does NOT repeat itself as raw text", !val.textContent.includes("("), val.textContent);
-  ok("...and falls back to a sane size with no bbox", parseFloat(getComputedStyle(val).fontSize) >= 9);
+  ok("a REFUSED read is shown too", getComputedStyle(read).display === "flex" && val.textContent === "30,000",
+     val.textContent);
+  ok("...told apart by styling, not by more text", box.classList.contains("refused")
+     && getComputedStyle(val).textDecorationLine === "line-through");
+  ok("...and still says only the number", read.textContent.trim() === "30,000", JSON.stringify(read.textContent));
   if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
   syncScanBox();
 
-  // Hand the user's own calibration back — see the note at the top of this suite.
+  // Hand the user's own calibration back — see the note at the top of this suite. Verified by
+  // RE-READING the sidecar: asserting against this page's own variable is what let the drift hide.
   saveScanRegion(userRegion);
-  await sleep(150);
-  ok("the suite restored the region it found", JSON.stringify(scanRegion) === JSON.stringify(userRegion),
-     "now=" + JSON.stringify(scanRegion));
+  await sleep(250);
+  const cfg1 = await (await fetch("/api/config", { cache: "no-store" })).json();
+  ok("the suite gave the user's region back, byte for byte",
+     JSON.stringify((cfg1 && cfg1.scanRegion) || null) === JSON.stringify(userRegion),
+     "was=" + JSON.stringify(userRegion) + " now=" + JSON.stringify((cfg1 && cfg1.scanRegion) || null));
   return out;
 })()`;
 
@@ -1378,8 +1399,31 @@ app.disableHardwareAcceleration();
 // Suites run one window at a time, and destroying the last open window would otherwise trigger
 // Electron's default quit-on-window-all-closed and kill the run before the next suite loads.
 app.on("window-all-closed", () => {});
+// The scan read area is CALIBRATION the user did by hand, it lives in the real sidecar config, and
+// these suites drive the real control. Measured 2026-07-29: it was shrinking a little on every run —
+// and not only in the suite that owns it, so an in-suite save/restore could not protect it (the
+// value had already moved before that suite even captured it). Snapshot it once here, before any
+// window opens, and put it back once at the end whatever happened in between. Defending the user's
+// data at the boundary beats chasing whichever suite is the writer.
+async function readScanRegion() {
+  try {
+    const r = await fetch(`http://localhost:${PORT}/api/config`, { cache: "no-store" });
+    const c = await r.json();
+    return c && c.scanRegion ? c.scanRegion : null;
+  } catch { return undefined; } // undefined = couldn't read, so don't presume to write anything back
+}
+async function writeScanRegion(region) {
+  try {
+    await fetch(`http://localhost:${PORT}/api/config`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scanRegion: region }),
+    });
+  } catch { /* the sidecar went away; nothing we can do from here */ }
+}
+
 app.whenReady().then(async () => {
   let fails = 0;
+  const region0 = await readScanRegion();
   try {
     fails += await run("widget grouping", GROUPING, null);
     fails += await run("pair merges (brute force)", PAIRS, null);
@@ -1405,6 +1449,19 @@ app.whenReady().then(async () => {
     if (e && e.stack) console.error(String(e.stack).split("\n").slice(0, 8).join("\n"));
     console.error(`is the sidecar running? \`npm run overlay\` should be listening on :${PORT}`);
     fails = 1;
+  }
+  // Hand the user's calibration back, and SAY whether it survived — a silent restore is how this
+  // went unnoticed for a whole session.
+  if (region0 !== undefined) {
+    const drifted = JSON.stringify(await readScanRegion()) !== JSON.stringify(region0);
+    if (drifted) {
+      await writeScanRegion(region0);
+      const now = await readScanRegion();
+      const back = JSON.stringify(now) === JSON.stringify(region0);
+      console.log(`\nscan read area: a suite moved it; ${back ? "restored" : "⚠ COULD NOT RESTORE"} ` +
+                  JSON.stringify(region0));
+      if (!back) { console.log(`  it is now ${JSON.stringify(now)} — re-drag it, or use Reset.`); fails++; }
+    }
   }
   console.log(fails ? `\nFAILED (${fails})` : "\nall widget DOM tests passed");
   process.exitCode = fails ? 1 : 0;

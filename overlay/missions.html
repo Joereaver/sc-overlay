@@ -627,21 +627,24 @@
     background: rgba(8, 17, 26, 0.85); }
   #scanBox .sb-reset:hover { color: var(--cyan-bright); }
   body.scanbox.sb-dragging #scanBox { border-style: solid; background: rgba(var(--accent-rgb), 0.10); }
-  /* The last thing the OCR read, printed at roughly the size the game drew the signature (the font
-     size comes from the number's own OCR bbox — see showScanRead). Bottom-LEFT: the grip owns the
-     bottom-right corner, and the middle is where the real number sits, which is the one place this
-     must not cover. Hidden until a read arrives, and it expires, because a stale number sitting
-     under a live HUD is worse than no number at all. */
-  #scanBox .sb-read { display: none; position: absolute; left: 5px; bottom: 4px; max-width: calc(100% - 30px);
-    align-items: baseline; gap: 7px; pointer-events: none; }
+  /* The last number the OCR read — just the number, centered, JUST BELOW the box (Sub, 2026-07-29:
+     outside it, centered, and without the labels the first version carried). Below rather than
+     inside because the middle of the box is where the real signature sits, and this is meant to be
+     compared against it, not laid over it. Purely display (pointer-events:none), so unlike a
+     CONTROL it is allowed to sit outside the rect the shell hit-tests.
+     🔑 NOT sized from the OCR bbox any more. That matched a real signature (~9px of text on Sub's
+     3440×1440) but a REFUSED read is usually big HUD lettering — measured 22–33px in sidecar.log,
+     which rendered at 31–46px and read as enormous. Matching the height of noise was never the
+     point; being legible is. Hidden until a read arrives, and it expires, because a stale number
+     under a live HUD is worse than none. */
+  #scanBox .sb-read { display: none; position: absolute; left: 0; right: 0; top: calc(100% + 5px);
+    justify-content: center; pointer-events: none; }
+  #scanBox.read-above .sb-read { top: auto; bottom: calc(100% + 5px); }
   #scanBox.has-read .sb-read { display: flex; }
-  #scanBox .sb-read-lbl { flex: none; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
-  #scanBox .sb-read-val { flex: none; font-family: var(--mono); font-weight: 700; line-height: 1;
-    color: var(--gold); text-shadow: 0 0 6px rgba(0, 0, 0, 0.9), 0 0 14px rgba(255, 210, 122, 0.25); }
+  #scanBox .sb-read-val { font-family: var(--mono); font-size: 15px; font-weight: 700; line-height: 1;
+    color: var(--gold); text-shadow: 0 0 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.8); }
+  /* A read the app threw away, told apart without adding a word about it. */
   #scanBox.refused .sb-read-val { color: var(--cyan-dim); text-decoration: line-through; }
-  #scanBox .sb-read-why { flex: 1 1 auto; min-width: 0; font-family: var(--sans); font-size: 9.5px;
-    color: var(--cyan-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* 🔑 Drag shield. A widget's neighbours are IFRAMES, and pointer events over an iframe go to
      ITS document — window.pointermove in this one simply stops firing, so a drag froze the
@@ -1178,13 +1181,9 @@
   <div id="scanBox">
     <span class="sb-tag">Scan read area · drag to move</span>
     <span class="sb-reset" id="sbReset" title="Put the read area back to its default position and size">Reset</span>
-    <!-- What the OCR read, at roughly the size the game drew it, so it can be compared against the
-         real number on screen. Present for EVERY read, including ones the app refused. -->
-    <span class="sb-read" id="sbRead">
-      <span class="sb-read-lbl">I read</span>
-      <span class="sb-read-val" id="sbReadVal"></span>
-      <span class="sb-read-why" id="sbReadWhy"></span>
-    </span>
+    <!-- The number the OCR read, to compare against the real one on screen. Present for EVERY read,
+         including the ones the app refused — those are the ones that explain a mistake. -->
+    <span class="sb-read" id="sbRead"><span class="sb-read-val" id="sbReadVal"></span></span>
     <span class="sb-grip" title="Drag to resize"></span>
   </div>
 
@@ -2525,33 +2524,20 @@
     try { pref = localStorage.getItem("miningScanBox") === "on"; } catch { /* no storage */ }
     setScanBox(pref && wShown(WBY.mining));
   }
-  // ── What the OCR read, printed in the box ───────────────────────────────────────────────────
-  // The point is comparison: a player looks at the real signature and at this, and a discrepancy
-  // explains itself ("I read 15,000, the screen says 16,000" — that's a 6 read as a 5). So it shows
-  // for EVERY read, including the ones the app refused, and it shows the RAW OCR text when that
-  // differs from the value that came out of it.
+  // ── The number the OCR read, under the box ──────────────────────────────────────────────────
+  // The point is comparison: the player reads the real signature and this one, and a discrepancy
+  // explains itself. So it shows for EVERY read, including the ones the app refused — and it shows
+  // the NUMBER, nothing else.
   const SCAN_READ_TTL_MS = 12000; // a number from a minute ago would be read as current. It isn't.
-  // The measured signature text height on a 3440×1440 frame is 13px (see glyphSearchBox), i.e.
-  // ~0.9% of frame height — the fallback for a read that arrives without a bbox.
-  const SCAN_READ_H = 13 / 1440;
-  // An OCR bbox hugs the digits, so it is about cap height; a font-size is taller than its caps by
-  // roughly a third. "Roughly the same size" is the ask, and this lands within a pixel or two.
-  const SCAN_READ_FONT = 1.4;
   let scanReadTimer = null;
   function showScanRead(info) {
     const el = document.getElementById("scanBox"); if (!el || !info) return;
-    const val = document.getElementById("sbReadVal"), why = document.getElementById("sbReadWhy");
     const n = Number(info.signature);
-    const shown = Number.isFinite(n) ? n.toLocaleString() : String(info.raw || "?");
-    // The raw text only earns space when it differs from the number we made of it — that gap IS the
-    // mis-read, and printing it always would just be noise.
-    const raw = typeof info.raw === "string" ? info.raw.trim() : "";
-    const rawDiffers = raw && raw.replace(/[^0-9]/g, "") !== String(Number.isFinite(n) ? n : "");
-    val.textContent = shown + (rawDiffers ? "  (" + raw + ")" : "");
-    const ci = scanDisplay();
-    const h = (info.box && info.box.h > 0 ? info.box.h : SCAN_READ_H) * ci.ph;
-    val.style.fontSize = Math.max(9, Math.round(h * SCAN_READ_FONT)) + "px";
-    why.textContent = info.why || "";
+    document.getElementById("sbReadVal").textContent =
+      Number.isFinite(n) ? n.toLocaleString() : String(info.raw || "?").trim();
+    // Sits under the box, so a box dragged to the bottom of the screen would put it off-screen.
+    const ci = scanDisplay(), r = el.getBoundingClientRect();
+    el.classList.toggle("read-above", r.bottom + 26 > ci.py + ci.ph);
     el.classList.toggle("refused", info.announced !== true);
     el.classList.add("has-read");
     clearTimeout(scanReadTimer);
