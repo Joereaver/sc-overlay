@@ -24,7 +24,11 @@ process.stdout.on("error", (e) => { if (e && e.code !== "EPIPE") throw e; });
 process.stderr.on("error", (e) => { if (e && e.code !== "EPIPE") throw e; });
 
 const PORT = process.env.OVERLAY_PORT || 8778;
-const URL = `http://localhost:${PORT}/missions.html?canvas=1&party&mining&notepad`;
+// `harness=1` marks this page as automation. The suite drives the LIVE sidecar and the LIVE config
+// (see SKILL.md), and the completion report now writes real crowdsourced answers — so a stray
+// synthetic click on a question would file a rating no human ever gave. The page refuses to POST
+// feedback when this flag is present.
+const URL = `http://localhost:${PORT}/missions.html?canvas=1&harness=1&party&mining&notepad`;
 
 const PRELUDE = `
   const out = [];

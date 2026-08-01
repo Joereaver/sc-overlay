@@ -2156,8 +2156,13 @@
     mrContract = null; mrAnswers = {};
   }
 
+  // `?harness=1` = the widget DOM suite, which drives the LIVE sidecar and the LIVE config. A stray
+  // synthetic click on a question would file a rating no human ever gave, straight into the
+  // crowdsourced set — the one kind of corruption that can't be spotted later, because a fabricated
+  // answer looks exactly like a real one.
+  const MR_HARNESS = new URLSearchParams(location.search).has("harness");
   function sendFeedback() {
-    if (!mrContract) return;
+    if (!mrContract || MR_HARNESS) return;
     fetch("/api/mission-feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
