@@ -14,9 +14,11 @@ import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseMissionEvent, contractKeyOf, type MissionEvent } from "./missions-parser.js";
+import { classifyMission, type CombatProfile, type MissionActivity } from "./mission-classify.js";
 import { categorize, type TabKey } from "./categories.js";
 import { parseLine } from "./parser.js";
 import { BlueprintDetailStore, type BlueprintDetail } from "./blueprint-detail.js";
+import type { SyncSource } from "./sync.js";
 
 // ---- dataset shape (matches tools/build-blueprint-data.sql output) ----
 export interface PoolEntry {
@@ -169,7 +171,14 @@ export interface Dataset {
  *   manual   — the user ticked it on (seeds inventory the log can't see),
  *   default  — starter gear every account owns (see DEFAULT_BLUEPRINTS).
  *   null     — not owned. */
-export type BlueprintSource = "in-game" | "manual" | "default" | null;
+/** How a blueprint came to be owned.
+ *  🔑 `"fab"` is a MANUAL tick the player made at the fabricator, where the game itself
+ *  was showing them the item — the kiosk only lists blueprints you own, so it is the one
+ *  ownership signal that survives log rotation. Kept apart from `"manual"` on purpose:
+ *  a site-side hand-tick is a claim, a fabricator confirmation is a claim BACKED BY a
+ *  screen the player was looking at. Telling them apart is what makes the "this item is
+ *  never in anyone's logs" analysis trustworthy. */
+export type BlueprintSource = "in-game" | "manual" | "fab" | "default" | null;
 
 export interface BlueprintStatus {
   name: string;
@@ -278,13 +287,12 @@ export interface TrackedView {
    *  receipt is never missed when it lands on a same-named mission you aren't viewing.
    *  null until a blueprint is received live this session. `at` = the log receipt time. */
   justReceived: (BlueprintReward & { at: string }) | null;
-  /** Present for ~30s after the on-screen mission completes (~8s for an abandon):
-   *  a summary card (payout, duration, blueprints received — or just "abandoned")
-   *  shown before moving to the next mission. null the rest of the time. */
+  /** Present for ~30s after a mission COMPLETES — the report card's data (payout, duration,
+   *  blueprints received, plus the crowdsourcing context). null the rest of the time.
+   *  An abandoned mission never sets this: there is no reward to summarise and nothing worth
+   *  asking about a contract you walked away from. */
   completion: {
     title: string | null;
-    /** How the mission ended — an abandoned card renders without stats. */
-    kind: "completed" | "abandoned";
     /** aUEC awarded (live "Awarded N aUEC"), or null if none correlated. */
     aUEC: number | null;
     /** The mission's static dataset payout (FixedReward) — shown on the card when no live
@@ -294,6 +302,33 @@ export interface TrackedView {
     durationMs: number | null;
     /** Blueprints received during the mission (name + item image for the card). */
     blueprints: BlueprintReward[];
+    /** Log time the mission ended. The report card's IDENTITY — it's what tells a re-render
+     *  apart from a genuinely new completion, so the card doesn't restart its timer every
+     *  time the view ticks. */
+    at: string;
+    /** The contract key this completion is for — the identity every piece of crowdsourced
+     *  feedback is filed under. null when the mission never resolved to a dataset entry,
+     *  which also means no feedback can be submitted for it. */
+    contractKey: string | null;
+    /** Who gave it, what CIG calls it, and the difficulty tier — context for the report. */
+    giver: string | null;
+    missionType: string | null;
+    rank: number | null;
+    /** Reputation the dataset says this mission grants. Carries `faction` as well as `scope` —
+     *  `scope` is the internal ladder name ("FactionReputation"), so a card that shows it reads
+     *  "FactionReputation +50" instead of "Headhunters +50". Display the faction. */
+    reputationGained: RepEntry[];
+    /** aUEC per hour for THIS run — the number people actually compare missions on.
+     *  null unless both a payout and a duration are known. */
+    aUecPerHour: number | null;
+    /** How many times this contract has been completed, including this one. Counted off
+     *  the contract key where possible; see recordMissionComplete for the title fallback. */
+    timesCompleted: number | null;
+    /** Blueprint-pool standing for this mission after the run — "you now have 7 of 15". */
+    poolProgress: { owned: number; total: number } | null;
+    /** What the game data already says the mission involves. `combat: null` is what makes
+     *  the report ask the player instead of telling them. */
+    classification: { combat: CombatProfile | null; activity: MissionActivity | null; source: "generator" | "missionType" | null };
   } | null;
   /** The manually-pinned missionId, or null when auto-following. */
   selectedId: string | null;
@@ -354,6 +389,10 @@ interface Persisted {
    *  hand. The log never reports these, so they're manual-only. Kept separate from
    *  `overrides` so they never inflate the blueprint collected count or the site sync. */
   guaranteedOwned?: string[];
+  /** Blueprints the player confirmed AT THE FABRICATOR, where the game was showing them
+   *  the item. Stored apart from `overrides` so a fabricator-backed claim stays
+   *  distinguishable from a site-side hand-tick forever — see BlueprintSource. */
+  fabOwned?: string[];
   /** Inferred reputation standing: mission giver -> highest rank we've seen them
    *  accept a mission at. Rep is server-side (never in the log), so this is the best
    *  available signal — a lower bound that only improves as they rank up. */
@@ -492,7 +531,6 @@ export function repLadderPosition(
 /** How long to keep a just-completed mission's summary card up before moving on. */
 const COMPLETION_HOLD_MS = 30_000;
 /** Abandoned missions get a shorter hold — just enough to explain the vanishing pool. */
-const ABANDON_HOLD_MS = 8_000;
 /** An "Awarded N aUEC" counts as a mission's payout if it fired within this of the
  *  completion (the award's own missionId is null, so we correlate by log time). */
 const REWARD_WINDOW_MS = 6_000;
@@ -590,6 +628,10 @@ export class MissionTracker extends EventEmitter {
    *  awards). Deliberately NOT part of `observed`/`overrides`, so these never count
    *  toward the blueprint total nor sync to the site. */
   private guaranteedOwned = new Set<string>();
+  /** Blueprint names the player confirmed at the FABRICATOR. Unlike `guaranteedOwned`
+   *  these ARE blueprints and DO count + sync — the point of the feature is recovering
+   *  ownership the log never reported. Held separately only so the source stays "fab". */
+  private fabOwned = new Set<string>();
   /** giver -> highest mission `rank` we've seen accepted. Inferred standing (rep is
    *  server-side and never logged). Persisted, so it survives across sessions. */
   private inferredRank = new Map<string, number>();
@@ -653,9 +695,12 @@ export class MissionTracker extends EventEmitter {
    *  mission for COMPLETION_HOLD_MS before the overlay moves to the next mission.
    *  Only set for real-time completions (see beginCompletion). */
   private completion:
-    | { missionId: string; title: string | null; kind: "completed" | "abandoned"; completedAtMs: number; acceptedAtMs: number | null; aUEC: number | null; payout: { min: number | null; max: number; currency: string | null } | null; until: number }
+    | { missionId: string; title: string | null; completedAtMs: number; acceptedAtMs: number | null; aUEC: number | null; payout: { min: number | null; max: number; currency: string | null } | null; until: number }
     | null = null;
   private completionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** DEV REPLAY ONLY — forced blueprint tiles for the current completion. See
+   *  forceCompletionBlueprints(). Display-only; never persisted, never synced. */
+  private forcedBlueprints: BlueprintReward[] | null = null;
   /** Last "Awarded N aUEC" seen (log time), to attach to the completion near it. */
   private lastReward: { amount: number; atMs: number } | null = null;
   /** Completed missions, newest first, capped — persisted for the idle recent list. */
@@ -850,9 +895,6 @@ export class MissionTracker extends EventEmitter {
         break;
       }
       case "end": {
-        // Capture whether this was the on-screen mission BEFORE marking it ended
-        // (marking it ended removes it from effectiveMissionId()).
-        const wasDisplayed = this.effectiveMissionId() === ev.missionId;
         // Any ended mission (complete/fail/abandon) leaves the active set, so the
         // picker matches what you actually have. COMPLETED also flags the badge.
         this.endedMissionIds.add(ev.missionId);
@@ -860,23 +902,32 @@ export class MissionTracker extends EventEmitter {
         if (ev.missionId === this.selectedMissionId) this.selectedMissionId = null;
         if (ev.state.includes("COMPLETED")) {
           this.completedMissionIds.add(ev.missionId);
-          if (wasDisplayed) this.beginCompletion(ev.missionId, this.missions.get(ev.missionId)?.title ?? null, ev.ts);
-        } else if (ev.state.includes("ABANDON") && wasDisplayed) {
-          // Brief "abandoned" card so the pool doesn't just vanish unexplained.
-          this.beginCompletion(ev.missionId, this.missions.get(ev.missionId)?.title ?? null, ev.ts, "abandoned");
+          // 🔑 NOT gated on `wasDisplayed`. Sub's requirement (2026-07-30): the report must fire
+          // for whichever mission actually ENDED, not whichever one the panel happens to be
+          // showing — he routinely runs several contracts at once and the auto-followed one is
+          // often the wrong one. The old display gate meant finishing an untracked mission
+          // produced no report and no chance to answer the questions.
+          this.beginCompletion(ev.missionId, this.missions.get(ev.missionId)?.title ?? null, ev.ts);
         }
+        // 🔑 An ABANDON shows NOTHING (Sub, 2026-07-30, after one popped at him). The report is a
+        // reward summary that asks you to rate a mission you just played — none of which applies
+        // to a contract you walked away from, and taking the whole panel over to tell you about
+        // something you chose to do is pure interruption. The old brief "abandoned" card existed
+        // to explain the pool vanishing; the panel simply moves to the next mission now.
         this.emit("change");
         break;
       }
 
       case "contractComplete": {
         // Friendlier completion signal (has the title); usually fires just before the
-        // MissionEnded push. Take over the display only for the mission on screen now.
+        // MissionEnded push. Fires the report for ANY mission that completes — see the `end`
+        // case above for why the old "only the mission on screen" gate was wrong. Whichever of
+        // the two signals arrives first wins; beginCompletion is idempotent per missionId.
         if (ev.missionId) {
           const info = this.missions.get(ev.missionId) ?? {};
           if (ev.title && !info.title) info.title = ev.title;
           this.missions.set(ev.missionId, info);
-          if (ev.missionId === this.effectiveMissionId()) this.beginCompletion(ev.missionId, ev.title, ev.ts);
+          this.beginCompletion(ev.missionId, ev.title, ev.ts);
         }
         break;
       }
@@ -950,13 +1001,12 @@ export class MissionTracker extends EventEmitter {
     missionId: string,
     title: string | null,
     ts: string | null,
-    kind: "completed" | "abandoned" = "completed",
   ): void {
     const completedAtMs = ts ? Date.parse(ts) : Date.now();
     if (!Number.isFinite(completedAtMs)) return;
     const info = this.missions.get(missionId);
     const aUEC =
-      kind === "completed" && this.lastReward && Math.abs(this.lastReward.atMs - completedAtMs) <= REWARD_WINDOW_MS
+      this.lastReward && Math.abs(this.lastReward.atMs - completedAtMs) <= REWARD_WINDOW_MS
         ? this.lastReward.amount
         : null;
     // Record to the persisted recent-mission history for BOTH real-time and
@@ -964,12 +1014,23 @@ export class MissionTracker extends EventEmitter {
     // Store the best-known payout: the live award, else the mission's FIXED dataset payout
     // (min===max) resolved NOW while the mission is still accepted — so the idle aUEC/hr can
     // count fixed-payout missions. Calculated-reward missions stay null (→ "—").
-    if (kind === "completed") {
+    {
       const p = this.datasetMission(missionId)?.payout ?? null;
       const fixed = p && p.min != null && p.min === p.max && p.max > 0 ? p.max : null;
       this.recordMissionComplete(missionId, title ?? info?.title ?? null, ts, aUEC ?? fixed);
     }
-    if (Date.now() - completedAtMs > COMPLETION_FRESH_MS) return; // historical replay — no card
+    // 🔑 Logged from the SIDECAR, so it lands in sidecar.log and can actually be read — the shell
+    // is a detached GUI process whose stdout goes nowhere. This exists because a real completion
+    // (2026-07-31T01:33:50Z) was recorded into the history but produced NO card, and the history
+    // write above happens BEFORE this gate — which is the only path that yields exactly that.
+    // `lag` is how far behind the game the watcher was when it read the line; if a missing card
+    // ever correlates with a lag near the limit, this gate is the cause and the limit is the fix.
+    const lagMs = Date.now() - completedAtMs;
+    if (lagMs > COMPLETION_FRESH_MS) {
+      console.log(`[completion] NO CARD for "${title ?? info?.title ?? "?"}" — log line was ${(lagMs / 1000).toFixed(1)}s old (limit ${COMPLETION_FRESH_MS / 1000}s)`);
+      return; // historical replay — no card
+    }
+    console.log(`[completion] card for "${title ?? info?.title ?? "?"}" — read ${lagMs}ms after the game logged it`);
     if (this.completion && this.completion.missionId === missionId) {
       if (title && !this.completion.title) this.completion.title = title;
       return;
@@ -977,26 +1038,41 @@ export class MissionTracker extends EventEmitter {
     // Real-time completion (not startup replay, and past the idempotency guard so it
     // runs once): fold its rep gain into the giver's witnessed total for the rep bar.
     // The current session is always the current patch (post-4.8-wipe), so no window check.
-    if (kind === "completed") this.accrueFromTitle(title ?? info?.title ?? null);
-    const holdMs = kind === "abandoned" ? ABANDON_HOLD_MS : COMPLETION_HOLD_MS;
+    this.accrueFromTitle(title ?? info?.title ?? null);
+    this.forcedBlueprints = null; // a new completion never inherits the last one's dev override
     this.completion = {
       missionId,
       title: title ?? info?.title ?? null,
-      kind,
       completedAtMs,
       acceptedAtMs: info?.acceptedAt ?? null,
       aUEC,
       payout: this.datasetMission(missionId)?.payout ?? null,
-      until: Date.now() + holdMs,
+      until: Date.now() + COMPLETION_HOLD_MS,
     };
     if (this.completionTimer) clearTimeout(this.completionTimer);
     this.completionTimer = setTimeout(() => {
       this.completion = null;
+      this.forcedBlueprints = null;
       this.completionTimer = null;
       this.emit("change"); // hold expired → overlay moves to the next mission
-    }, holdMs);
-    if (kind === "completed") this.saveState(); // persist the new recent-mission entry
+    }, COMPLETION_HOLD_MS);
+    this.saveState(); // persist the new recent-mission entry
     this.emit("change");
+  }
+
+  /** aUEC/hour for the just-completed run. Uses the live award if one was logged, else the
+   *  mission's FIXED dataset payout — a calculated-reward mission has no honest number here
+   *  and returns null rather than a made-up one. Sub-minute runs are excluded: dividing a
+   *  payout by 20 seconds produces a rate nobody can actually sustain. */
+  private completionRate(): number | null {
+    const c = this.completion;
+    if (!c || c.acceptedAtMs == null) return null;
+    const ms = c.completedAtMs - c.acceptedAtMs;
+    if (!(ms >= 60_000)) return null;
+    const p = c.payout;
+    const amount = c.aUEC ?? (p && p.min != null && p.min === p.max && p.max > 0 ? p.max : null);
+    if (amount == null) return null;
+    return Math.round(amount / (ms / 3_600_000));
   }
 
   /** Blueprint names received during the completed mission (receipt time between its
@@ -1223,6 +1299,25 @@ export class MissionTracker extends EventEmitter {
     else this.guaranteedOwned.delete(itemName);
     this.saveState();
     this.emit("change");
+  }
+
+  /** Tick a blueprint the player CONFIRMED at the fabricator. Separate from `setOwned`
+   *  only so the source survives as "fab" — see BlueprintSource for why that matters.
+   *  🔑 Never overrides an explicit not-owned tick: if the player has deliberately said
+   *  they don't have this, a kiosk glance must not silently contradict them. */
+  setFabOwned(blueprintName: string): boolean {
+    if (this.overrides.get(blueprintName) === false) return false;
+    if (this.fabOwned.has(blueprintName)) return false;
+    this.fabOwned.add(blueprintName);
+    this.saveState();
+    this.emit("change");
+    return true;
+  }
+
+  /** Is this blueprint already accounted for — by a receipt, a fabricator confirmation,
+   *  a manual tick, or the starter set? Drives the "should we even prompt" decision. */
+  isAlreadyOwned(blueprintName: string): boolean {
+    return this.isOwned(blueprintName).owned;
   }
 
   /** Clear the per-shard active-mission state (markers, ended/completed flags, the
@@ -1670,6 +1765,37 @@ export class MissionTracker extends EventEmitter {
 
   // ---- ownership resolution ----
 
+  /** DEV REPLAY ONLY: force the report's blueprint tiles for the CURRENT completion.
+   *
+   *  🔑 Why this is needed rather than just replaying a receipt: the replay may only "receive" a
+   *  blueprint the player already owns (see ownedPoolBlueprint), and `noteReceiptTime` keeps the
+   *  EARLIEST receipt — correctly, since an unlock date should be the first time you got it. So a
+   *  replayed receipt can never move that date into the simulated mission's accept→complete
+   *  window, and `completionBlueprints()` rightly returns nothing once the real receipt ages out.
+   *  The tiles would then silently vanish from every simulation, which is precisely the thing the
+   *  simulator exists to let you look at.
+   *
+   *  Display-only: no date is changed, nothing is persisted, nothing syncs. Cleared when the
+   *  completion clears or is replaced. */
+  forceCompletionBlueprints(names: string[]): void {
+    this.forcedBlueprints = names.length ? names.map((n) => this.blueprintReward(n)) : null;
+    this.emit("change");
+  }
+
+  /** A blueprint from this mission's pool that the player ALREADY owns, or null if they own
+   *  none of it. Exists for the dev replay (`src/dev-replay.ts`): a simulated "Received
+   *  Blueprint" goes through the SAME path as a real one, so it mutates the real collection and
+   *  SiteSync then pushes that collection with `replace:true`. Re-receiving something already
+   *  owned is a no-op against a set; inventing a new one would write a lie to the website. */
+  ownedPoolBlueprint(contractKey: string): string | null {
+    const m = this.dataset?.missions[contractKey];
+    if (!m) return null;
+    for (const entries of Object.values(m.pools ?? {})) {
+      for (const e of entries) if (this.isOwned(e.blueprint).owned) return e.blueprint;
+    }
+    return null;
+  }
+
   private isOwned(poolName: string): { owned: boolean; source: BlueprintSource } {
     // Explicit manual override on the exact pool name wins (owned or not-owned).
     if (this.overrides.has(poolName)) {
@@ -1678,6 +1804,9 @@ export class MissionTracker extends EventEmitter {
     }
     // Earned in-game (an observed receipt, incl. a variant) — most specific.
     if (matchesPoolName(poolName, this.observed)) return { owned: true, source: "in-game" };
+    // Confirmed at the fabricator. Ranked ABOVE a plain manual tick because the game was
+    // displaying the item at the time, and below an actual receipt, which is proof.
+    if (matchesPoolName(poolName, this.fabOwned)) return { owned: true, source: "fab" };
     // A manual override on a variant name.
     for (const [name, val] of this.overrides) {
       if (val && matchesPoolName(poolName, [name])) return { owned: true, source: "manual" };
@@ -1718,6 +1847,32 @@ export class MissionTracker extends EventEmitter {
     return exact.size ? [...exact] : [...baseItems];
   }
 
+  /** Last resort: the log and the dataset sometimes WORD THE SAME ITEM DIFFERENTLY.
+   *  The log's `BlackFire Racing Flight Suit` is the dataset's
+   *  `Neutrino Racing Flight Suit BlackFire` — the colour moves from suffix to prefix
+   *  and the manufacturer is dropped, so neither an exact nor a prefix match can ever
+   *  fire. Match on the TOKEN SET instead of word order.
+   *
+   *  🔑 Only ever returns a result when EXACTLY ONE item contains every token the
+   *  receipt used. Ambiguity is never guessed: an unresolved receipt costs one missing
+   *  tick, a wrongly-resolved one silently writes someone else's item into a player's
+   *  synced collection. Single-token receipts are refused outright — "Arclight" is a
+   *  subset of every Arclight variant and would resolve by luck. */
+  private resolveTokens(target: string, entries: Iterable<{ name: string; item: string | null }>): string[] {
+    const want = target.split(" ").filter(Boolean);
+    if (want.length < 2) return [];
+    const hits = new Set<string>();
+    for (const e of entries) {
+      if (!e.item) continue;
+      const have = new Set(norm(e.name).split(" ").filter(Boolean));
+      if (want.every((w) => have.has(w))) {
+        hits.add(e.item);
+        if (hits.size > 1) return []; // ambiguous — refuse rather than pick
+      }
+    }
+    return [...hits];
+  }
+
   /** Item UUID(s) for a received blueprint name. Resolved over mission pools AND the
    *  global blueprint `index` TOGETHER so that an EXACT match always beats a prefix
    *  match, regardless of which set it came from. This matters for camo/variant items:
@@ -1733,11 +1888,30 @@ export class MissionTracker extends EventEmitter {
         for (const e of pool) entries.push({ name: e.blueprint, item: e.item });
     if (this.dataset.index) for (const e of this.dataset.index) entries.push({ name: e.name, item: e.item });
     const direct = this.resolveName(norm(received), entries);
-    if (direct.length) return direct;
+    if (direct.length) return this.preferCatalog(direct);
     // Fallback: SC ship-component designation ("Mil/2/B Bolide", `STL-1B "Zephyr"`) →
     // the bare model the dataset stores ("Bolide", "Zephyr").
     const model = componentModel(received);
-    return model ? this.resolveName(norm(model), entries) : [];
+    if (model) {
+      const byModel = this.resolveName(norm(model), entries);
+      if (byModel.length) return this.preferCatalog(byModel);
+    }
+    // Word-order variants ("BlackFire Racing Flight Suit" vs the dataset's
+    // "Neutrino Racing Flight Suit BlackFire"). Unique matches only.
+    return this.resolveTokens(norm(received), entries);
+  }
+
+  /** A handful of names exist in mission POOLS under a UUID that is not the catalog's
+   *  ("Cinch Scraper Module", "Antium Core Jet", "BroadSpec"). Callers that need ONE
+   *  uuid take `[0]`, so which one wins was down to iteration order — and picking the
+   *  pool-only uuid syncs an item the site cannot render (it is absent from `index`,
+   *  so it has no name, image or page). Prefer the catalog uuid whenever the name
+   *  resolves to more than one. */
+  private preferCatalog(uuids: string[]): string[] {
+    if (uuids.length < 2 || !this.dataset?.index) return uuids;
+    const inIndex = new Set(this.dataset.index.map((e) => e.item));
+    const known = uuids.filter((u) => inIndex.has(u));
+    return known.length ? known : uuids;
   }
 
   /** Crafting detail (recipe / dismantle / craft time / stats / manufacturer) for a
@@ -1772,16 +1946,17 @@ export class MissionTracker extends EventEmitter {
    *  the earliest in-game receipt time among the names mapping to that UUID; null for
    *  manual overrides and receipts logged before unlock-time tracking existed (the
    *  site falls back to when it first recorded the blueprint). */
-  collectedItemsWithDates(): { uuid: string; unlockedAt: string | null; source: "in-game" | "manual" | "default" }[] {
-    const RANK = { default: 1, manual: 2, "in-game": 3 } as const;
-    const map = new Map<string, { unlockedAt: string | null; source: "in-game" | "manual" | "default" }>();
-    const consider = (uuid: string, ts: string | null, source: "in-game" | "manual" | "default") => {
+  collectedItemsWithDates(): { uuid: string; unlockedAt: string | null; source: SyncSource }[] {
+    // "fab" outranks "manual": the game was displaying the item when the player confirmed it.
+    const RANK = { default: 1, manual: 2, fab: 3, "in-game": 4 } as const;
+    const map = new Map<string, { unlockedAt: string | null; source: SyncSource }>();
+    const consider = (uuid: string, ts: string | null, source: SyncSource) => {
       const cur = map.get(uuid);
       if (!cur) {
         map.set(uuid, { unlockedAt: ts, source });
         return;
       }
-      // Keep the strongest source (in-game > manual > default) + earliest unlock time.
+      // Keep the strongest source (in-game > fab > manual > default) + earliest unlock time.
       if (RANK[source] > RANK[cur.source]) cur.source = source;
       if (ts && (cur.unlockedAt == null || Date.parse(ts) < Date.parse(cur.unlockedAt))) cur.unlockedAt = ts;
     };
@@ -1789,6 +1964,9 @@ export class MissionTracker extends EventEmitter {
     for (const d of this.dataset?.defaults ?? []) if (d.item) consider(d.item, null, "default");
     for (const [name, val] of this.overrides) {
       if (val) for (const u of this.itemUuidsForName(name)) consider(u, null, "manual");
+    }
+    for (const name of this.fabOwned) {
+      for (const u of this.itemUuidsForName(name)) consider(u, null, "fab");
     }
     for (const name of this.observed) {
       const ts = this.observedAt.get(name) ?? null;
@@ -1889,9 +2067,7 @@ export class MissionTracker extends EventEmitter {
       reputationGained: mission?.reputationGained ?? [],
       reputationLost: mission?.reputationLost ?? [],
       eventTrack,
-      completed:
-        (holdActive && this.completion!.kind === "completed") ||
-        (effectiveId ? this.completedMissionIds.has(effectiveId) : false),
+      completed: holdActive || (effectiveId ? this.completedMissionIds.has(effectiveId) : false),
       pools,
       totals: { owned, total },
       collectedTotal: this.observed.size + [...this.overrides.values()].filter(Boolean).length,
@@ -1902,11 +2078,23 @@ export class MissionTracker extends EventEmitter {
       completion: holdActive
         ? {
             title: this.completion!.title ?? mission?.title ?? tracked?.title ?? null,
-            kind: this.completion!.kind,
             aUEC: this.completion!.aUEC,
             payout: this.completion!.payout,
             durationMs: this.completion!.acceptedAtMs != null ? this.completion!.completedAtMs - this.completion!.acceptedAtMs : null,
-            blueprints: this.completion!.kind === "completed" ? this.completionBlueprints() : [],
+            blueprints: this.forcedBlueprints ?? this.completionBlueprints(),
+            // During the hold, `effectiveId` IS the completed mission (see holdActive above),
+            // so `key`, `mission`, `owned` and `total` in this scope already describe it —
+            // which is what makes the report independent of whatever the player had pinned.
+            at: new Date(this.completion!.completedAtMs).toISOString(),
+            contractKey: key,
+            giver: mission?.giver ?? null,
+            missionType: mission?.missionType ?? null,
+            rank: mission?.rank ?? null,
+            reputationGained: mission?.reputationGained ?? [],
+            aUecPerHour: this.completionRate(),
+            timesCompleted: key ? this.completedKeys.get(contractKeyOf(key)) ?? null : null,
+            poolProgress: total > 0 ? { owned, total } : null,
+            classification: classifyMission({ generatorClass: mission?.generatorClass, missionType: mission?.missionType }),
           }
         : null,
       selectedId: this.selectedMissionId,
@@ -1923,6 +2111,7 @@ export class MissionTracker extends EventEmitter {
       this.observedAt = new Map(Object.entries(data.observedAt ?? {}));
       this.overrides = new Map(Object.entries(data.overrides ?? {}));
       this.guaranteedOwned = new Set(data.guaranteedOwned ?? []);
+      this.fabOwned = new Set(data.fabOwned ?? []);
       this.inferredRank = new Map(Object.entries(data.inferredRank ?? {}));
       this.repWitnessed = new Map(Object.entries(data.repWitnessed ?? {}));
       this.completedTitles = new Map(Object.entries(data.completedTitles ?? {}));
@@ -1938,6 +2127,7 @@ export class MissionTracker extends EventEmitter {
       observed: [...this.observed],
       overrides: Object.fromEntries(this.overrides),
       guaranteedOwned: [...this.guaranteedOwned],
+      fabOwned: [...this.fabOwned],
       inferredRank: Object.fromEntries(this.inferredRank),
       repWitnessed: Object.fromEntries(this.repWitnessed),
       completedTitles: Object.fromEntries(this.completedTitles),

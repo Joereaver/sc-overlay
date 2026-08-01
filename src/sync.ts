@@ -14,11 +14,17 @@
 const SYNC_PATH = "/api/sc/sync";
 const DEBOUNCE_MS = 1500;
 
+/** How the app says a blueprint was acquired, as sent to subliminal.gg.
+ *  ⚠️ `"fab"` is NEWER than the site — a deployed site that doesn't know it must not
+ *  reject the whole snapshot. Confirm `/api/sc/sync` tolerates unknown source values
+ *  before shipping an app build that emits it. */
+export type SyncSource = "in-game" | "manual" | "fab" | "default";
+
 export interface SyncSnapshot {
   /** Collected blueprints as { uuid, unlockedAt, source }. unlockedAt = ISO in-game
    *  unlock time, or null when unknown (server falls back to when it first saw it).
-   *  source = how it was acquired: "in-game" | "manual" | "default". */
-  got: { uuid: string; unlockedAt: string | null; source: "in-game" | "manual" | "default" }[];
+   *  source = how it was acquired — see SyncSource. */
+  got: { uuid: string; unlockedAt: string | null; source: SyncSource }[];
   mission: { debugName: string; patch: string } | null;
 }
 

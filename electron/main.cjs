@@ -276,10 +276,13 @@ function startServer() {
   } else {
     // Dev: run the TS server via tsx. Same flag, same reason — `shell:true` means cmd.exe, which is
     // a console app too.
+    // SC_DEV unlocks the dev-replay endpoint (simulate finishing a mission without playing —
+    // see src/dev-replay.ts). It is set HERE and nowhere else, so the packaged spawn above can
+    // never carry it: that endpoint writes to the real blueprint collection, which syncs.
     server = spawn("npx tsx src/overlay-server.ts", {
       cwd: ROOT,
       shell: true,
-      env: { ...process.env, APP_VERSION },
+      env: { ...process.env, APP_VERSION, SC_DEV: "1" },
       stdio,
       windowsHide: true,
     });
@@ -381,15 +384,20 @@ function createOverlay() {
   // left it open last session, else armed-hidden if auto-show is on (so it can self-pop).
   overlay.webContents.on("did-finish-load", () => {
     try { overlay.setBounds(bounds); } catch { /* re-assert the full span past any creation-time clamp */ }
-    sendMiningVisible(miningVisible ? { on: true } : { on: false, arm: miningArm });
-    sendNotepadVisible({ on: notepadVisible });
-    sendTwitchChatVisible({ on: twitchChatVisible });
-    sendScFeedVisible({ on: scFeedVisible });
-    sendUnlockAlertVisible({ on: unlockAlertVisible });
-    sendPartyVisible({ on: partyVisible });
-    sendBattagliaVisible({ on: battagliaVisible });
-    sendWebViewVisible({ on: webViewVisible });
-    sendBindingChartVisible({ on: bindingChartVisible });
+    // 🔑 `initial: true` marks this as REPLAYING saved state, not the user turning something on.
+    // The renderer treats "turn this widget on" as "bring its tab to the front of its group" —
+    // correct for a click, wrong here, because replaying nine widgets in order left whichever
+    // member came last as the fronted tab and SAVED that over the user's choice. Without this
+    // flag a stack can never remember which tab you were looking at.
+    sendMiningVisible(miningVisible ? { on: true, initial: true } : { on: false, arm: miningArm, initial: true });
+    sendNotepadVisible({ on: notepadVisible, initial: true });
+    sendTwitchChatVisible({ on: twitchChatVisible, initial: true });
+    sendScFeedVisible({ on: scFeedVisible, initial: true });
+    sendUnlockAlertVisible({ on: unlockAlertVisible, initial: true });
+    sendPartyVisible({ on: partyVisible, initial: true });
+    sendBattagliaVisible({ on: battagliaVisible, initial: true });
+    sendWebViewVisible({ on: webViewVisible, initial: true });
+    sendBindingChartVisible({ on: bindingChartVisible, initial: true });
     pushWidgetStates();
   });
   applyMouse();
@@ -801,6 +809,20 @@ function registerMoveHotkey(accel) {
   return r;
 }
 
+// Confirms a fabricator claim prompt. Goes straight to the SIDECAR rather than into the widget:
+// the sidecar owns the prompt (including its 30s expiry), and its broadcast is what clears the
+// card — so a hotkey press and a button click travel the exact same path and can't disagree.
+// A press with no prompt live is a harmless no-op the server answers with why:"expired".
+let fabClaimAccel = null;
+function registerFabClaimHotkey(accel) {
+  if (fabClaimAccel) hotkeys.unregister(fabClaimAccel);
+  fabClaimAccel = null;
+  if (!accel || typeof accel !== "string") return { ok: true };
+  const r = hotkeys.register(accel, () => postApi("/api/fab/claim?accept=1"));
+  if (r.ok) fabClaimAccel = accel;
+  return r;
+}
+
 // ── actions ─────────────────────────────────────────────────────────────────
 
 // Reposition mode: whole panel becomes a drag surface (banner + Done in the page),
@@ -1181,6 +1203,7 @@ if (!app.requestSingleInstanceLock()) {
     let miningKey = "Shift+F3";
     let interactKey = "F";
     let moveKey = "Ctrl+Alt+M";
+    let fabClaimKey = "F4";
     try {
       const p = path.join(process.env.APPDATA || process.env.HOME || ".", "sc-blueprint-tracker", "config.json");
       const c = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -1194,6 +1217,7 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
+      if (typeof c.fabClaimHotkey === "string") fabClaimKey = c.fabClaimHotkey;
       if (c.holdToInteract === true) holdMode = true; // opt-in: require holding the interact key
     } catch { /* defaults */ }
     foreground.want("hold", holdMode); // only track the foreground app if something asks
@@ -1202,6 +1226,7 @@ if (!app.requestSingleInstanceLock()) {
     registerMiningHotkey(miningKey);
     registerInteractHotkey(interactKey);
     registerMoveHotkey(moveKey);
+    registerFabClaimHotkey(fabClaimKey);
     // Learn our elevation state (async) so the tray can offer "Restart as administrator" when
     // we're NOT elevated — the state hotkeys-over-a-focused-game depend on.
     checkElevated().then(() => refreshTray());
@@ -1305,6 +1330,8 @@ if (!app.requestSingleInstanceLock()) {
     registerInteractHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-move-hotkey", (_e, accel) =>
     registerMoveHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("set-fabclaim-hotkey", (_e, accel) =>
+    registerFabClaimHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("overlay:reset-layout", () => { resetWidgetLayout(); return true; });
   // Primary display's offset + size within the full-desktop canvas, so the page can default a
   // new/reset widget onto the PRIMARY monitor (not a corner of a left/top secondary display).

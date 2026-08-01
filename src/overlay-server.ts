@@ -12,6 +12,9 @@ import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
 import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
+import { MissionFeedbackStore } from "./mission-feedback.js";
+import { FabClaims } from "./fab-claim.js";
+import { SCENARIOS, replayLines, replayMissionId } from "./dev-replay.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
 import { loadCatalog, ocrImage, hasScanHud, classifyScreen, type CatalogEntry, type OcrResult, type ScanRegion } from "./screen-read.js";
@@ -84,6 +87,11 @@ interface Config {
    *  game.log can't give — it sees every accepted mission equally). Independent of fabCapture;
    *  either one arms the capture loop. Read by electron/capture.cjs each poll. */
   missionOcr: boolean;
+  /** Opt-in: when the fabricator shows a blueprint the tracker has no record of, offer to
+   *  tick it. Recovers ownership the log can never report (receipts predating the install,
+   *  or rotated-away logbackups) using the one screen that only lists what you own.
+   *  Independent of fabCapture — this needs no upload and no sync token. */
+  fabClaim: boolean;
   /** Mining Assistant: arms the capture loop to read the Refinement Center (job timers)
    *  and the mining scanner signature. Opt-in; read by electron/capture.cjs each poll. */
   miningAssistant: boolean;
@@ -176,6 +184,10 @@ interface Config {
   holdToInteract: boolean;
   /** Global hotkey that toggles arrange/move mode (Electron accelerator syntax). */
   moveHotkey: string;
+  /** Hotkey that CONFIRMS a fabricator claim prompt. A hotkey rather than only a click
+   *  because the overlay is click-through over the game — confirming with the mouse means
+   *  entering hold-to-interact mid-kiosk, which is exactly when you can least afford it. */
+  fabClaimHotkey: string;
   /** Recent-activity timestamps: relative ("2h ago") when true, absolute date+clock
    *  when false. Read by the overlay via the mission view's `prefs`. */
   timeRelative: boolean;
@@ -221,6 +233,7 @@ const DEFAULTS: Config = {
   syncEnabled: false,
   fabCapture: false,
   missionOcr: false,
+  fabClaim: false,
   miningAssistant: false,
   scanRegion: null,
   miningAutoShow: false,
@@ -259,6 +272,7 @@ const DEFAULTS: Config = {
   interactHotkey: "F",
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
+  fabClaimHotkey: "F4",
   timeRelative: true,
   shareLogs: false,
   seenChangelog: "",
@@ -559,10 +573,19 @@ function shipInfo() {
 // The overlay view plus user prefs the overlay needs (kept out of the tracker, which
 // doesn't know about config). Sent on every mission broadcast so a config change (e.g.
 // the time-format toggle) reaches the overlay live via broadcastMissions().
+/** Fabricator claim prompts — offer to tick a blueprint the kiosk is showing that we have
+ *  no record of. Session-scoped on purpose: the two-prompts-per-item budget resets when the
+ *  app restarts, which is the point (a prompt missed today is worth re-offering tomorrow). */
+const fabClaims = new FabClaims();
+
 function missionsPayload(): string {
   return JSON.stringify({
     ...tracker.view(),
     appVersion: APP_VERSION,
+    // The live claim prompt (or null). Rides the missions SSE because that is what the
+    // Unlock Alerts widget already listens to — no new channel, and it self-clears when
+    // the 30s window lapses because `current()` expires it on read.
+    fabClaim: fabClaims.current(Date.now()),
     live: twitchLive,
     ship: shipInfo(), // flown-ship manufacturer/theme/accent — push-live for external overlays
     prefs: {
@@ -570,6 +593,8 @@ function missionsPayload(): string {
       hideCatbar: config.hideCatbar,
       missionOcr: config.missionOcr,
       fabCapture: config.fabCapture,
+      fabClaim: config.fabClaim,
+      fabClaimKey: config.fabClaimHotkey,   // shown in the prompt ("or press F4")
       theme: effectiveTheme(),
       overlayTwist: config.overlayTwist,
       overlayScale: config.overlayScale,
@@ -600,6 +625,15 @@ const economy = new MiningEconomyStore(dataDir);
 const party = new PartyTracker(join(userDir, "party.json"), join(userDir, "party-sessions"));
 
 const mining = new MiningTracker({ dataDir, stateDir: userDir });
+
+// Crowdsourced mission facts (what you actually do in it, difficulty, soloable) collected by
+// the completion report. Local-only for now — this file IS the upload queue for when the
+// subliminal.gg endpoint lands.
+const missionFeedback = new MissionFeedbackStore(userDir);
+
+// Monotonic per-process counter so two runs of the same dev scenario are two distinct
+// completions rather than one the tracker de-duplicates by missionId.
+let replaySeq = 0;
 const miningClients = new Set<ServerResponse>();
 function miningSend(msg: unknown): void {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
@@ -1152,6 +1186,58 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
+  // The capture loop saw a blueprint at the Fabrication Kiosk. Decide whether to offer a
+  // tick. Posted on EVERY kiosk frame, so the interesting work is all in FabClaims (which
+  // refuses to re-prompt, nag, or restart its own timer) — this route only supplies the
+  // one thing that module can't know: whether the tracker already accounts for it.
+  if (url === "/api/fab/seen" && req.method === "POST") {
+    const body = await readBody(req);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const item = typeof body.item === "string" && body.item ? body.item : null;
+    const items = Array.isArray(body.items) ? body.items.filter((i: unknown) => typeof i === "string") : [];
+    const d = fabClaims.seen(
+      { item, items, name, enabled: config.fabClaim === true, owned: !!name && tracker.isAlreadyOwned(name) },
+      Date.now(),
+    );
+    // Logged from the SIDECAR, because electron/ stdout goes nowhere on a detached GUI app —
+    // and `why` is emitted verbatim so the log can't drift from the rule that produced it.
+    if (d.why !== "disabled" && d.why !== "already-owned") {
+      console.log(`[fab-claim] ${name || "(unnamed)"}: ${d.why}`);
+    }
+    if (d.prompt) broadcastMissions();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, why: d.why }));
+    return;
+  }
+
+  // The player answered a claim prompt. `accept` ticks it (and every same-named sibling);
+  // anything else just dismisses. Expiry is enforced inside FabClaims, so a click that
+  // lands after the 30s window ticks nothing and says so.
+  if (url === "/api/fab/claim" && req.method === "POST") {
+    const body = await readBody(req);
+    // Accept via BODY (the widget button) or QUERY (the global hotkey, which fires from the
+    // shell with no body). Without the query form a hotkey press would read as a dismissal —
+    // the opposite of what the player just asked for.
+    const accept = body.accept === true || /[?&]accept=1(&|$)/.test(req.url ?? "");
+    if (!accept) {
+      fabClaims.dismiss();
+      broadcastMissions();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, added: false, why: "dismissed" }));
+      return;
+    }
+    const p = fabClaims.accept(Date.now());
+    const added = p ? tracker.setFabOwned(p.name) : false;
+    if (added) {
+      console.log(`[fab-claim] ${p!.name}: CONFIRMED at the fabricator -> ticked (source=fab)`);
+      syncFull(); // push it to subliminal.gg like any other collection change
+    }
+    broadcastMissions();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, added, name: p?.name ?? null, why: p ? (added ? "added" : "already-owned") : "expired" }));
+    return;
+  }
+
   // Re-sync to the current log: wipe the active-mission set and re-read game.log
   // (drops stale missions from a previous shard the log never logged ending).
   if (url === "/api/missions/refresh" && req.method === "POST") {
@@ -1402,6 +1488,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (body.clearToken === true) config.syncToken = "";
     if (typeof body.fabCapture === "boolean") config.fabCapture = body.fabCapture;
     if (typeof body.missionOcr === "boolean") config.missionOcr = body.missionOcr;
+    if (typeof body.fabClaim === "boolean") config.fabClaim = body.fabClaim;
     if (typeof body.miningAssistant === "boolean") config.miningAssistant = body.miningAssistant;
     // The dragged scan region. `null` resets to the default band. Stored as fractions, and only
     // if it's usable: a region dragged off-frame or collapsed to nothing would silently stop all
@@ -1466,6 +1553,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();
+    if (typeof body.fabClaimHotkey === "string") config.fabClaimHotkey = body.fabClaimHotkey.trim();
     if (typeof body.timeRelative === "boolean") config.timeRelative = body.timeRelative;
     if (typeof body.shareLogs === "boolean") config.shareLogs = body.shareLogs;
     if (typeof body.showLoadout === "boolean") config.showLoadout = body.showLoadout;
@@ -1698,6 +1786,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       screenReading: {
         fabCapture: config.fabCapture === true,
         missionOcr: config.missionOcr === true,
+        fabClaim: config.fabClaim === true,
         miningAssistant: config.miningAssistant === true,
         shareLogs: config.shareLogs === true,
       },
@@ -1749,6 +1838,88 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     }
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── Dev replay ────────────────────────────────────────────────────────────────────────
+  // Simulate a mission ending so the report card and its questions can be tested without
+  // playing. Feeds real log LINES through the real parser into the live tracker.
+  // 🔑 Gated THREE ways, because this writes to the real collection: dev builds only
+  // (`SC_DEV` is set by main.cjs on the non-packaged spawn and by nothing else), loopback only,
+  // and it can only "receive" a blueprint the player already owns.
+  // Let the overlay WINDOW write a line into sidecar.log. It's a detached GUI process with no
+  // console, so this is the only way anything it observes becomes readable — see the comment on
+  // mrNote() in missions.html. Same dev+loopback gate as the replay below.
+  if (url === "/api/dev/note" && req.method === "GET") {
+    if (process.env.SC_DEV === "1" && fromThisMachine(req)) {
+      console.log(`[overlay] ${new URL(req.url ?? "/", "http://localhost").searchParams.get("msg") ?? ""}`);
+    }
+    res.writeHead(204, { "Cache-Control": "no-store" });
+    res.end();
+    return;
+  }
+
+  if (url === "/api/dev/replay") {
+    if (process.env.SC_DEV !== "1" || !fromThisMachine(req)) {
+      res.writeHead(404, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ error: "not available" }));
+      return;
+    }
+    if (req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ scenarios: SCENARIOS }));
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      const s = SCENARIOS.find((x) => x.id === (body as { scenario?: string })?.scenario);
+      if (!s) {
+        res.writeHead(400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ error: "unknown scenario", known: SCENARIOS.map((x) => x.id) }));
+        return;
+      }
+      // Only ever re-receive something already owned — see dev-replay.ts. A scenario that wants
+      // a drop but finds nothing owned still runs; it just has no blueprint, and says so.
+      const blueprint = s.drop ? tracker.ownedPoolBlueprint(s.contractKey) : null;
+      // Pin `now` so the completion timestamp we hand back is exactly the one the card will
+      // carry. The CLI compares them: without that it happily reports the PREVIOUS run's card
+      // as this run's success, which it did for the abandon scenario.
+      const now = Date.now();
+      const lines = replayLines(s, replayMissionId(++replaySeq), blueprint, now);
+      for (const line of lines) {
+        const ev = parseMissionEvent(parseLine(line));
+        if (ev) { tracker.apply(ev); party.apply(ev); }
+      }
+      // Force the tiles for this simulated run. The receipt above genuinely happened, but it
+      // cannot move an already-owned blueprint's unlock date into the window the report reads
+      // from — see forceCompletionBlueprints() for the full reason.
+      if (blueprint) tracker.forceCompletionBlueprints([blueprint]);
+      console.log(`[dev-replay] ${s.id} — ${lines.length} lines, blueprint=${blueprint ?? "none"}`);
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({
+        ok: true, scenario: s.id, lines: lines.length, blueprint, at: new Date(now).toISOString(),
+        outcome: s.outcome,
+        note: s.drop && !blueprint ? "you own nothing in this mission's pool, so it ran without a drop" : null,
+      }));
+      return;
+    }
+  }
+
+  // Crowdsourced mission facts. POST one answer from the completion report; GET reads back
+  // what this player already said about a contract so the report can pre-select it.
+  // 🔑 `url` is already stripped of its query string, so the key comes off `req.url` — a route
+  // written as `url.startsWith("/api/mission-feedback?")` could never match.
+  if (url === "/api/mission-feedback" && req.method === "POST") {
+    const body = await readBody(req);
+    const saved = missionFeedback.record({ ...(body as object), changelist: tracker.view().build, appVersion: APP_VERSION });
+    res.writeHead(saved ? 200 : 400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(saved ? { ok: true, answer: saved } : { ok: false, error: "no answers in submission" }));
+    return;
+  }
+  if (url === "/api/mission-feedback" && req.method === "GET") {
+    const key = new URL(req.url ?? "/", "http://localhost").searchParams.get("key");
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ answer: missionFeedback.get(key), total: missionFeedback.count() }));
     return;
   }
 

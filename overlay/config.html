@@ -224,6 +224,10 @@
       <label class="opt"><input type="checkbox" id="fabCapture" /> Help build the item image library</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">When you open a Fabrication Kiosk in-game, the app snaps the item's picture and contributes it to subliminal.gg's catalog — only items we don't have yet. You're credited on the contributor leaderboard. Needs a sync token.</span></span>
     </div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="fabClaim" /> Offer to add blueprints the fabricator shows that I'm missing</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">The game only writes a blueprint to your log the moment you receive it, and those logs get deleted over time — so anything you earned before installing the app can never be detected. The Fabrication Kiosk only lists blueprints you own, so when it shows one we have no record of, you get 30 seconds to add it. You confirm each one, so check the name matches what's on your screen.</span></span>
+    </div>
   </div>
 
   <div class="card">
@@ -359,6 +363,13 @@
       <button type="button" class="hkclear" id="interactHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('interact')">✕</button>
       <input type="hidden" id="interactHotkey" />
       <div class="hint" id="interactHotkeyHint"></div>
+    </div>
+    <div class="hkrow">
+      <span class="hklabel">Add missing blueprint</span>
+      <button type="button" id="fabClaimHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('fabClaim')">F4</button>
+      <button type="button" class="hkclear" id="fabClaimHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('fabClaim')">✕</button>
+      <input type="hidden" id="fabClaimHotkey" />
+      <div class="hint" id="fabClaimHotkeyHint"></div>
     </div>
     <div class="hkrow">
       <span class="hklabel">Move / arrange</span>
@@ -577,6 +588,7 @@
     document.body.classList.toggle("show-loadout", !!cfg.showLoadout);
     document.getElementById("syncEnabled").checked = !!cfg.syncEnabled;
     document.getElementById("fabCapture").checked = !!cfg.fabCapture;
+    document.getElementById("fabClaim").checked = !!cfg.fabClaim;
     document.getElementById("missionOcr").checked = !!cfg.missionOcr;
     document.getElementById("miningAutoShow").checked = !!cfg.miningAutoShow;
     document.getElementById("shareLogs").checked = !!cfg.shareLogs;
@@ -671,6 +683,7 @@
       revertThemeOnFoot: document.getElementById("revertThemeOnFoot").checked,
       syncEnabled: document.getElementById("syncEnabled").checked,
       fabCapture: document.getElementById("fabCapture").checked,
+      fabClaim: document.getElementById("fabClaim").checked,
       missionOcr: document.getElementById("missionOcr").checked,
       miningAutoShow: document.getElementById("miningAutoShow").checked,
       shareLogs: document.getElementById("shareLogs").checked,
@@ -749,6 +762,8 @@
                apply: (a) => window.overlayConfig && window.overlayConfig.setInteractHotkey && window.overlayConfig.setInteractHotkey(a) },
     move: { input: "moveHotkey", btn: "moveHotkeyBtn", hint: "moveHotkeyHint", def: "Ctrl+Alt+M",
                apply: (a) => window.overlayConfig && window.overlayConfig.setMoveHotkey && window.overlayConfig.setMoveHotkey(a) },
+    fabClaim: { input: "fabClaimHotkey", btn: "fabClaimHotkeyBtn", hint: "fabClaimHotkeyHint", def: "F4",
+               apply: (a) => window.overlayConfig && window.overlayConfig.setFabClaimHotkey && window.overlayConfig.setFabClaimHotkey(a) },
   };
   let capturing = null; // which HOTKEYS key is mid-capture, or null
   // 🔑 Have the hotkey fields been filled from the config yet? Save is clickable the moment the page
@@ -900,7 +915,7 @@
   // Auto-save the plain checkboxes the instant they're toggled, so a change can never be lost by
   // closing/scrolling away without clicking Save. (Theme, hotkeys, hold-to-interact and the file
   // pickers already save on change; the sync token stays manual so a half-typed token isn't sent.)
-  ["syncEnabled", "shareLogs", "fabCapture", "missionOcr", "miningAutoShow", "autoSwitch", "hwAccel", "amdCompat", "revertThemeOnFoot"]
+  ["syncEnabled", "shareLogs", "fabCapture", "fabClaim", "missionOcr", "miningAutoShow", "autoSwitch", "hwAccel", "amdCompat", "revertThemeOnFoot"]
     .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener("change", save); });
   // The sync field shows the truncated saved key; clear it on focus so a new token pastes
   // cleanly, and restore the preview on blur if nothing was typed.
@@ -914,6 +929,7 @@
       const c = await (await fetch("/api/config")).json();
       document.getElementById("missionOcr").checked = !!c.missionOcr;
       document.getElementById("fabCapture").checked = !!c.fabCapture;
+      document.getElementById("fabClaim").checked = !!c.fabClaim;
     } catch { /* ignore */ }
   });
   loadCfg();

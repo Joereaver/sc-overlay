@@ -22,7 +22,11 @@
     "dist": "npm run build:server && electron-builder",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test:glyph": "tsx tools/glyph-geom-test.ts && electron tools/glyph-test.cjs"
+    "test:glyph": "tsx tools/glyph-geom-test.ts && electron tools/glyph-test.cjs",
+    "test:classify": "tsx src/mission-classify.test.ts",
+    "test:feedback": "tsx src/mission-feedback.test.ts",
+    "test:fabclaim": "tsx src/fab-claim.test.ts",
+    "simulate": "node tools/simulate.mjs"
   },
   "dependencies": {
     "@gutenye/ocr-node": "^1.4.8",
