@@ -623,6 +623,17 @@ export class MissionTracker extends EventEmitter {
   /** Version family (major.minor, e.g. "4.8") from the log header — picks the right
    *  dataset when the exact build isn't bundled. See detectPatch / loadDataset. */
   private detectedFamily: string | null = null;
+  /** The environment tag of the log being watched: "PUB" = live, anything else is a test
+   *  server (PTU/EPTU/TECH-PREVIEW). null = not seen yet.
+   *  🔑 null must behave as LIVE. The app can attach to a log mid-session and never see the
+   *  header, and refusing to track anything in that case would break the common install for
+   *  the sake of the rare one. Only a POSITIVE non-PUB reading suppresses anything. */
+  private logEnv: string | null = null;
+  /** Whether receipts from the log currently being read should count toward the real
+   *  collection. See logEnv. */
+  private get isLiveEnv(): boolean {
+    return this.logEnv === null || this.logEnv === "PUB";
+  }
 
   /** Guaranteed ITEM rewards ticked by hand (manual-only — the log never reports item
    *  awards). Deliberately NOT part of `observed`/`overrides`, so these never count
@@ -739,6 +750,15 @@ export class MissionTracker extends EventEmitter {
    *  correct when the exact build isn't bundled. The header lines can arrive in any
    *  order, so re-pick the dataset whenever either signal changes. */
   detectPatch(rawLine: string): void {
+    // 🔑 Which ENVIRONMENT this log belongs to, read from the header the same way
+    // verifyFromLogs does. The retroactive scan has always skipped non-PUB sessions; the
+    // LIVE path never checked at all, so playing PTU with the app open folded test-server
+    // blueprints into the real collection and SiteSync pushed them with replace:true — as
+    // if earned on live. Sub, 2026-08-01: "no one's gonna want to track the PTU."
+    // Detected here because every line already passes through this method.
+    const env = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(rawLine);
+    if (env) this.logEnv = (env[1] || env[2] || "").toUpperCase() || null;
+
     const fam = rawLine.match(/(?:Product|File)Version:\s*(\d+\.\d+)/);
     const familyChanged = !!fam && fam[1] !== this.detectedFamily;
     if (familyChanged) this.detectedFamily = fam![1];
@@ -944,6 +964,10 @@ export class MissionTracker extends EventEmitter {
         break;
       }
       case "blueprintReceived": {
+        // A test-server receipt is not part of your live collection and must never sync.
+        // Dropped here rather than filtered later: `observed` is the authoritative set
+        // SiteSync pushes with replace:true, so anything that reaches it is already live.
+        if (!this.isLiveEnv) break;
         const isNew = !this.observed.has(ev.name);
         const dateChanged = this.noteReceiptTime(ev.name, ev.ts);
         if (isNew) this.observed.add(ev.name);

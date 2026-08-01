@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync } from "node:fs";
 import { extname, join, dirname } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
@@ -301,7 +301,7 @@ let config: Config = loadConfig();
  *  first. SC installs as <root>\StarCitizen\<CHANNEL>\game.log (LIVE, PTU, EPTU,
  *  TECH-PREVIEW, HOTFIX, GAME, …). The channel whose log was written most recently is
  *  the one the player actually plays, so that's the recommended pick. */
-function detectGameLogs(): { path: string; channel: string; mtimeMs: number }[] {
+function detectGameLogs(): { path: string; channel: string; mtimeMs: number; live: boolean }[] {
   const bases: string[] = [];
   for (const d of ["C", "D", "E", "F", "G", "H"])
     for (const sub of [
@@ -315,7 +315,7 @@ function detectGameLogs(): { path: string; channel: string; mtimeMs: number }[] 
   // Also scan the parent of the currently-configured path (its siblings = channels).
   try { bases.push(dirname(dirname(config.logPath))); } catch { /* ignore */ }
 
-  const found: { path: string; channel: string; mtimeMs: number }[] = [];
+  const found: { path: string; channel: string; mtimeMs: number; live: boolean }[] = [];
   const seen = new Set<string>();
   for (const base of bases) {
     let channels: string[];
@@ -326,11 +326,50 @@ function detectGameLogs(): { path: string; channel: string; mtimeMs: number }[] 
       if (seen.has(key)) continue;
       try {
         const st = statSync(p);
-        if (st.isFile()) { found.push({ path: p, channel: ch, mtimeMs: st.mtimeMs }); seen.add(key); }
+        if (st.isFile()) { found.push({ path: p, channel: ch, mtimeMs: st.mtimeMs, live: isLiveLog(p) }); seen.add(key); }
       } catch { /* no game.log in this channel */ }
     }
   }
-  return found.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  // 🔑 A LIVE log beats a newer one. Picking purely by mtime pointed the app at PTU for
+  // anyone who had dabbled there most recently — and since only live progress counts, that
+  // meant tracking nothing real while their actual history sat in a sibling folder.
+  // Judged by the log's own `--envtag`, never the folder name: names are user-renamable
+  // (and on some installs the channels are junctions to one folder), the header is not.
+  // Name is the LAST tie-break and nothing more. It matters only when several candidates are
+  // equally live and equally recent — which happens when the channel folders are junctions to
+  // one install (Sub's setup: six paths, one inode, identical mtimes). Without it the winner
+  // is directory order, so a live player can be told they're on "EPTU". It can never override
+  // the env tag or recency, so a renamed folder still can't misrepresent a log.
+  const nameRank = (ch: string) => {
+    const c = ch.toUpperCase();
+    return c === "LIVE" ? 0 : c === "GAME" ? 1 : 2;
+  };
+  return found.sort((a, b) => {
+    if (a.live !== b.live) return a.live ? -1 : 1;
+    if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs;
+    return nameRank(a.channel) - nameRank(b.channel);
+  });
+}
+
+/** Is this game.log a LIVE (PUB) session? Reads only the header, where the tag lives —
+ *  these files reach tens of MB and detection runs at startup.
+ *  Unknown reads as LIVE: a log too short to carry a header yet must not be ranked below
+ *  a real test-server log. Mirrors the same tolerance as the tracker's own env gate. */
+function isLiveLog(p: string): boolean {
+  try {
+    const fd = openSync(p, "r");
+    try {
+      const buf = Buffer.alloc(4096);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      const m = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(buf.toString("utf8", 0, n));
+      const tag = (m?.[1] || m?.[2] || "").toUpperCase();
+      return !tag || tag === "PUB";
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return true; // unreadable → don't demote it on a guess
+  }
 }
 
 // Save to the writable user dir; a write failure must never crash the server
@@ -1206,15 +1245,36 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Re-scan the current log + all rotated logbackups for received-blueprint receipts
   // and fold them into the collected set (recovers history + accidental un-ticks).
   if (url === "/api/missions/verify" && req.method === "POST") {
+    // 🔑 Scan EVERY channel folder, not just the configured one. A player who has LIVE and
+    // PTU as separate installs gets pointed at whichever they played most recently — so
+    // someone who dabbles in PTU had their entire LIVE history sitting unscanned in a
+    // sibling folder while verify found nothing (the envtag gate correctly rejected every
+    // PTU session it was given). Scanning siblings is safe precisely BECAUSE that gate
+    // reads the environment out of each log's header rather than trusting the folder name:
+    // a renamed or oddly-named channel can neither hide a live log nor smuggle in a test one.
     const paths: string[] = [];
-    if (existsSync(config.logPath)) paths.push(config.logPath);
-    try {
-      const backups = join(dirname(config.logPath), "logbackups");
-      for (const f of readdirSync(backups)) {
-        if (f.toLowerCase().endsWith(".log")) paths.push(join(backups, f));
+    const seenPaths = new Set<string>();
+    const addLog = (p: string) => {
+      const k = p.toLowerCase();
+      if (!seenPaths.has(k) && existsSync(p)) { seenPaths.add(k); paths.push(p); }
+    };
+    const addChannel = (dir: string) => {
+      addLog(join(dir, "game.log"));
+      try {
+        const backups = join(dir, "logbackups");
+        for (const f of readdirSync(backups)) {
+          if (f.toLowerCase().endsWith(".log")) addLog(join(backups, f));
+        }
+      } catch {
+        /* no logbackups dir for this channel */
       }
+    };
+    addChannel(dirname(config.logPath)); // the configured channel first
+    try {
+      const root = dirname(dirname(config.logPath)); // …/StarCitizen — its children are channels
+      for (const ch of readdirSync(root)) addChannel(join(root, ch));
     } catch {
-      /* no logbackups dir */
+      /* unusual layout — the configured channel alone still works */
     }
     const result = tracker.verifyFromLogs(paths);
     syncFull(); // push the recovered collection to subliminal.gg if sync is on
