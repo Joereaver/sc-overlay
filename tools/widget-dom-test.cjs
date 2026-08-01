@@ -696,9 +696,16 @@ const PATCHNOTES = `(async () => {
        Math.round(fBot) + " <= " + (c.top + c.h));
     // Capping without a scroll would just hide notes, which is NOT the ask ("I don't want to just
     // cut it off"): the overflow has to be reachable.
-    ok("[" + c.label + "] the notes scroll rather than being cut off",
-       list.scrollHeight > list.clientHeight && getComputedStyle(list).overflowY === "auto",
-       list.clientHeight + " of " + list.scrollHeight + "px shown");
+    // KEY: assert REACHABILITY, not scrolling. The old form required scrollHeight > clientHeight,
+    // which silently asserts "the changelog is long" - it went red the moment a release shipped
+    // with short notes (0.1.36: 247px of content in a 356px card; nothing to scroll, nothing
+    // wrong). A permanently-failing assertion hides real regressions, which is worse than the gap
+    // it was covering. What matters either way: no note is unreachable.
+    const scrolls = list.scrollHeight > list.clientHeight;
+    ok("[" + c.label + "] no notes are unreachable",
+       scrolls ? getComputedStyle(list).overflowY === "auto" : list.scrollHeight <= list.clientHeight + 1,
+       (scrolls ? "overflows and scrolls" : "fits, no scroll needed") +
+       " - " + list.clientHeight + " of " + list.scrollHeight + "px");
   }
   document.getElementById("whatsnew").classList.remove("show");
   return out;

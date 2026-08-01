@@ -2048,7 +2048,18 @@
     return h + "</div>";
   }
 
+  // 🔑 The report lives INSIDE #panel, and `body.bp-hidden #panel {display:none}` means a closed
+  // Mission & BP Tracker would make it structurally impossible to show — a regression the earlier
+  // screen-centred version did not have. Someone who closes the widget would silently stop seeing
+  // what they unlocked and stop being asked anything. So the report un-hides the panel for its own
+  // duration and puts it back exactly as it was; `w.s.visible` is never touched, so the user's
+  // actual preference survives, and the restore is unconditional so it cannot strand the panel open.
+  let mrForcedPanel = false;
   function showReport(c) {
+    if (document.body.classList.contains("bp-hidden")) {
+      document.body.classList.remove("bp-hidden");
+      mrForcedPanel = true;
+    }
     mrContract = c.contractKey;
     mrAnswers = {};
     // Pre-select whatever this player said last time about this contract, so a re-run shows
@@ -2137,6 +2148,7 @@
     if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
     $("mreport").classList.remove("show");
+    if (mrForcedPanel) { document.body.classList.add("bp-hidden"); mrForcedPanel = false; }
     // 🔑 mrAt is NOT cleared. It's the "already shown this completion" marker, and the server
     // keeps serving v.completion for its full 30s hold — so clearing it here would make the very
     // next view tick decide this was a new completion and pop the card straight back up. A ✕ has
