@@ -59,6 +59,24 @@ try {
   check("rejected submission is not stored", store.record({ contractKey: "junk" }), null);
   check("still two rows after a rejection", store.count(), 2);
 
+  // --- the upload queue ---------------------------------------------------------------
+  const queued = store.pending();
+  check("both rows queued for upload", queued.length, 2);
+  store.markUploaded(queued);
+  check("nothing left pending after a successful upload", store.pending().length, 0);
+
+  // A player can revise an answer while the upload is in flight. Clearing `pending` on the
+  // NEWER row would strand that revision locally forever, so markUploaded only clears rows
+  // still identical to what was sent.
+  const inFlight = store.pending();
+  store.record({ contractKey: "Covalex_Hauling_1", difficulty: 5 });
+  const revised = store.get("Covalex_Hauling_1")!;
+  check("a revision goes back to pending", revised.pending, true);
+  store.markUploaded([...inFlight, { ...revised, at: "1999-01-01T00:00:00.000Z" }]);
+  check("a stale ack does NOT clear the revision", store.get("Covalex_Hauling_1")?.pending, true);
+  store.markUploaded(store.pending());
+  check("acking the current row does clear it", store.get("Covalex_Hauling_1")?.pending, false);
+
   check("file written", existsSync(join(dir, "mission-feedback.json")), true);
   const onDisk = JSON.parse(readFileSync(join(dir, "mission-feedback.json"), "utf8"));
   check("file holds both rows", onDisk.length, 2);

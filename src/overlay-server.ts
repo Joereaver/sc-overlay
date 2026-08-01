@@ -631,6 +631,38 @@ const mining = new MiningTracker({ dataDir, stateDir: userDir });
 // subliminal.gg endpoint lands.
 const missionFeedback = new MissionFeedbackStore(userDir);
 
+/** Push answered missions to subliminal.gg. Uses the SAME device token as the blueprint
+ *  sync (there is only one credential and one account), so a player who has connected the
+ *  tracker is already set up — and a player who hasn't simply keeps their answers locally
+ *  until they do. The endpoint upserts per (player, contract), so re-sending the whole
+ *  queue is harmless and rows stay `pending` until a request actually succeeds. */
+async function flushMissionFeedback(): Promise<void> {
+  if (!config.syncEnabled || !config.syncToken) return;
+  const pending = missionFeedback.pending();
+  if (pending.length === 0) return;
+  const base = (process.env.SC_SYNC_BASE || "https://subliminal.gg").replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${base}/api/sc/mission-feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.syncToken}` },
+      body: JSON.stringify({ answers: pending }),
+    });
+    if (!res.ok) {
+      // Leave everything pending and try again later. A 401 means the token needs
+      // re-pasting; anything else is transient as far as this queue is concerned.
+      console.log(`[feedback] upload refused (${res.status}) — ${pending.length} answers still queued`);
+      return;
+    }
+    missionFeedback.markUploaded(pending);
+    console.log(`[feedback] uploaded ${pending.length} answer(s) to ${base}`);
+  } catch (err) {
+    console.log(`[feedback] upload failed (${(err as Error).message}) — ${pending.length} answers still queued`);
+  }
+}
+// Retry the queue periodically: the site may be down, the token may not be pasted yet, or
+// the player may be offline mid-session. Nothing here is urgent enough to warrant more.
+setInterval(() => void flushMissionFeedback(), 10 * 60_000);
+
 // Monotonic per-process counter so two runs of the same dev scenario are two distinct
 // completions rather than one the tracker de-duplicates by missionId.
 let replaySeq = 0;
@@ -1912,6 +1944,10 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   if (url === "/api/mission-feedback" && req.method === "POST") {
     const body = await readBody(req);
     const saved = missionFeedback.record({ ...(body as object), changelist: tracker.view().build, appVersion: APP_VERSION });
+    // Push straight away so an answer reaches the site while the player is still at their
+    // desk; the interval above is only the retry path. Deliberately not awaited — the
+    // report card must never wait on the network to acknowledge a click.
+    if (saved) void flushMissionFeedback();
     res.writeHead(saved ? 200 : 400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify(saved ? { ok: true, answer: saved } : { ok: false, error: "no answers in submission" }));
     return;

@@ -128,9 +128,23 @@ export class MissionFeedbackStore {
     return contractKey ? this.answers.get(contractKey) ?? null : null;
   }
 
-  /** Rows the site hasn't taken yet — the upload queue, once that endpoint exists. */
+  /** Rows the site hasn't taken yet — the upload queue. */
   pending(): MissionAnswer[] {
     return [...this.answers.values()].filter((a) => a.pending);
+  }
+
+  /** Mark answers as accepted by the site. Only clears rows that are still IDENTICAL to
+   *  what was uploaded: a player can revise an answer while the request is in flight, and
+   *  clearing `pending` on the newer row would strand the revision here forever. */
+  markUploaded(uploaded: MissionAnswer[]): void {
+    let changed = false;
+    for (const u of uploaded) {
+      const cur = this.answers.get(u.contractKey);
+      if (!cur || !cur.pending || cur.at !== u.at) continue;
+      cur.pending = false;
+      changed = true;
+    }
+    if (changed) this.save();
   }
 
   count(): number {
