@@ -662,6 +662,11 @@ async function flushMissionFeedback(): Promise<void> {
 // Retry the queue periodically: the site may be down, the token may not be pasted yet, or
 // the player may be offline mid-session. Nothing here is urgent enough to warrant more.
 setInterval(() => void flushMissionFeedback(), 10 * 60_000);
+// 🔑 And once at startup. Without this an app that STARTS with a queue — answered offline,
+// or answered before the endpoint existed — sits on it until someone answers something new
+// or ten minutes pass. The delay lets the sidecar finish booting first; nothing about a
+// backlog is urgent enough to race startup for.
+setTimeout(() => void flushMissionFeedback(), 15_000);
 
 // Monotonic per-process counter so two runs of the same dev scenario are two distinct
 // completions rather than one the tracker de-duplicates by missionId.
