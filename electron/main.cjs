@@ -92,10 +92,13 @@ const APP_VERSION = (() => {
 const PORT = 8778;
 const HUD_URL = `http://localhost:${PORT}/missions.html`;
 const CONFIG_URL = `http://localhost:${PORT}/config.html`;
+const SETUP_URL = `http://localhost:${PORT}/setup.html`;
 
 let server = null;
 let overlay = null;
 let configWin = null;
+let setupWin = null;
+let overlayLoaded = false; // canvas page has finished loading (its IPC listeners exist)
 let tray = null;
 let hovering = false; // pointer is over the HUD (reported by the page)
 let holdInteract = false; // true only while the interact-hold hotkey (default F) is held down
@@ -354,6 +357,7 @@ function refitCanvasWindows() {
 // the window itself is fixed. Click-through except over the widget the pointer is on (applyMouse).
 function createOverlay() {
   const bounds = fullDisplayBounds(); // spans all monitors
+  overlayLoaded = false; // a fresh window has no listeners until its did-finish-load
   overlay = new BrowserWindow({
     x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
     frame: false,
@@ -399,11 +403,14 @@ function createOverlay() {
     sendWebViewVisible({ on: webViewVisible, initial: true });
     sendBindingChartVisible({ on: bindingChartVisible, initial: true });
     pushWidgetStates();
+    overlayLoaded = true;
+    flushSetupNudge();
   });
   applyMouse();
   startMousePoll();
   overlay.on("closed", () => {
     overlay = null;
+    overlayLoaded = false;
   });
 }
 
@@ -899,6 +906,64 @@ function openConfig() {
   });
 }
 
+// ── first-run setup wizard ────────────────────────────────────────────────────
+// Same window treatment as Settings (screen-scaled, screen-saver always-on-top) so it can't
+// be buried under the HUD. Slightly wider than Settings because it's a rail + pane layout.
+function openSetup() {
+  if (setupWin) { setupWin.show(); setupWin.focus(); return; }
+  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const scale = Math.max(1, Math.min(2.25, disp.size.height / 1080));
+  const width = Math.min(disp.workArea.width - 40, Math.round(900 * scale));
+  const height = Math.min(disp.workArea.height - 40, Math.round(640 * scale));
+  const x = Math.round(disp.workArea.x + (disp.workArea.width - width) / 2);
+  const y = Math.round(disp.workArea.y + (disp.workArea.height - height) / 2);
+  setupWin = new BrowserWindow({
+    x, y, width, height,
+    title: "SC Overlay — Setup",
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, "setup-preload.cjs") },
+  });
+  setupWin.setAlwaysOnTop(true, "screen-saver");
+  setupWin.loadURL(`${SETUP_URL}?v=${Date.now()}`);
+  setupWin.on("closed", () => { setupWin = null; });
+}
+
+/** Open the wizard on a FIRST run, or drop the one-time banner on an existing user who never
+ *  finished setup. The distinction matters: the wizard takes over the screen, and doing that
+ *  to someone who has been running the app for months reads as the update breaking something.
+ *  🔑 Asks the SIDECAR rather than deciding here — `freshInstall` is judged there, before
+ *  anything can write a config, and the shell has no equivalent signal of its own. */
+async function maybeRunSetup() {
+  let s = null;
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/setup`, { signal: AbortSignal.timeout(5000) });
+    if (r.ok) s = await r.json();
+  } catch { /* sidecar not up yet — a wizard we can't populate is worse than none */ }
+  if (!s || s.setupDone) return;
+  if (s.freshInstall) { openSetup(); return; }
+  // Existing user: nudge only, and only once. The canvas owns the banner; if the overlay is
+  // switched off there's nowhere to show it, and it simply waits for a launch where there is.
+  if (!s.nudgeDismissed) {
+    const unresolved = Object.keys(s.steps).filter((k) => !s.steps[k].done && !s.steps[k].optional);
+    if (unresolved.length) { pendingSetupNudge = { steps: unresolved.length }; flushSetupNudge(); }
+  }
+}
+
+/** 🔑 The nudge is QUEUED, not sent directly. This runs during startup, racing the canvas's
+ *  first load — a send that lands before the page's listener exists is dropped silently, which
+ *  is the same trap the widget-visibility replay hit (hence the did-finish-load push above).
+ *  So it's held here and flushed by whichever of the two finishes second.
+ *  🔑 Gated on `overlayLoaded`, NOT on `overlay` being non-null: the window object exists the
+ *  moment createOverlay() returns, long before its page has a listener, so testing the window
+ *  would "deliver" the nudge into nothing and then clear the queue. */
+let pendingSetupNudge = null;
+function flushSetupNudge() {
+  if (!pendingSetupNudge || !overlay || !overlayLoaded) return;
+  overlay.webContents.send("overlay:setup-nudge", pendingSetupNudge);
+  pendingSetupNudge = null;
+}
+
 // ── run-as-administrator (for in-game hotkeys) ────────────────────────────────
 // Star Citizen runs elevated (Easy Anti-Cheat), and Windows UIPI won't let a normal-privilege
 // app's low-level keyboard hook see keystrokes while an elevated window is focused. So the
@@ -1120,6 +1185,7 @@ function refreshTray() {
       { label: "Refresh missions (re-read log)", click: refreshMissions },
       { label: "Verify from logs", click: verifyFromLogs },
       { label: "Settings…", click: openConfig },
+      { label: "Run setup again…", click: openSetup },
       ...(cachedElevated === false
         ? [{ label: "Restart as administrator (for in-game hotkeys)", click: restartAsAdmin }]
         : []),
@@ -1191,6 +1257,10 @@ if (!app.requestSingleInstanceLock()) {
     if (overlayEnabled) createOverlay();
     createTray();
     setupUpdater();
+    // First run → wizard; existing user with unfinished setup → one dismissible banner. Runs
+    // after createOverlay() because the banner is sent to the canvas, and only when the server
+    // actually answered — the wizard reads every step's state from it.
+    if (up) void maybeRunSetup();
     // Keep the canvas windows covering the whole virtual desktop when monitors change.
     screen.on("display-added", refitCanvasWindows);
     screen.on("display-removed", refitCanvasWindows);
@@ -1315,6 +1385,17 @@ if (!app.requestSingleInstanceLock()) {
     });
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
   });
+
+  // ── setup wizard ────────────────────────────────────────────────────────────
+  ipcMain.on("setup:open-settings", () => openConfig());
+  // Re-validated here, not just in the preload: a renderer is never the authority on what the
+  // shell is allowed to launch. https only, same rule as overlay:open-url.
+  ipcMain.on("setup:open-external", (_e, url) => {
+    if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+  });
+  ipcMain.on("setup:close", () => setupWin?.close());
+  // The nudge banner's "set it up" button, and its dismiss. Both come from the canvas.
+  ipcMain.on("setup:open-wizard", () => openSetup());
 
   // Live-apply a captured hotkey (config window), no restart. Persistence is handled
   // separately by the config save; these just (re)register the global shortcut.

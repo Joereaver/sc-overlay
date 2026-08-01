@@ -992,6 +992,37 @@
   #whatsnew .wn-close { margin-left: auto; font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
     padding: 6px 15px; cursor: pointer; border: 1px solid var(--cyan); border-radius: 5px; color: #06121a; background: var(--cyan); }
 
+  /* ── Setup nudge ────────────────────────────────────────────────────────────────────────
+     For EXISTING users updating into the first-run wizard. Deliberately NOT #whatsnew's modal
+     treatment: a screen-blocking takeover aimed at someone who has run the app for months
+     reads as the update breaking something. This is a small banner, low on the primary
+     monitor, that never blocks the game and goes away for good on either button.
+
+     🔑 Positioned off --prim-* like #whatsnew, never `vw`/`vh` — this window is the whole
+     multi-monitor canvas, so a viewport unit would place it relative to a box that spans every
+     display and land it somewhere nobody is looking. Both buttons sit INSIDE the banner's own
+     box, so the single #setupNudge rect the shell hit-tests covers them (the scan-box Reset
+     button was unclickable for exactly the opposite reason). */
+  #setupNudge { display: none; position: fixed; z-index: 68;
+    left: calc(var(--prim-left, 0px) + var(--prim-w, 100%) / 2); transform: translateX(-50%);
+    top: calc(var(--prim-top, 0px) + var(--prim-h, 100%) - 118px);
+    width: min(430px, calc(var(--prim-w, 100%) - 60px));
+    align-items: center; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--cyan); border-radius: 9px;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55), 0 0 20px rgba(var(--accent-rgb), 0.16); }
+  #setupNudge.show { display: flex; }
+  html.amd-lite #setupNudge { background: var(--panel-solid); }
+  #setupNudge .sn-txt { flex: 1; min-width: 0; }
+  #setupNudge .sn-title { font-family: var(--sans); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); }
+  #setupNudge .sn-body { font-size: 11.5px; line-height: 1.45; color: var(--cyan-text); margin-top: 3px; }
+  #setupNudge .sn-go { flex: none; font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    padding: 6px 13px; cursor: pointer; border: 1px solid var(--cyan); border-radius: 5px; color: #06121a; background: var(--cyan); }
+  #setupNudge .sn-x { flex: none; width: 21px; height: 21px; display: grid; place-items: center; cursor: pointer;
+    border: 1px solid var(--divider); border-radius: 4px; color: var(--cyan-dim); font-size: 12px; background: rgba(var(--accent-rgb), 0.06); }
+  #setupNudge .sn-x:hover { color: var(--cyan); border-color: var(--cyan); }
+
   /* ── Mission report ─────────────────────────────────────────────────────────────────────
      The after-mission card TAKES OVER the Mission & BP Tracker widget: it covers #panel edge to
      edge for its ~40s, then uncovers it. Sub's call (2026-07-30) over the screen-centred modal
@@ -1379,6 +1410,15 @@
         <button class="wn-close" id="wnCloseBtn">Got it</button>
       </div>
     </div>
+  </div>
+
+  <div id="setupNudge">
+    <div class="sn-txt">
+      <div class="sn-title">Finish setting up</div>
+      <div class="sn-body" id="snBody"></div>
+    </div>
+    <button class="sn-go" id="snGo">Set up</button>
+    <span class="sn-x" id="snX" title="Dismiss">✕</span>
   </div>
 
 <script>
@@ -3695,7 +3735,9 @@
       // #mreport is deliberately ABSENT: it lives inside #panel and covers it exactly, so the
       // panel's own rect already makes it clickable. Listing it would report the same rectangle
       // twice for no gain.
-      const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+      // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
+    // it would swallow game clicks along a blank strip above the taskbar for the whole session.
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
@@ -3774,6 +3816,36 @@
       card.addEventListener("mouseleave", () => { wnLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); }); }
     window.__showWhatsNew = showWhatsNew; // reachable from the hub button (different block scope)
     showWhatsNew(false); // auto-show on launch
+
+    // ── setup nudge ──────────────────────────────────────────────────────────────────────
+    // The shell decides WHETHER this shows (only an existing user with unfinished setup who
+    // hasn't dismissed it before); this only renders it. It is not a modal — setModal() is never
+    // called, so the overlay stays click-through everywhere except the banner's own rect.
+    // 🔑 Inside the `if (window.overlayApi)` guard on purpose: there is no shell in an OBS
+    // browser source, so the nudge can neither arrive nor open a wizard there, and reaching
+    // for `overlayApi.hover` outside the guard would throw on a page that renders fine today.
+    const nudge = $("setupNudge");
+    // Dismissal is persisted server-side, not here: it must survive a restart, and the shell
+    // reads it back from /api/setup on the next launch to decide whether to send this at all.
+    const closeNudge = () => {
+      nudge.classList.remove("show");
+      window.overlayApi.hover(false);
+      fetch("/api/setup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dismissNudge: true }),
+      }).catch(() => { /* best-effort — worst case it offers once more next launch */ });
+    };
+    $("snX").addEventListener("click", closeNudge);
+    $("snGo").addEventListener("click", () => { window.overlayApi.openSetupWizard?.(); closeNudge(); });
+    nudge.addEventListener("mouseenter", () => window.overlayApi.hover(true));
+    nudge.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+    window.overlayApi.onSetupNudge?.((s) => {
+      const n = Number(s && s.steps) || 0;
+      $("snBody").textContent = n === 1
+        ? "One step of setup is still unfinished. It takes about a minute."
+        : n + " steps of setup are still unfinished. It takes about a minute.";
+      nudge.classList.add("show");
+    });
   }
 
   // Filter bar: click a lit tab to filter the pool to that category; click it again

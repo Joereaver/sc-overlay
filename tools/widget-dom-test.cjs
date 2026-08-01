@@ -715,6 +715,77 @@ const PATCHNOTES = `(async () => {
   return out;
 })()`;
 
+// ── Suite: the setup nudge ────────────────────────────────────────────────────
+// The banner shown to EXISTING users who never finished setup. Three things can go wrong with
+// it, and all three have precedent in this file: it can be sized off the canvas instead of the
+// monitor (the patch-notes bug), its buttons can sit outside the rect the shell hit-tests (the
+// scan-box Reset button), and a hidden one can keep claiming a region and eat game clicks.
+//
+// 🔑 It does NOT drive the real /api/setup. That endpoint writes the user's config, and this
+// harness runs against the LIVE one — a suite that marks setup complete would silently disarm
+// the wizard for whoever ran the tests. The shell decides whether to show the banner; the page
+// only renders it, so rendering is the whole contract worth asserting here.
+const SETUPNUDGE = `(async () => {
+  ${PRELUDE}
+  const nudge = document.getElementById("setupNudge");
+  ok("the nudge exists in the canvas", !!nudge);
+
+  const REGION = "#setupNudge.show";
+  const hiddenClaims = document.querySelectorAll(REGION).length;
+  ok("a hidden nudge claims NO interactive region", hiddenClaims === 0,
+     hiddenClaims + " matches while hidden");
+
+  document.getElementById("snBody").textContent = "2 steps of setup are still unfinished. It takes about a minute.";
+  nudge.classList.add("show");
+  await sleep(80);
+  ok("a shown nudge claims exactly one region", document.querySelectorAll(REGION).length === 1);
+
+  // Same display cases as the patch-notes suite, including the one that actually broke: a
+  // primary monitor SHORTER than the canvas window is the multi-monitor case.
+  const CASES = [
+    { label: "1080p", w: 1920, h: 1080, top: 0, left: 0 },
+    { label: "primary shorter than the canvas (portrait side monitor)", w: 3440, h: 1440, top: 0, left: 1080 },
+    { label: "a small laptop panel", w: 1366, h: 768, top: 0, left: 0 },
+  ];
+  for (const c of CASES) {
+    const s = document.documentElement.style;
+    s.setProperty("--prim-top", c.top + "px");
+    s.setProperty("--prim-left", c.left + "px");
+    s.setProperty("--prim-w", c.w + "px");
+    s.setProperty("--prim-h", c.h + "px");
+    await sleep(60);
+    const r = nudge.getBoundingClientRect();
+    ok("[" + c.label + "] the nudge sits on the primary monitor horizontally",
+       r.left >= c.left - 1 && r.right <= c.left + c.w + 1,
+       Math.round(r.left) + ".." + Math.round(r.right) + " within " + c.left + ".." + (c.left + c.w));
+    ok("[" + c.label + "] the nudge sits on the primary monitor vertically",
+       r.top >= c.top - 1 && r.bottom <= c.top + c.h + 1,
+       Math.round(r.top) + ".." + Math.round(r.bottom) + " within " + c.top + ".." + (c.top + c.h));
+    // A banner, not a takeover. If it ever grows to cover the screen it has become the modal
+    // this was deliberately not built as.
+    ok("[" + c.label + "] the nudge stays a banner, not a takeover",
+       r.height < c.h * 0.25 && r.width < c.w * 0.9,
+       Math.round(r.width) + "x" + Math.round(r.height) + " on " + c.w + "x" + c.h);
+
+    // 🔑 Both controls INSIDE the banner's own box. The shell hit-tests the element rect it is
+    // told about, so a button hanging outside it is visible and permanently unclickable.
+    for (const id of ["snGo", "snX"]) {
+      const b = document.getElementById(id).getBoundingClientRect();
+      ok("[" + c.label + "] " + id + " is inside the reported rect",
+         b.left >= r.left - 1 && b.right <= r.right + 1 && b.top >= r.top - 1 && b.bottom <= r.bottom + 1,
+         Math.round(b.left) + "," + Math.round(b.top) + " in " +
+         Math.round(r.left) + "," + Math.round(r.top) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+      ok("[" + c.label + "] " + id + " has a clickable size", b.width > 8 && b.height > 8,
+         Math.round(b.width) + "x" + Math.round(b.height));
+    }
+  }
+
+  nudge.classList.remove("show");
+  await sleep(40);
+  ok("dismissing releases the region", document.querySelectorAll(REGION).length === 0);
+  return out;
+})()`;
+
 // ── Suite: the "scan read area" outline ───────────────────────────────────────
 // The Mining Scanner cog can draw a box showing where the app reads for a signature. A
 // diagnostic that lies is worse than none, so the drawn rect is asserted against the SAME
@@ -736,7 +807,16 @@ const SCANBOX = `(async () => {
   const userRegion = cfg0 && cfg0.scanRegion ? JSON.parse(JSON.stringify(cfg0.scanRegion)) : null;
   ok("the user's calibrated region was captured from the sidecar before touching anything",
      cfg0 != null, JSON.stringify(userRegion));
-  ok("...and is off until asked for", getComputedStyle(box).display === "none");
+  // 🔑 Put the box in a KNOWN state before asserting on it. This used to assert display:none on
+  // arrival, which is not a property of the code at all — it is a property of whoever last used
+  // the app: the pref driving it is same-origin localStorage on localhost:8778, SHARED with the
+  // real overlay window, so anyone who has the scan read area switched on failed here on a clean
+  // tree. A test that reports the user's own settings as a defect hides real ones.
+  // (setScanBox only toggles the body class; the pref itself is untouched, which is why this is
+  // safe to call and why the later userPref capture still sees what the user actually chose.)
+  setScanBox(false);
+  await sleep(80);
+  ok("...and hides when told to", getComputedStyle(box).display === "none");
 
   setScanBox(true);
   await sleep(150);
@@ -1462,6 +1542,7 @@ app.whenReady().then(async () => {
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
+    fails += await run("setup nudge", SETUPNUDGE, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and

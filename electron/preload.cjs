@@ -82,6 +82,10 @@ contextBridge.exposeInMainWorld("overlayApi", {
   onBattagliaVisible: (cb) => ipcRenderer.on("overlay:battaglia-visible", (_e, s) => cb(s)),
   // Reveal one of the app's own data folders in Explorer (allow-listed in main).
   openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
+  // First-run setup: existing users with unfinished setup get one dismissible banner here
+  // rather than the wizard taking over their screen. `openSetupWizard` is what its button calls.
+  onSetupNudge: (cb) => ipcRenderer.on("overlay:setup-nudge", (_e, s) => cb(s)),
+  openSetupWizard: () => ipcRenderer.send("setup:open-wizard"),
   // Web Page widget + the Binding Chart WIDGET (the full-screen binding overlay is separate).
   setWebView: (on) => ipcRenderer.send("app:set-webview", !!on),
   onWebViewVisible: (cb) => ipcRenderer.on("overlay:webview-visible", (_e, s) => cb(s)),

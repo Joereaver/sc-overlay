@@ -2,7 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync } from "node:fs";
-import { extname, join, dirname } from "node:path";
+import { extname, join, dirname, basename } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
@@ -222,6 +222,18 @@ interface Config {
    *  instead of keeping the ship's manufacturer skin. Affects theme="auto" AND the /api/ship
    *  signal. Default false = stay on the last ship's manufacturer until you board another. */
   revertThemeOnFoot: boolean;
+  /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
+   *  wizard is finished; the wizard never auto-opens again once true. */
+  setupDone: boolean;
+  /** The wizard's "review your settings" step. Nothing else in the app can observe that a user
+   *  looked at Settings, so this is the only record — it is set when they come back from it. */
+  setupSettingsReviewed: boolean;
+  /** The wizard's optional "share your profile" step, which happens entirely on the website.
+   *  The app can't detect an RSI handle verification, so this records that the user resolved it. */
+  setupShareResolved: boolean;
+  /** Existing users don't get the wizard thrown at them on update — they get one dismissible
+   *  banner. Set when they dismiss it or open the wizard from it, so it never returns. */
+  setupNudgeDismissed: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -282,6 +294,10 @@ const DEFAULTS: Config = {
   overlayTwist: 0, // flat by default; the user can dial in a skew angle in the hub
   overlayScale: 100,
   revertThemeOnFoot: false,
+  setupDone: false,
+  setupSettingsReviewed: false,
+  setupShareResolved: false,
+  setupNudgeDismissed: false,
 };
 
 function loadConfig(): Config {
@@ -295,6 +311,13 @@ function loadConfig(): Config {
   }
   return { ...DEFAULTS };
 }
+// 🔑 Whether this is a genuinely FIRST run, decided BEFORE anything can write a config —
+// the setup wizard takes over the screen, so it must never fire at someone who has been
+// using the app for months. `overlay/config.json` is deliberately never packaged
+// (tools/build-server.mjs filters it out), so in a shipped build an absent user config is
+// the only honest fresh-install signal. An ABSENT `setupDone` cannot serve here: every
+// existing user's config predates the field and would read as fresh.
+const freshInstall = !existsSync(configPath) && !existsSync(seedConfigPath);
 let config: Config = loadConfig();
 
 /** Scan common Star Citizen install locations for per-channel game.log files, newest
@@ -370,6 +393,34 @@ function isLiveLog(p: string): boolean {
   } catch {
     return true; // unreadable → don't demote it on a guess
   }
+}
+
+/** Is the sync token actually good? A non-empty string proves nothing — it can be revoked or
+ *  typed wrong — so this asks the site. Used by both `/api/diagnostics` and `/api/setup`; one
+ *  copy, because two would drift on exactly the detail that matters (401 = the token is bad and
+ *  the user must act, anything else = the network is down and they must not).
+ *
+ *  🔑 Memoised for 5s. The setup wizard POLLS this while its connect step is open, waiting for a
+ *  freshly-pasted token to go green; without the memo that step would hit subliminal.gg on every
+ *  tick. The window is deliberately short — a user who pastes a token expects it to verify now,
+ *  not in a minute. */
+type TokenVerdict = "none" | "ok" | "rejected" | "unreachable";
+let tokenMemo: { at: number; forToken: string; verdict: TokenVerdict } | null = null;
+async function verifySyncToken(): Promise<TokenVerdict> {
+  if (!config.syncToken) return "none";
+  // Keyed on the token itself, so pasting a NEW one is never answered from the old one's memo.
+  if (tokenMemo && tokenMemo.forToken === config.syncToken && Date.now() - tokenMemo.at < 5000)
+    return tokenMemo.verdict;
+  let verdict: TokenVerdict;
+  try {
+    const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
+      headers: { Authorization: `Bearer ${config.syncToken}` },
+      signal: AbortSignal.timeout(6000),
+    });
+    verdict = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
+  } catch { verdict = "unreachable"; }
+  tokenMemo = { at: Date.now(), forToken: config.syncToken, verdict };
+  return verdict;
 }
 
 // Save to the writable user dir; a write failure must never crash the server
@@ -1832,6 +1883,58 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
+  // The first-run setup wizard's view of the world: which of its steps are ALREADY satisfied,
+  // so it can auto-complete them instead of making a user redo work the app can see is done.
+  // 🔑 Carries no secret — the token is a verdict, never the string (same rule as diagnostics).
+  if (url === "/api/setup" && req.method === "GET") {
+    const logPath = config.logPath || "";
+    let logFound = false;
+    let logChannel = "";
+    try {
+      if (logPath && existsSync(logPath) && statSync(logPath).isFile()) {
+        logFound = true;
+        logChannel = basename(dirname(logPath));
+      }
+    } catch { /* unreadable path — logFound stays false, which is the answer */ }
+
+    const token = await verifySyncToken();
+    // "Skipped" is a real resolution, so a step is DONE when the app can see it done OR the
+    // user said to move on. What must never happen is a step passing silently on neither.
+    const steps = {
+      gameLog: { done: logFound, path: logPath, channel: logChannel, live: logFound && isLiveLog(logPath) },
+      connect: { done: token === "ok", token, syncEnabled: config.syncEnabled === true },
+      settings: { done: config.setupSettingsReviewed === true },
+      share: { done: config.setupShareResolved === true, optional: true },
+    };
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      // `freshInstall` is decided at startup, before anything can write a config — see the
+      // comment there for why an absent `setupDone` can't stand in for it.
+      freshInstall,
+      setupDone: config.setupDone === true,
+      nudgeDismissed: config.setupNudgeDismissed === true,
+      steps,
+    }));
+    return;
+  }
+
+  // The wizard records progress here. Each field is independent so a user who resolves one
+  // step and quits keeps that step — the wizard is resumable, not all-or-nothing.
+  if (url === "/api/setup" && req.method === "POST") {
+    const body = await readBody(req);
+    if (typeof body.settingsReviewed === "boolean") config.setupSettingsReviewed = body.settingsReviewed;
+    if (typeof body.shareResolved === "boolean") config.setupShareResolved = body.shareResolved;
+    if (typeof body.done === "boolean") config.setupDone = body.done;
+    // Dismissing the nudge and finishing the wizard both mean "never nag me again", so
+    // finishing implies dismissal — otherwise a user who completes setup from the banner
+    // would still see the banner on the next launch.
+    if (body.dismissNudge === true || body.done === true) config.setupNudgeDismissed = true;
+    await saveConfig();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // Everything this process can say about its own health, in one request. Support threads are
   // otherwise a guessing game — "it stopped working" with no way to tell a dead sidecar from a
   // missing game.log from an expired token. The Settings button copies this to the clipboard.
@@ -1863,16 +1966,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     } catch { /* stays false */ }
 
     // Is the sync token still good? Ask the site rather than trusting that a non-empty string works.
-    let syncToken: "none" | "ok" | "rejected" | "unreachable" = "none";
-    if (config.syncToken) {
-      try {
-        const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
-          headers: { Authorization: `Bearer ${config.syncToken}` },
-          signal: AbortSignal.timeout(6000),
-        });
-        syncToken = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
-      } catch { syncToken = "unreachable"; }
-    }
+    const syncToken = await verifySyncToken();
 
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({
