@@ -425,11 +425,23 @@ async function verifySyncToken(): Promise<TokenVerdict> {
 
 // Save to the writable user dir; a write failure must never crash the server
 // (an EPERM writing under Program Files is exactly what took it down before).
+//
+// 🔑 A failure here is INVISIBLE in the worst possible way: every endpoint still answers
+// {ok:true} because it only reports that the in-memory config was updated, so the app behaves
+// perfectly until it restarts and every setting the user changed is gone. Worse, the one place
+// this was reported — console.error — goes nowhere whenever the sidecar's stdio isn't being
+// captured, which is exactly when you most need it. So the last failure is REMEMBERED and
+// surfaced by /api/diagnostics, and a save that succeeds clears it.
+let lastSaveError: { at: string; error: string } | null = null;
+let lastSaveOk: string | null = null;
 const saveConfig = async (): Promise<void> => {
   try {
     mkdirSync(userDir, { recursive: true });
     await writeFile(configPath, JSON.stringify(config, null, 2));
+    lastSaveOk = new Date().toISOString();
+    lastSaveError = null;
   } catch (e) {
+    lastSaveError = { at: new Date().toISOString(), error: String(e) };
     console.error("[config] save failed:", String(e));
   }
 };
@@ -1972,7 +1984,16 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     res.end(JSON.stringify({
       app: { version: APP_VERSION || "unknown", sidecarPort: PORT, uptimeMinutes: Math.round(process.uptime() / 60) },
       gameLog: { path: logPath || "(not set)", ...logStat, watching: watcher ? "yes" : "no" },
-      data: { patch: tracker.view().patch ?? "(none loaded)", userDir, userDirWritable },
+      // `userDirWritable` probes the DIRECTORY; `configSave` reports what actually happened to
+      // config.json. They can disagree — a writable dir with an unwritable config file is a real
+      // state, and it presents as "none of my settings stick" with nothing else to go on.
+      data: {
+        patch: tracker.view().patch ?? "(none loaded)", userDir, userDirWritable,
+        configPath,
+        configSave: lastSaveError
+          ? { ok: false, at: lastSaveError.at, error: lastSaveError.error }
+          : { ok: true, lastSavedAt: lastSaveOk ?? "(not saved this session)" },
+      },
       sync: { enabled: config.syncEnabled === true, token: syncToken },
       screenReading: {
         fabCapture: config.fabCapture === true,
