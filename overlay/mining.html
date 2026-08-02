@@ -714,7 +714,8 @@
   // ---- settings (all in the cog) ----
   const renderVoice = () => {
     $("voiceChk").checked = voiceOn();
-    $("scanBoxChk").checked = localStorage.getItem("miningScanBox") === "on";
+    // Inverted pref: absent = shown. Default is ON now, so the checkbox reads !hidden.
+    $("scanBoxChk").checked = localStorage.getItem("miningScanBoxHidden") !== "1";
     $("debrisChk").checked = debrisOn();
   };
   $("debrisChk").addEventListener("change", () => {
@@ -727,7 +728,9 @@
   // box appears the instant you tick it.
   $("scanBoxChk").addEventListener("change", () => {
     const on = $("scanBoxChk").checked;
-    localStorage.setItem("miningScanBox", on ? "on" : "off");
+    // Stored INVERTED (miningScanBoxHidden, absent = show) so the default is shown — this is the
+    // same key the canvas reads, and the only place either writes it.
+    localStorage.setItem("miningScanBoxHidden", on ? "0" : "1");
     try { host()?.scanBox?.(on); } catch { /* standalone: no canvas to draw on */ }
   });
   $("volSlider").value = Math.round(getVol() * 100);

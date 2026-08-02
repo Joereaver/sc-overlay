@@ -374,7 +374,14 @@ function startFabCapture({ port, configDir, onStatus }) {
     const claim = cfg.fabClaim === true;
     // The Mining Assistant (refinery timers + signature scanner) also reads the screen;
     // refinery/mineable reads are routed to its tracker server-side in /api/screen-read.
-    const mining = cfg.miningAssistant === true;
+    // 🔑 The opt-in alone is NOT enough — the widget also has to be able to use the answer.
+    // This used to read the screen whenever `miningAssistant` was ticked, so a closed scanner
+    // kept OCRing every tick forever, which is work nobody asked for and nobody could see.
+    // Same rule as the widgets themselves: an invisible widget does no work beyond whatever is
+    // needed to un-hide itself — hence `miningAutoShow`, which is exactly that exception: with
+    // auto-show armed the scanner is closed ON PURPOSE and needs the read to pop itself open.
+    const mining = cfg.miningAssistant === true
+      && (cfg.miningOpen === true || cfg.miningAutoShow === true);
     // The foreground watcher is only worth running while something here is armed — with all three
     // opt-ins off this loop does nothing but re-read a config file every 3s, and shouldn't be
     // keeping a helper process alive to do it.

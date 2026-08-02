@@ -873,8 +873,10 @@ const SCANBOX = `(async () => {
   // ── it belongs to the Mining Scanner, so it goes when the scanner goes ────────
   // Closing the scanner (hotkey, hub, tray, or a stack bringing another member forward) used to
   // leave the dashed outline on the game with nothing left on screen to explain or remove it.
-  const userPref = localStorage.getItem("miningScanBox");
-  localStorage.setItem("miningScanBox", "on");
+  // Pref is INVERTED now: miningScanBoxHidden, absent = shown (the box auto-shows with the
+  // scanner). "on" therefore means REMOVING the hidden flag, not setting one.
+  const userPref = localStorage.getItem("miningScanBoxHidden");
+  localStorage.removeItem("miningScanBoxHidden");
   setWidgetVisible(WBY.mining, true);
   await sleep(120);
   syncScanBox();
@@ -884,21 +886,21 @@ const SCANBOX = `(async () => {
   await sleep(120);
   ok("closing the Mining Scanner takes the outline with it", getComputedStyle(box).display === "none");
   ok("...without clearing the pref, so reopening restores it",
-     localStorage.getItem("miningScanBox") === "on");
+     localStorage.getItem("miningScanBoxHidden") !== "1");
   setWidgetVisible(WBY.mining, true);
   await sleep(120);
   ok("...and reopening brings it back", getComputedStyle(box).display === "block");
-  localStorage.setItem("miningScanBox", "off");
+  localStorage.setItem("miningScanBoxHidden", "1");
   syncScanBox();
   await sleep(60);
   ok("the pref still wins on its own", getComputedStyle(box).display === "none");
-  if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
+  if (userPref === null) localStorage.removeItem("miningScanBoxHidden"); else localStorage.setItem("miningScanBoxHidden", userPref);
 
   // ── the number the OCR read, centered under the box ──────────────────────────
   // Just the number: Sub asked for it outside the box, centered, without the labels the first
   // version carried. A REFUSED read still has to show — a number the app threw away is exactly
   // the one worth seeing next to the real signature.
-  localStorage.setItem("miningScanBox", "on");
+  localStorage.removeItem("miningScanBoxHidden");
   syncScanBox();
   await sleep(60);
   const val = document.getElementById("sbReadVal"), read = document.getElementById("sbRead");
@@ -944,7 +946,7 @@ const SCANBOX = `(async () => {
      "announced=false, used=true");
   ok("...and a struck-through read means only one thing: it was not used",
      getComputedStyle(val).textDecorationLine === "none", getComputedStyle(val).textDecorationLine);
-  if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
+  if (userPref === null) localStorage.removeItem("miningScanBoxHidden"); else localStorage.setItem("miningScanBoxHidden", userPref);
   syncScanBox();
 
   // Hand the user's own calibration back — see the note at the top of this suite. Verified by
