@@ -972,7 +972,13 @@
      AND bottom and took the ✕ and "Got it" with it. That is the same trap as the live 0.1.31 bug,
      reopened by using the wrong unit. 720px is the absolute cap: a size that leaves room on a
      1080p monitor, which is the smallest thing worth designing for. */
-  #whatsnew .wn-card { width: 400px; max-width: 88vw; display: flex; flex-direction: column;
+  /* 🔑 Width is capped against the PRIMARY MONITOR (--prim-w), never `vw` — same trap the height
+     already hit: `vw` is this window, and this window is the whole multi-monitor CANVAS, so on a
+     multi-display rig `88vw` is wider than the screen the card is centred on. It was inert while
+     the card was 400px (400 < 88vw either way), but it was wrong, and widening is exactly the
+     change that would have made it bite. 560px because these notes are prose, and 400 was forcing
+     long sentences into a column narrow enough to be a chore to read. */
+  #whatsnew .wn-card { width: min(560px, calc(var(--prim-w, 100vw) - 64px)); display: flex; flex-direction: column;
     max-height: min(720px, calc(var(--prim-h, 100vh) - 96px));
     border: 1px solid var(--cyan); border-radius: 10px; padding: 16px 18px 18px;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
