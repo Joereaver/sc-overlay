@@ -721,10 +721,21 @@ function sendConfigWidgetVisible(state) {
 function setConfigWidgetVisible(on) {
   configWidgetVisible = !!on;
   sendConfigWidgetVisible({ on: configWidgetVisible });
-  postConfig({ configOpen: configWidgetVisible }); // remember open/closed for next launch
+  // Deliberately NOT persisted: Settings always starts closed. Its frame (position/size) is
+  // remembered by widgets.json like every widget; only the open state is not.
   refreshTray();
 }
-function toggleConfigWidget() { setConfigWidgetVisible(!configWidgetVisible); }
+/** THE way to open Settings, from the cog and the tray alike. Settings is not a widget you
+ *  toggle in the widget list — it is a panel you open, which happens to be rendered as a widget
+ *  so it can be placed, sized and skinned like everything else.
+ *  🔑 The standalone WINDOW survives only as the fallback for a canvas that isn't there: with
+ *  the overlay switched off or destroyed the widget cannot appear at all, and that is precisely
+ *  when someone needs to reach the AMD-compatibility and master-overlay switches. Never the
+ *  primary route, never a second thing to discover. */
+function openSettingsSurface() {
+  if (overlayEnabled && overlay && !overlay.isDestroyed()) setConfigWidgetVisible(true);
+  else openConfig();
+}
 // Web Page widget - any http(s) page the user pins to the canvas.
 function sendWebViewVisible(state) {
   try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:webview-visible", state); }
@@ -1230,14 +1241,13 @@ function refreshTray() {
       { label: "Unlock Alerts", type: "checkbox", checked: unlockAlertVisible, click: toggleUnlockAlert },
       { label: "Loot Split", type: "checkbox", checked: partyVisible, click: toggleParty },
       { label: "Event Tracker", type: "checkbox", checked: battagliaVisible, click: toggleBattaglia },
-      { label: "Settings", type: "checkbox", checked: configWidgetVisible, click: toggleConfigWidget },
       { label: "Web Page", type: "checkbox", checked: webViewVisible, click: toggleWebView },
       { label: "Infographic Viewer", type: "checkbox", checked: bindingChartVisible, click: toggleBindingChart },
       { type: "separator" },
       { label: "Tools", enabled: false },
       { label: "Refresh missions (re-read log)", click: refreshMissions },
       { label: "Verify from logs", click: verifyFromLogs },
-      { label: "Settings…", click: openConfig },
+      { label: "Settings…", click: openSettingsSurface },
       { label: "Run setup again…", click: openSetup },
       ...(cachedElevated === false
         ? [{ label: "Restart as administrator (for in-game hotkeys)", click: restartAsAdmin }]
@@ -1376,7 +1386,6 @@ if (!app.requestSingleInstanceLock()) {
       unlockAlertVisible = c.unlockAlertOpen !== false; // default ON — it replaced an existing toast
       partyVisible = c.partyOpen === true;
       battagliaVisible = c.battagliaOpen === true;
-      configWidgetVisible = c.configOpen === true;
       webViewVisible = c.webViewOpen === true;
       bindingChartVisible = c.bindingChartOpen === true;
     } catch { /* default off */ }
@@ -1449,14 +1458,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   // ── setup wizard ────────────────────────────────────────────────────────────
-  // Settings IS the widget now, so the wizard summons that. 🔑 But it falls back to the window
-  // when the canvas is off or gone: the wizard is the first-run safety net, and "the overlay is
-  // disabled" is precisely the situation where someone needs to reach the AMD-compatibility and
-  // master-overlay switches. A step that silently did nothing would strand them there.
-  ipcMain.on("setup:open-settings", () => {
-    if (overlayEnabled && overlay && !overlay.isDestroyed()) setConfigWidgetVisible(true);
-    else openConfig();
-  });
+  ipcMain.on("setup:open-settings", () => openSettingsSurface());
   // Re-validated here, not just in the preload: a renderer is never the authority on what the
   // shell is allowed to launch. https only, same rule as overlay:open-url.
   ipcMain.on("setup:open-external", (_e, url) => {
@@ -1547,7 +1549,7 @@ if (!app.requestSingleInstanceLock()) {
     applyMouse();
   });
   // The cog's "Open settings…" opens the full config window.
-  ipcMain.on("overlay:open-settings", () => openConfig());
+  ipcMain.on("overlay:open-settings", () => openSettingsSurface());
   // The live-on-Twitch diamond opens the stream in the default browser (https only).
   ipcMain.on("overlay:open-url", (_e, url) => {
     if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url);

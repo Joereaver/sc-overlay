@@ -1049,8 +1049,16 @@ const DRAG = `(async () => {
   document.getElementById("hub").classList.add("open"); // it's display:none until the cog opens it
   await sleep(20);
   const rows = [...document.querySelectorAll("#hub .hub-row.tog")];
-  ok("every widget row has a reset", rows.length === WIDGETS.length
-     && rows.every(r => r.querySelector(".hub-reset")), rows.length + " rows");
+  // Every TOGGLEABLE widget gets a hub row. Settings is the deliberate exception: it is not a
+  // widget you switch on in the list, it is a panel you open from "Open settings" (and the
+  // tray), which merely happens to render as a widget so it can be placed, sized and skinned.
+  // Asserted by name rather than as a bare count-1, so a row going missing still fails.
+  const HUBLESS = ["config"];
+  const toggleable = WIDGETS.filter(w => !HUBLESS.includes(w.key));
+  ok("every toggleable widget has a hub row with a reset", rows.length === toggleable.length
+     && rows.every(r => r.querySelector(".hub-reset")), rows.length + " rows for " + toggleable.length + " toggleable");
+  ok("Settings is deliberately absent from the hub list",
+     !document.querySelector('#hub .hub-reset[data-w="config"]'));
   ok("every reset names a real widget",
      [...document.querySelectorAll("#hub .hub-reset")].every(b => !!WBY[b.dataset.w]));
   const mRow = document.querySelector('#hub .hub-reset[data-w="mining"]').closest(".hub-row");

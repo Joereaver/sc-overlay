@@ -146,9 +146,6 @@ interface Config {
   partyOpen: boolean;
   /** Remembers whether the Battaglia grind widget was left open, so it's restored on launch. */
   battagliaOpen: boolean;
-  /** Settings running as a canvas WIDGET (the standalone settings window is separate and
-   *  always available). Remembers open/closed across launches like every other widget. */
-  configOpen: boolean;
   /** Remembers whether the Web Page widget was left open, so it's restored on launch. */
   webViewOpen: boolean;
   /** URL shown by the Web Page widget (http/https only). Empty = it shows its address picker. */
@@ -271,7 +268,6 @@ const DEFAULTS: Config = {
   scFeedTone: "",
   partyOpen: false,
   battagliaOpen: false,
-  configOpen: false,
   webViewOpen: false,
   // A first-run Web Page widget opens on the blueprint tracker rather than an empty form —
   // it's the page most likely to be wanted beside the game, and it shows what the widget does.
@@ -1688,7 +1684,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.scFeedTone === "string") config.scFeedTone = body.scFeedTone;
     if (typeof body.partyOpen === "boolean") config.partyOpen = body.partyOpen;
     if (typeof body.battagliaOpen === "boolean") config.battagliaOpen = body.battagliaOpen;
-    if (typeof body.configOpen === "boolean") config.configOpen = body.configOpen;
     if (typeof body.webViewOpen === "boolean") config.webViewOpen = body.webViewOpen;
     // http/https only — this string ends up as an iframe src.
     if (typeof body.webViewUrl === "string") {
