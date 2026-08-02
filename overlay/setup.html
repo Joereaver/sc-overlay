@@ -142,11 +142,18 @@
 <script>
 (function () {
   "use strict";
-  // Same screen-relative zoom as config.html — this window is sized to the display by the shell,
-  // so its fixed-px layout has to scale with it or it renders as a postage stamp on a 4K TV.
+  // Scale up only for displays that genuinely need it (a 4K TV left at 100% OS scaling renders
+  // this as a postage stamp otherwise).
+  // 🔑 Measured on the SHORTER edge, not the height. Height alone assumes "taller = physically
+  // bigger", which is true of a TV and false of a PORTRAIT monitor: Sub's 1080x1920 is ordinary
+  // density but 1920 tall, so the old rule zoomed it 1.78x — and since this window opens on
+  // whichever display the cursor is on, the wizard was a different SIZE run to run.
+  // 🔑 Divisor is 1440, not 1080, so a 1440p display sits at design size instead of 1.33x. The
+  // point of reference is the widgets: this should not feel like a different app.
   try {
-    var h = (window.screen && window.screen.height) || 1080;
-    document.documentElement.style.zoom = Math.max(1, Math.min(2.25, h / 1080));
+    var sc = window.screen || {};
+    var edge = Math.min(sc.width || 1920, sc.height || 1080);
+    document.documentElement.style.zoom = Math.max(1, Math.min(2, edge / 1440));
   } catch (e) { /* zoom is a nicety, never a blocker */ }
 
   var API = window.overlaySetup || {};

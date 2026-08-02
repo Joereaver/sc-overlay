@@ -1072,7 +1072,10 @@ function openConfig() {
 function openSetup() {
   if (setupWin) { setupWin.show(); setupWin.focus(); return; }
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const scale = Math.max(1, Math.min(2.25, disp.size.height / 1080));
+  // Same basis as the page's own zoom (see setup.html): the SHORTER edge, against 1440. Using
+  // height alone asked for a 1602px-wide window on a 1080-wide portrait monitor, which then got
+  // clamped to the work area — so the content was zoomed AND cramped at the same time.
+  const scale = Math.max(1, Math.min(2, Math.min(disp.size.width, disp.size.height) / 1440));
   const width = Math.min(disp.workArea.width - 40, Math.round(900 * scale));
   const height = Math.min(disp.workArea.height - 40, Math.round(640 * scale));
   const x = Math.round(disp.workArea.x + (disp.workArea.width - width) / 2);
