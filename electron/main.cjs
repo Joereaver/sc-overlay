@@ -1439,7 +1439,14 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   // ── setup wizard ────────────────────────────────────────────────────────────
-  ipcMain.on("setup:open-settings", () => openConfig());
+  // Settings IS the widget now, so the wizard summons that. 🔑 But it falls back to the window
+  // when the canvas is off or gone: the wizard is the first-run safety net, and "the overlay is
+  // disabled" is precisely the situation where someone needs to reach the AMD-compatibility and
+  // master-overlay switches. A step that silently did nothing would strand them there.
+  ipcMain.on("setup:open-settings", () => {
+    if (overlayEnabled && overlay && !overlay.isDestroyed()) setConfigWidgetVisible(true);
+    else openConfig();
+  });
   // Re-validated here, not just in the preload: a renderer is never the authority on what the
   // shell is allowed to launch. https only, same rule as overlay:open-url.
   ipcMain.on("setup:open-external", (_e, url) => {

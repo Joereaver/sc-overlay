@@ -305,6 +305,23 @@
     window.__configFocus = function () {
       try { if (pendingFocus) pendingFocus.focus(); } catch (e) { /* element went away */ }
     };
+
+    // Hotkey capture needs the same grab, but a hotkey button is NOT a text field so the
+    // focusin path above deliberately ignores it. Expose the grab so the capture flow can take
+    // it explicitly, focusing the button itself — keydown is bound to `window`, so the event
+    // only reaches it if something inside THIS document holds focus.
+    // Absent (standalone window) the capture flow just skips this: that window already has real
+    // keyboard focus, which is why hotkey capture worked there without any of this.
+    window.__cfgGrab = {
+      start: function (el) {
+        pendingFocus = el || null;
+        try { host() && host().editStart && host().editStart(); } catch (e) { /* not embedded */ }
+      },
+      end: function () {
+        pendingFocus = null;
+        try { host() && host().editEnd && host().editEnd(); } catch (e) { /* not embedded */ }
+      },
+    };
   })();
 </script>
 </head>
@@ -936,6 +953,10 @@
     const btn = document.getElementById(HOTKEYS[which].btn);
     btn.textContent = "Press keys…  (Esc cancels)";
     btn.classList.add("capturing");
+    // Embedded on the canvas the overlay is click-through and the GAME holds the keyboard, so
+    // this window must take the shell's shared grab (which also suspends the interact key) or
+    // the keydown below never arrives. No-op in the standalone window, which already has focus.
+    window.__cfgGrab?.start(btn);
   }
   // KeyboardEvent.code → Electron accelerator key token (layout-independent for QWERTY).
   function hkKeyName(code) {
@@ -956,6 +977,7 @@
     const hint = document.getElementById(h.hint);
     if (e.key === "Escape") {
       capturing = null; btn.classList.remove("capturing");
+      window.__cfgGrab?.end();
       setHotkeyDisplay(which, document.getElementById(h.input).value);
       return;
     }
@@ -970,6 +992,9 @@
     // that's the whole point of a dedicated overlay key. Everything else needs a modifier.
     const bareOk = h.bare || /^F(3|1[3-9]|2[0-4])$/.test(key || "");
     capturing = null; btn.classList.remove("capturing");
+    // Release the grab on BOTH outcomes below (rejected key and accepted key) — a grab left
+    // held would keep the interact key suspended, i.e. the overlay stuck uninteractable.
+    window.__cfgGrab?.end();
     if (!key || (!mods.length && !bareOk)) {
       setHotkeyDisplay(which, document.getElementById(h.input).value);
       hint.innerHTML = "⚠ Use at least one modifier (Ctrl / Alt / Shift) plus a key — or a bare F3 / F13–F24. Try again.";
