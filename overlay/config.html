@@ -7,6 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<!-- Embedded on the canvas this page is a widget like any other, so it takes the shared widget
+     tokens + surface treatment. Harmless in the standalone window: nothing there uses .wpanel or
+     the widget token names, and the remap below is scoped to html.embedded. -->
+<link rel="stylesheet" href="/widget-theme.css" />
 <style>
   /* Matches subliminal.gg — Material-3 dark surfaces, amber accent, Space Grotesk + Inter. */
   :root {
@@ -18,6 +22,46 @@
     --font-head: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
     --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
   }
+  /* ── embedded on the canvas: wear the HUD ──────────────────────────────────────────────
+     🔑 Rather than restyle ~1,100 lines of rules, remap this page's OWN tokens onto the shared
+     widget tokens from widget-theme.css. Every existing rule keeps working and simply renders in
+     HUD colours — and since widget-theme.css retints those tokens per manufacturer skin, Settings
+     picks up all 16 skins for free with nothing further to write.
+     Scoped to html.embedded (specificity 0,1,1) so it beats the :root block above without
+     touching the standalone window, which must keep its amber subliminal.gg identity. */
+  html.embedded {
+    --bg: transparent;
+    --card: rgba(var(--accent-rgb), 0.06);
+    --card-high: rgba(var(--accent-rgb), 0.14);
+    --field: var(--track);
+    --line: var(--divider);
+    --line-strong: var(--border);
+    --line-soft: var(--divider);
+    --text: var(--cyan-text);
+    --muted: var(--cyan-dim);
+    --outline: var(--faint);
+    --amber: var(--cyan);            /* the page's accent becomes the skin's accent */
+    --on-amber: #06121a;             /* dark ink on an accent-filled button */
+    --amber-deep: #06121a;
+    --error: var(--red);
+    --font-head: var(--sans);
+    --font-body: var(--sans);
+  }
+  /* The widget owns the box: no page padding, no min-height, and the panel itself scrolls.
+     `.wrap` becomes the panel surface (the JS adds .wpanel to it for the shared scanlines /
+     Esperia mesh / Origin stitching that every other widget carries). */
+  html.embedded body { padding: 0; min-height: 0; background: transparent; height: 100%; overflow: hidden; }
+  html.embedded { height: 100%; }
+  html.embedded .wrap {
+    max-width: none; margin: 0; height: 100%; overflow-y: auto; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  }
+  html.amd-lite.embedded .wrap { background: var(--panel-solid); }
+  /* The window's big hero header is dead weight in a widget — the widget's own bar names it. */
+  html.embedded .apphead { display: none; }
+  html.embedded .card { margin-top: 10px; }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: var(--font-body); background: var(--bg); color: var(--text); min-height: 100vh; padding: 40px 24px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
   /* themed scrollbar — amber tint, matches the site */
@@ -219,6 +263,47 @@
       isElevated: call("isElevated"), restartAsAdmin: call("restartAsAdmin"),
       getOverlayEnabled: call("getOverlayEnabled"), setOverlayEnabled: call("setOverlayEnabled"),
       onOverlayEnabledChanged: function (cb) { var h = host(); if (h && h.onOverlayEnabledChanged) h.onOverlayEnabledChanged(cb); },
+    };
+
+    // The standard embedded-widget handshake every other page does.
+    // 🔑 `ready()` is not optional: it is what makes the canvas apply this widget's saved frame,
+    // push its manufacturer theme onto this document (which the token remap above reads), apply
+    // the per-widget text scale and send the first visibility. Without it the widget renders
+    // unthemed at the wrong size and never learns it was shown.
+    document.addEventListener("DOMContentLoaded", function () {
+      var wrap = document.querySelector(".wrap");
+      if (wrap) wrap.classList.add("wpanel"); // shared scanlines / Esperia mesh / Origin stitching
+      try { host() && host().ready && host().ready(); } catch (e) { /* not embedded */ }
+    });
+    // Reveals this widget's header even though the cursor is over an IFRAME, so the canvas
+    // wrapper never sees it. Same one line every embedded page carries.
+    document.addEventListener("pointerdown", function () {
+      try { host() && host().summonCog && host().summonCog(); } catch (e) { /* not embedded */ }
+    });
+
+    // Typing over a focused game needs the shell's shared keyboard grab: the overlay takes focus
+    // and SUSPENDS the interact key, then calls back here once it's released so no stray
+    // character lands in the field. The registry names that callback __configFocus.
+    // 🔑 Text-entry fields ONLY. A checkbox or a button taking the grab would suspend the
+    // interact key for a click that never needed it, and the user would be left unable to
+    // interact with the overlay until something released it.
+    var TEXTY = /^(text|url|number|search|password|email)$/;
+    var isTexty = function (t) {
+      return !!t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && TEXTY.test(t.type || "text")));
+    };
+    var pendingFocus = null;
+    document.addEventListener("focusin", function (e) {
+      if (!isTexty(e.target)) return;
+      pendingFocus = e.target;
+      try { host() && host().editStart && host().editStart(); } catch (e2) { /* not embedded */ }
+    });
+    document.addEventListener("focusout", function (e) {
+      if (!isTexty(e.target)) return;
+      if (pendingFocus === e.target) pendingFocus = null;
+      try { host() && host().editEnd && host().editEnd(); } catch (e2) { /* not embedded */ }
+    });
+    window.__configFocus = function () {
+      try { if (pendingFocus) pendingFocus.focus(); } catch (e) { /* element went away */ }
     };
   })();
 </script>
