@@ -1895,6 +1895,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
+  // Who is answering on this port. Deliberately the cheapest route here — no disk, no network —
+  // because the shell polls it on every launch before it will trust this process.
+  // 🔑 `instance` is a nonce the shell mints per launch and injects, so a match proves this is the
+  // sidecar THAT shell spawned. Version alone is not enough: two builds of the same version (a dev
+  // run and an installed one) are exactly the case that bit us — an orphaned sidecar kept the port
+  // and the new app silently served its stale data.
+  if (url === "/api/instance" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      instance: process.env.SC_INSTANCE || null,
+      version: APP_VERSION || null,
+      pid: process.pid,
+    }));
+    return;
+  }
+
   // The first-run setup wizard's view of the world: which of its steps are ALREADY satisfied,
   // so it can auto-complete them instead of making a user redo work the app can see is done.
   // 🔑 Carries no secret — the token is a verdict, never the string (same rule as diagnostics).

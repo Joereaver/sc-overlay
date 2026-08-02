@@ -93,6 +93,9 @@ const PORT = 8778;
 const HUD_URL = `http://localhost:${PORT}/missions.html`;
 const CONFIG_URL = `http://localhost:${PORT}/config.html`;
 const SETUP_URL = `http://localhost:${PORT}/setup.html`;
+// A fresh id per launch, injected into the sidecar we spawn. Anything answering on our port that
+// cannot echo it is not ours — see waitForServer.
+const INSTANCE_ID = require("node:crypto").randomUUID();
 
 let server = null;
 let overlay = null;
@@ -278,7 +281,7 @@ function startServer() {
     // missed, and it only became visible when the sidecar stopped being spawned stdio:"ignore".
     // Inject the authoritative app version — the bun sidecar can't read package.json.
     server = spawn(exe, {
-      cwd: path.dirname(exe), env: { ...process.env, APP_VERSION }, stdio, windowsHide: true,
+      cwd: path.dirname(exe), env: { ...process.env, APP_VERSION, SC_INSTANCE: INSTANCE_ID }, stdio, windowsHide: true,
     });
   } else {
     // Dev: run the TS server via tsx. Same flag, same reason — `shell:true` means cmd.exe, which is
@@ -289,7 +292,7 @@ function startServer() {
     server = spawn("npx tsx src/overlay-server.ts", {
       cwd: ROOT,
       shell: true,
-      env: { ...process.env, APP_VERSION, SC_DEV: "1" },
+      env: { ...process.env, APP_VERSION, SC_DEV: "1", SC_INSTANCE: INSTANCE_ID },
       stdio,
       windowsHide: true,
     });
@@ -311,18 +314,71 @@ function startServer() {
   });
 }
 
+/** Free the port BEFORE spawning, if a sidecar of ours is squatting on it.
+ *
+ *  Runs before startServer() on purpose. Killing from inside waitForServer would race the
+ *  exit-handler's own respawn — our just-spawned child fails to bind, exits, and schedules a
+ *  restart at the same moment we spawn another — and two sidecars fighting over one port is a
+ *  worse bug than the one being fixed.
+ *
+ *  Nothing has been spawned yet when this runs, so ANY sidecar answering here is by definition
+ *  not ours. Anything that doesn't look like our sidecar is left strictly alone: another program
+ *  owning the port is the user's business, and killing it would be far worse than failing to start.
+ */
+function reclaimStalePort() {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    const req = http.get(`http://localhost:${PORT}/api/instance`, (r) => {
+      let body = "";
+      r.on("data", (c) => { body += c; });
+      r.on("end", () => {
+        let who = null;
+        try { who = JSON.parse(body); } catch { /* not our shape — leave it alone */ }
+        if (!who || typeof who.pid !== "number") return done();
+        noteInSidecarLog(
+          `port ${PORT} was already held by a sidecar (pid ${who.pid}, version ${who.version || "?"}) ` +
+          `before this launch spawned one — reclaiming it. Adopting it instead would have served ` +
+          `that process's data: its changelog, its version, its datasets.`);
+        console.error(`[electron] stale sidecar on :${PORT} (pid ${who.pid}) — reclaiming`);
+        try { process.kill(who.pid); } catch { /* already gone, or not ours to kill */ }
+        setTimeout(done, 400); // let the OS release the listener before we bind
+      });
+    });
+    req.on("error", done);           // nothing there — the normal case
+    req.setTimeout(1500, () => { req.destroy(); done(); });
+  });
+}
+
+/** Wait for OUR sidecar — not merely for something to answer on the port.
+ *
+ *  🔑 This used to ping /api/missions and treat any reply as success, which meant a leftover
+ *  sidecar owning :8778 was silently ADOPTED. It is not hypothetical: a freshly installed 0.1.37
+ *  served 0.1.36 patch notes for an hour because an orphan from an earlier run still held the
+ *  port, and nothing anywhere said so — it presents as "the update didn't take".
+ *
+ *  A squatter that echoes a DIFFERENT instance id is one of ours gone stray (its parent died, or
+ *  it belongs to another build), so we end it and let our own bind. Anything that does NOT look
+ *  like our sidecar is left strictly alone — some other program owning the port is the user's
+ *  business, and killing it would be far worse than failing to start. */
 function waitForServer(tries = 60) {
   return new Promise((resolve) => {
+    const retry = () => {
+      if (--tries <= 0) return resolve(false);
+      setTimeout(ping, 250);
+    };
     const ping = () => {
       http
-        .get(`http://localhost:${PORT}/api/missions`, (r) => {
-          r.resume();
-          resolve(true);
+        .get(`http://localhost:${PORT}/api/instance`, (r) => {
+          let body = "";
+          r.on("data", (c) => { body += c; });
+          r.on("end", () => {
+            let who = null;
+            try { who = JSON.parse(body); } catch { /* not our shape */ }
+            if (who && who.instance === INSTANCE_ID) return resolve(true); // ours
+            retry(); // someone else's — keep waiting for ours rather than trusting theirs
+          });
         })
-        .on("error", () => {
-          if (--tries <= 0) return resolve(false);
-          setTimeout(ping, 250);
-        });
+        .on("error", retry);
     };
     ping();
   });
@@ -1321,6 +1377,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       } catch { /* window gone */ }
     });
+    await reclaimStalePort();
     startServer();
     const up = await waitForServer();
     if (!up) console.error("[electron] server did not come up on :" + PORT);
