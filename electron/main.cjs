@@ -363,6 +363,7 @@ function createOverlay() {
   overlayLoaded = false; // a fresh window has no listeners until its did-finish-load
   overlay = new BrowserWindow({
     x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+    icon: appIconPath(),
     frame: false,
     transparent: true,
     resizable: false,
@@ -931,6 +932,7 @@ function openConfig() {
   configWin = new BrowserWindow({
     x, y, width, height,
     title: "SC Overlay — Config",
+    icon: appIconPath(),
     autoHideMenuBar: true,
     alwaysOnTop: true,
     webPreferences: { contextIsolation: true, preload: path.join(__dirname, "config-preload.cjs") },
@@ -959,6 +961,7 @@ function openSetup() {
   setupWin = new BrowserWindow({
     x, y, width, height,
     title: "SC Overlay — Setup",
+    icon: appIconPath(),
     autoHideMenuBar: true,
     alwaysOnTop: true,
     webPreferences: { contextIsolation: true, preload: path.join(__dirname, "setup-preload.cjs") },
@@ -1248,14 +1251,22 @@ function refreshTray() {
   );
 }
 
-function createTray() {
-  // The asar only packs electron/**, so overlay/ isn't inside it — in the packaged
-  // app the icon ships with the sidecar under resources/server/overlay/. Resolve
-  // there when packaged, else from the repo (dev). (Was ROOT/overlay → blank tray.)
-  const iconPath = app.isPackaged
+/** The app icon, for the tray AND every window.
+ *  🔑 The asar only packs electron/**, so overlay/ isn't inside it — in the packaged app the
+ *  icon ships with the sidecar under resources/server/overlay/. Resolve there when packaged,
+ *  else from the repo (dev). (Resolving from ROOT/overlay when packaged → blank tray.)
+ *  `build/icon.png` is NOT usable here: it is only an electron-builder input and never ships.
+ *  A window with no `icon:` falls back to the EXECUTABLE's icon, which in dev is electron.exe —
+ *  which is why the Electron logo showed up on the settings window, the wizard, and (now that
+ *  the overlay is Alt-Tabbable) the overlay's own taskbar entry. */
+function appIconPath() {
+  return app.isPackaged
     ? path.join(process.resourcesPath, "server", "overlay", "tray-icon.png")
     : path.join(ROOT, "overlay", "tray-icon.png");
-  const icon = nativeImage.createFromPath(iconPath);
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(appIconPath());
   tray = new Tray(icon);
   tray.setToolTip("SC Overlay");
   tray.on("click", toggleShow);
