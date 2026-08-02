@@ -280,7 +280,7 @@
         "</ol>" +
         '<div class="btnrow"><button id="openSite">Open subliminal.gg</button></div>' +
         "</div>" +
-        '<div class="card"><input type="text" id="tok" placeholder="scbp…  paste your token here" ' +
+        '<div class="card"><input type="text" id="tok" placeholder="scbp_…  paste your token here" ' +
         'autocomplete="off" spellcheck="false" />' +
         '<div class="btnrow"><button class="amber" id="saveTok">Save token</button>' +
         '<button id="checkTok">Check again</button></div>' +
@@ -327,19 +327,23 @@
   function renderSettings() {
     return {
       title: "Review your settings",
-      lede: "Worth two minutes now: the overlay's hotkeys, which widgets appear, the manufacturer skin, " +
-            "and the opt-in screen-reading features are all off or at defaults until you say otherwise.",
+      // 🔑 Says nothing about picking a MANUFACTURER. Pinning a specific manufacturer skin is
+      // subscriber-gated; everyone gets Mobiglas or "match my ship". Promising it here would send
+      // a new user to Settings to find a control they cannot use — the worst possible first
+      // impression, and worse than never mentioning it (Sub, 2026-08-02).
+      lede: "Worth two minutes now: the overlay's hotkeys, which widgets appear, how it looks, and " +
+            "the opt-in screen-reading features are all off or at defaults until you say otherwise.",
       html:
-        '<div class="card"><div class="kv">Settings opens in its own window. The things most people change first:</div>' +
+        '<div class="card"><div class="kv">Settings opens as a panel on the overlay, which you can move and resize like anything else. The things most people change first:</div>' +
         '<ol class="steps">' +
         "<li><b>Hotkeys</b> &mdash; show/hide the overlay, arrange mode, the mining scanner.</li>" +
         "<li><b>Run as administrator</b> &mdash; needed for hotkeys to work while the game has focus.</li>" +
         "<li><b>Screen reading</b> &mdash; fabricator capture and the mining scanner are opt-in, and off by default.</li>" +
-        "<li><b>Skin</b> &mdash; match the manufacturer of the ship you fly, or pick one.</li>" +
+        "<li><b>Appearance</b> &mdash; keep the Mobiglas look, or have the overlay match the ship you're flying.</li>" +
         "</ol>" +
         '<div class="btnrow"><button class="amber" id="openCfg">Open Settings</button>' +
         '<button id="reviewed">I\'ve reviewed them</button></div>' +
-        '<div class="hint">You can reopen Settings any time from the tray icon.</div></div>',
+        '<div class="hint">You can reopen Settings any time &mdash; the overlay&rsquo;s cog, or the tray icon.</div></div>',
       skipNote: "You can always change these later — nothing here is permanent.",
       wire: function () {
         var open = el("openCfg");
@@ -420,10 +424,22 @@
 
   function finish() {
     var skipped = STEPS.filter(function (s) { return state[s.key] === "skipped"; });
-    el("doneLede").textContent = skipped.length
+    var base = skipped.length
       ? "The overlay is ready. You skipped " + skipped.length + (skipped.length === 1 ? " step" : " steps") +
         " — you can pick them up any time from Settings."
-      : "The overlay is ready and everything is connected. Press your overlay hotkey in-game to show it.";
+      : "The overlay is ready and everything is connected.";
+    el("doneLede").textContent = base;
+    // 🔑 NAME the key. "Press your overlay hotkey" means nothing to someone who has never used the
+    // app, and this is the last thing setup says to them — the one fact they need to actually see
+    // the overlay. Said on BOTH paths: the skipped-steps wording omitted it entirely, so anyone
+    // who skipped a step finished setup never being told how to open the thing.
+    // Read from config rather than hardcoded, so a cleared or rebound key is reported honestly.
+    getJson("/api/config").then(function (c) {
+      var key = c && typeof c.overlayHotkey === "string" ? c.overlayHotkey.trim() : "F3";
+      el("doneLede").textContent = base + (key
+        ? " Press " + key + " in-game to show and hide it."
+        : " No overlay hotkey is set — add one under Settings → Hotkeys to show and hide it in-game.");
+    });
     el("doneSummary").innerHTML = STEPS.map(function (s) {
       var v = state[s.key];
       var mark = v === "done" ? '<span style="color:var(--ok)">&#10003;</span>' : '<span style="color:var(--outline)">&ndash;</span>';
