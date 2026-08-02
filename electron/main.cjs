@@ -1040,9 +1040,11 @@ function toggleShow() {
 function openConfig() {
   if (configWin) { configWin.show(); configWin.focus(); return; }
   // Size the window to the display so it (and its auto-scaled content — config.html applies the
-  // same screen.height/1080 zoom) is readable on a 4K TV instead of a tiny 780px box. Clamp to the
-  // work area, and center on whichever display the cursor is on.
-  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  // same screen.height/1080 zoom) is readable on a 4K TV instead of a tiny 780px box. Clamp to
+  // the work area, and centre on the PRIMARY display for the same reasons as the wizard above —
+  // not least that the wizard deep-links here, and the two arriving on different monitors would
+  // be its own small bug.
+  const disp = screen.getPrimaryDisplay();
   const scale = Math.max(1, Math.min(2.25, disp.size.height / 1080));
   const width = Math.min(disp.workArea.width - 40, Math.round(780 * scale));
   const height = Math.min(disp.workArea.height - 40, Math.round(860 * scale));
@@ -1071,7 +1073,14 @@ function openConfig() {
 // be buried under the HUD. Slightly wider than Settings because it's a rail + pane layout.
 function openSetup() {
   if (setupWin) { setupWin.show(); setupWin.focus(); return; }
-  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  // 🔑 The PRIMARY display, not the cursor's. Following the cursor is the usual desktop default,
+  // but it assumes a window that belongs anywhere — and this one does not. Everything this app
+  // does is primary-anchored: the overlay canvas, widget positions (stored primary-relative), the
+  // game itself, and the Settings WIDGET the wizard's step 3 opens. A wizard that appears on the
+  // second monitor and then sends you to the first is worse than one that starts where the app
+  // lives. It also makes the size DETERMINISTIC — cursor-following is why the wizard came up at
+  // 1.33x or 1.78x depending on where the mouse happened to be.
+  const disp = screen.getPrimaryDisplay();
   // Same basis as the page's own zoom (see setup.html): the SHORTER edge, against 1440. Using
   // height alone asked for a 1602px-wide window on a 1080-wide portrait monitor, which then got
   // clamped to the work area — so the content was zoomed AND cramped at the same time.
