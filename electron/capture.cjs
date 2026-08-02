@@ -369,14 +369,24 @@ function startFabCapture({ port, configDir, onStatus }) {
     // Either one arms the loop; each read is then gated by its own flag below.
     const fab = cfg.fabCapture === true;
     const miss = cfg.missionOcr === true;
+    // Offer to tick blueprints the kiosk shows that we have no record of. Its own opt-in,
+    // and enough on its own to justify arming the loop — it needs no upload and no token.
+    const claim = cfg.fabClaim === true;
     // The Mining Assistant (refinery timers + signature scanner) also reads the screen;
     // refinery/mineable reads are routed to its tracker server-side in /api/screen-read.
-    const mining = cfg.miningAssistant === true;
+    // 🔑 The opt-in alone is NOT enough — the widget also has to be able to use the answer.
+    // This used to read the screen whenever `miningAssistant` was ticked, so a closed scanner
+    // kept OCRing every tick forever, which is work nobody asked for and nobody could see.
+    // Same rule as the widgets themselves: an invisible widget does no work beyond whatever is
+    // needed to un-hide itself — hence `miningAutoShow`, which is exactly that exception: with
+    // auto-show armed the scanner is closed ON PURPOSE and needs the read to pop itself open.
+    const mining = cfg.miningAssistant === true
+      && (cfg.miningOpen === true || cfg.miningAutoShow === true);
     // The foreground watcher is only worth running while something here is armed — with all three
     // opt-ins off this loop does nothing but re-read a config file every 3s, and shouldn't be
     // keeping a helper process alive to do it.
-    fgWatch.want("ocr", fab || miss || mining);
-    if (!fab && !miss && !mining) { emitContext("off"); return; }
+    fgWatch.want("ocr", fab || miss || mining || claim);
+    if (!fab && !miss && !mining && !claim) { emitContext("off"); return; }
     // Watchdog: a single hung await (e.g. a fetch to the sidecar while it's restarting during an
     // auto-update) must never latch the loop forever. If a prior tick has held `busy` well past
     // any real tick, treat it as wedged and re-arm — otherwise the overlay freezes on its last
@@ -478,6 +488,21 @@ function startFabCapture({ port, configDir, onStatus }) {
       if (read.kind !== "fabricator") { lastUnresolved = ""; unresolvedTries = 0; lastHave = ""; lastRenderWait = ""; } // left the kiosk
       if (read.kind === "fabricator" && read.item) {
         lastUnresolved = ""; unresolvedTries = 0;
+        // Claim prompt: the kiosk only lists blueprints you OWN, so a blueprint here that the
+        // tracker has no record of is ownership the log never reported (a receipt that predates
+        // the install, or one whose logbackup has rotated away). Offer to tick it.
+        // 🔑 Deliberately BEFORE the `!fab` return: this is its own opt-in and needs neither an
+        // upload nor a sync token, so it must work with image capture switched off.
+        if (claim) {
+          try {
+            await fetch(`http://localhost:${port}/api/fab/seen`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ item: read.item, items: read.items || [], name: read.name || "" }),
+              signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            });
+          } catch (e) { console.warn("[fab-claim] seen post failed:", e && e.message); }
+        }
         if (!fab) { pendingItem = null; return; } // image capture disabled — ignore kiosk frames
         const item = read.item; // canonical UUID — settle key + local file name
         // One display name can map to several distinct same-named items (e.g. the 3 sizes of

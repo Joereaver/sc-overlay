@@ -248,9 +248,18 @@
     return Math.round(s / 86400) + "d ago";
   }
 
-  // `silent` = a baseline/preview card (launch placeholder, arrange preview). It renders but
-  // never plays a sound or speaks - only genuinely new headlines alert.
-  function show(item, silent) {
+  // Two INDEPENDENT properties of a card, and conflating them is what made the launch
+  // placeholder sit on screen forever:
+  //   silent - renders without sound or speech. Only genuinely new headlines alert.
+  //   sticky - does not auto-hide. ONLY the arrange preview wants this, because you are
+  //            positioning the widget and it has to stay put while you drag it.
+  // The launch baseline is silent but NOT sticky: it is proof of life, so it behaves like any
+  // other card and leaves after SHOW_MS. While a card is up the widget is `.live`, which makes
+  // it pointer-events:auto and puts it in the shell's interactive-region list - so one that
+  // never hides spends the whole session able to swallow a click meant for the game.
+  function show(item, opts) {
+    const silent = !!(opts && opts.silent);
+    const sticky = !!(opts && opts.sticky);
     current = item;
     $("src").textContent = item.source || "SC Feed";
     $("when").textContent = timeAgo(item.at);
@@ -265,7 +274,7 @@
     // a click meant for the game.
     try { host()?.active?.(true); } catch { /* not embedded */ }
     clearTimeout(hideTimer);
-    if (!silent) hideTimer = setTimeout(next, SHOW_MS); // a placeholder stays until real news arrives
+    if (!sticky) hideTimer = setTimeout(next, SHOW_MS);
   }
   function hide() {
     clearTimeout(hideTimer);
@@ -304,7 +313,9 @@
       // tells the user where on screen the widget lives without hunting for arrange mode.
       primed = true;
       const latest = fresh[fresh.length - 1];
-      if (latest && !current) show(latest, true); // silent: nothing here is actually new
+      // Silent because nothing here is actually new — but NOT sticky: it shows where the widget
+      // lives, then gets out of the way like every other card.
+      if (latest && !current) show(latest, { silent: true });
       return;
     }
     if (!fresh.length) return;
@@ -317,8 +328,10 @@
   window.__scFeedPreview = (on) => {
     if (on) {
       if (current) return;
-      show({ source: "SC Feed", tag: "Preview", title: "New news will appear here when it comes through.", at: new Date().toISOString(), url: SITE }, true);
-      clearTimeout(hideTimer); // hold it up for as long as arrange mode lasts
+      // sticky: it must hold for as long as arrange mode lasts, or you'd be positioning a
+      // widget that vanishes mid-drag. This is the ONLY card that wants that.
+      show({ source: "SC Feed", tag: "Preview", title: "New news will appear here when it comes through.", at: new Date().toISOString(), url: SITE },
+           { silent: true, sticky: true });
     } else if (!queue.length) hide();
   };
 

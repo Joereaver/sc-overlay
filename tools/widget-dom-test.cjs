@@ -24,7 +24,11 @@ process.stdout.on("error", (e) => { if (e && e.code !== "EPIPE") throw e; });
 process.stderr.on("error", (e) => { if (e && e.code !== "EPIPE") throw e; });
 
 const PORT = process.env.OVERLAY_PORT || 8778;
-const URL = `http://localhost:${PORT}/missions.html?canvas=1&party&mining&notepad`;
+// `harness=1` marks this page as automation. The suite drives the LIVE sidecar and the LIVE config
+// (see SKILL.md), and the completion report now writes real crowdsourced answers — so a stray
+// synthetic click on a question would file a rating no human ever gave. The page refuses to POST
+// feedback when this flag is present.
+const URL = `http://localhost:${PORT}/missions.html?canvas=1&harness=1&party&mining&notepad`;
 
 const PRELUDE = `
   const out = [];
@@ -53,7 +57,10 @@ const GROUPING = `(async () => {
     saveWidget: (id, l) => saved.push([id, JSON.parse(JSON.stringify(l))]),
   });
 
-  ok("registry has 10 widgets (incl. the Blueprint panel)", typeof WIDGETS !== "undefined" && WIDGETS.length === 10, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
+  // 11 = the 9 canvas widgets + the Blueprint panel (a local, non-iframe widget) + Settings.
+  // Bump this deliberately when a widget is added — it is the one assertion that notices a
+  // registry entry going missing, which would otherwise just look like a widget quietly absent.
+  ok("registry has 11 widgets (incl. the Blueprint panel and Settings)", typeof WIDGETS !== "undefined" && WIDGETS.length === 11, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
   ok("starts ungrouped", GROUPS.length === 0, GROUPS.length);
   const party = WBY.party, mining = WBY.mining, notepad = WBY.notepad;
   ok("test widgets shown", shown(party) && shown(mining) && shown(notepad));
@@ -107,6 +114,23 @@ const GROUPING = `(async () => {
   ok("groups persisted under __groups", !!gs && Array.isArray(gs[1].list), gs ? JSON.stringify(gs[1]).slice(0, 110) : "none");
   setWidgetVisible(WBY.party, false);
   ok("closing a tab leaves the stack", GROUPS.length === 0, GROUPS.length);
+
+  // Regression: a widget switched on while arrange is ALREADY active used to open undecorated —
+  // no drag banner, "not in move mode like every other app" — because arrange only ever swept the
+  // widgets that existed when it was entered. Leaving and re-entering arrange was the only cure.
+  document.body.classList.add("arranging");
+  setWidgetVisible(WBY.notepad, false);
+  await sleep(60);
+  setWidgetVisible(WBY.notepad, true);
+  await sleep(80);
+  ok("a widget turned on DURING arrange joins arrange", el(WBY.notepad).classList.contains("moving"));
+  // ...and the sweep still agrees with it, so the two paths cannot drift apart.
+  for (const w of WIDGETS) syncArrange(w);
+  ok("...and the arrange sweep agrees", el(WBY.notepad).classList.contains("moving"));
+  document.body.classList.remove("arranging");
+  for (const w of WIDGETS) syncArrange(w);
+  ok("leaving arrange clears it again", !el(WBY.notepad).classList.contains("moving"));
+  setWidgetVisible(WBY.notepad, false);
   return out;
 })()`;
 
@@ -696,11 +720,89 @@ const PATCHNOTES = `(async () => {
        Math.round(fBot) + " <= " + (c.top + c.h));
     // Capping without a scroll would just hide notes, which is NOT the ask ("I don't want to just
     // cut it off"): the overflow has to be reachable.
-    ok("[" + c.label + "] the notes scroll rather than being cut off",
-       list.scrollHeight > list.clientHeight && getComputedStyle(list).overflowY === "auto",
-       list.clientHeight + " of " + list.scrollHeight + "px shown");
+    // KEY: assert REACHABILITY, not scrolling. The old form required scrollHeight > clientHeight,
+    // which silently asserts "the changelog is long" - it went red the moment a release shipped
+    // with short notes (0.1.36: 247px of content in a 356px card; nothing to scroll, nothing
+    // wrong). A permanently-failing assertion hides real regressions, which is worse than the gap
+    // it was covering. What matters either way: no note is unreachable.
+    const scrolls = list.scrollHeight > list.clientHeight;
+    ok("[" + c.label + "] no notes are unreachable",
+       scrolls ? getComputedStyle(list).overflowY === "auto" : list.scrollHeight <= list.clientHeight + 1,
+       (scrolls ? "overflows and scrolls" : "fits, no scroll needed") +
+       " - " + list.clientHeight + " of " + list.scrollHeight + "px");
   }
   document.getElementById("whatsnew").classList.remove("show");
+  return out;
+})()`;
+
+// ── Suite: the setup nudge ────────────────────────────────────────────────────
+// The banner shown to EXISTING users who never finished setup. Three things can go wrong with
+// it, and all three have precedent in this file: it can be sized off the canvas instead of the
+// monitor (the patch-notes bug), its buttons can sit outside the rect the shell hit-tests (the
+// scan-box Reset button), and a hidden one can keep claiming a region and eat game clicks.
+//
+// 🔑 It does NOT drive the real /api/setup. That endpoint writes the user's config, and this
+// harness runs against the LIVE one — a suite that marks setup complete would silently disarm
+// the wizard for whoever ran the tests. The shell decides whether to show the banner; the page
+// only renders it, so rendering is the whole contract worth asserting here.
+const SETUPNUDGE = `(async () => {
+  ${PRELUDE}
+  const nudge = document.getElementById("setupNudge");
+  ok("the nudge exists in the canvas", !!nudge);
+
+  const REGION = "#setupNudge.show";
+  const hiddenClaims = document.querySelectorAll(REGION).length;
+  ok("a hidden nudge claims NO interactive region", hiddenClaims === 0,
+     hiddenClaims + " matches while hidden");
+
+  document.getElementById("snBody").textContent = "2 steps of setup are still unfinished. It takes about a minute.";
+  nudge.classList.add("show");
+  await sleep(80);
+  ok("a shown nudge claims exactly one region", document.querySelectorAll(REGION).length === 1);
+
+  // Same display cases as the patch-notes suite, including the one that actually broke: a
+  // primary monitor SHORTER than the canvas window is the multi-monitor case.
+  const CASES = [
+    { label: "1080p", w: 1920, h: 1080, top: 0, left: 0 },
+    { label: "primary shorter than the canvas (portrait side monitor)", w: 3440, h: 1440, top: 0, left: 1080 },
+    { label: "a small laptop panel", w: 1366, h: 768, top: 0, left: 0 },
+  ];
+  for (const c of CASES) {
+    const s = document.documentElement.style;
+    s.setProperty("--prim-top", c.top + "px");
+    s.setProperty("--prim-left", c.left + "px");
+    s.setProperty("--prim-w", c.w + "px");
+    s.setProperty("--prim-h", c.h + "px");
+    await sleep(60);
+    const r = nudge.getBoundingClientRect();
+    ok("[" + c.label + "] the nudge sits on the primary monitor horizontally",
+       r.left >= c.left - 1 && r.right <= c.left + c.w + 1,
+       Math.round(r.left) + ".." + Math.round(r.right) + " within " + c.left + ".." + (c.left + c.w));
+    ok("[" + c.label + "] the nudge sits on the primary monitor vertically",
+       r.top >= c.top - 1 && r.bottom <= c.top + c.h + 1,
+       Math.round(r.top) + ".." + Math.round(r.bottom) + " within " + c.top + ".." + (c.top + c.h));
+    // A banner, not a takeover. If it ever grows to cover the screen it has become the modal
+    // this was deliberately not built as.
+    ok("[" + c.label + "] the nudge stays a banner, not a takeover",
+       r.height < c.h * 0.25 && r.width < c.w * 0.9,
+       Math.round(r.width) + "x" + Math.round(r.height) + " on " + c.w + "x" + c.h);
+
+    // 🔑 Both controls INSIDE the banner's own box. The shell hit-tests the element rect it is
+    // told about, so a button hanging outside it is visible and permanently unclickable.
+    for (const id of ["snGo", "snX"]) {
+      const b = document.getElementById(id).getBoundingClientRect();
+      ok("[" + c.label + "] " + id + " is inside the reported rect",
+         b.left >= r.left - 1 && b.right <= r.right + 1 && b.top >= r.top - 1 && b.bottom <= r.bottom + 1,
+         Math.round(b.left) + "," + Math.round(b.top) + " in " +
+         Math.round(r.left) + "," + Math.round(r.top) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+      ok("[" + c.label + "] " + id + " has a clickable size", b.width > 8 && b.height > 8,
+         Math.round(b.width) + "x" + Math.round(b.height));
+    }
+  }
+
+  nudge.classList.remove("show");
+  await sleep(40);
+  ok("dismissing releases the region", document.querySelectorAll(REGION).length === 0);
   return out;
 })()`;
 
@@ -725,7 +827,16 @@ const SCANBOX = `(async () => {
   const userRegion = cfg0 && cfg0.scanRegion ? JSON.parse(JSON.stringify(cfg0.scanRegion)) : null;
   ok("the user's calibrated region was captured from the sidecar before touching anything",
      cfg0 != null, JSON.stringify(userRegion));
-  ok("...and is off until asked for", getComputedStyle(box).display === "none");
+  // 🔑 Put the box in a KNOWN state before asserting on it. This used to assert display:none on
+  // arrival, which is not a property of the code at all — it is a property of whoever last used
+  // the app: the pref driving it is same-origin localStorage on localhost:8778, SHARED with the
+  // real overlay window, so anyone who has the scan read area switched on failed here on a clean
+  // tree. A test that reports the user's own settings as a defect hides real ones.
+  // (setScanBox only toggles the body class; the pref itself is untouched, which is why this is
+  // safe to call and why the later userPref capture still sees what the user actually chose.)
+  setScanBox(false);
+  await sleep(80);
+  ok("...and hides when told to", getComputedStyle(box).display === "none");
 
   setScanBox(true);
   await sleep(150);
@@ -779,8 +890,10 @@ const SCANBOX = `(async () => {
   // ── it belongs to the Mining Scanner, so it goes when the scanner goes ────────
   // Closing the scanner (hotkey, hub, tray, or a stack bringing another member forward) used to
   // leave the dashed outline on the game with nothing left on screen to explain or remove it.
-  const userPref = localStorage.getItem("miningScanBox");
-  localStorage.setItem("miningScanBox", "on");
+  // Pref is INVERTED now: miningScanBoxHidden, absent = shown (the box auto-shows with the
+  // scanner). "on" therefore means REMOVING the hidden flag, not setting one.
+  const userPref = localStorage.getItem("miningScanBoxHidden");
+  localStorage.removeItem("miningScanBoxHidden");
   setWidgetVisible(WBY.mining, true);
   await sleep(120);
   syncScanBox();
@@ -790,21 +903,21 @@ const SCANBOX = `(async () => {
   await sleep(120);
   ok("closing the Mining Scanner takes the outline with it", getComputedStyle(box).display === "none");
   ok("...without clearing the pref, so reopening restores it",
-     localStorage.getItem("miningScanBox") === "on");
+     localStorage.getItem("miningScanBoxHidden") !== "1");
   setWidgetVisible(WBY.mining, true);
   await sleep(120);
   ok("...and reopening brings it back", getComputedStyle(box).display === "block");
-  localStorage.setItem("miningScanBox", "off");
+  localStorage.setItem("miningScanBoxHidden", "1");
   syncScanBox();
   await sleep(60);
   ok("the pref still wins on its own", getComputedStyle(box).display === "none");
-  if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
+  if (userPref === null) localStorage.removeItem("miningScanBoxHidden"); else localStorage.setItem("miningScanBoxHidden", userPref);
 
   // ── the number the OCR read, centered under the box ──────────────────────────
   // Just the number: Sub asked for it outside the box, centered, without the labels the first
   // version carried. A REFUSED read still has to show — a number the app threw away is exactly
   // the one worth seeing next to the real signature.
-  localStorage.setItem("miningScanBox", "on");
+  localStorage.removeItem("miningScanBoxHidden");
   syncScanBox();
   await sleep(60);
   const val = document.getElementById("sbReadVal"), read = document.getElementById("sbRead");
@@ -850,7 +963,7 @@ const SCANBOX = `(async () => {
      "announced=false, used=true");
   ok("...and a struck-through read means only one thing: it was not used",
      getComputedStyle(val).textDecorationLine === "none", getComputedStyle(val).textDecorationLine);
-  if (userPref === null) localStorage.removeItem("miningScanBox"); else localStorage.setItem("miningScanBox", userPref);
+  if (userPref === null) localStorage.removeItem("miningScanBoxHidden"); else localStorage.setItem("miningScanBoxHidden", userPref);
   syncScanBox();
 
   // Hand the user's own calibration back — see the note at the top of this suite. Verified by
@@ -953,8 +1066,16 @@ const DRAG = `(async () => {
   document.getElementById("hub").classList.add("open"); // it's display:none until the cog opens it
   await sleep(20);
   const rows = [...document.querySelectorAll("#hub .hub-row.tog")];
-  ok("every widget row has a reset", rows.length === WIDGETS.length
-     && rows.every(r => r.querySelector(".hub-reset")), rows.length + " rows");
+  // Every TOGGLEABLE widget gets a hub row. Settings is the deliberate exception: it is not a
+  // widget you switch on in the list, it is a panel you open from "Open settings" (and the
+  // tray), which merely happens to render as a widget so it can be placed, sized and skinned.
+  // Asserted by name rather than as a bare count-1, so a row going missing still fails.
+  const HUBLESS = ["config"];
+  const toggleable = WIDGETS.filter(w => !HUBLESS.includes(w.key));
+  ok("every toggleable widget has a hub row with a reset", rows.length === toggleable.length
+     && rows.every(r => r.querySelector(".hub-reset")), rows.length + " rows for " + toggleable.length + " toggleable");
+  ok("Settings is deliberately absent from the hub list",
+     !document.querySelector('#hub .hub-reset[data-w="config"]'));
   ok("every reset names a real widget",
      [...document.querySelectorAll("#hub .hub-reset")].every(b => !!WBY[b.dataset.w]));
   const mRow = document.querySelector('#hub .hub-reset[data-w="mining"]').closest(".hub-row");
@@ -1451,6 +1572,7 @@ app.whenReady().then(async () => {
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
+    fails += await run("setup nudge", SETUPNUDGE, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and

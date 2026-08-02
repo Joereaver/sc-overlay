@@ -92,10 +92,14 @@ const APP_VERSION = (() => {
 const PORT = 8778;
 const HUD_URL = `http://localhost:${PORT}/missions.html`;
 const CONFIG_URL = `http://localhost:${PORT}/config.html`;
+const SETUP_URL = `http://localhost:${PORT}/setup.html`;
 
 let server = null;
 let overlay = null;
 let configWin = null;
+let setupWin = null;
+let overlayLoaded = false; // canvas page has finished loading (its IPC listeners exist)
+let overlayFocused = false; // the overlay WINDOW holds focus (user Alt-Tabbed to it)
 let tray = null;
 let hovering = false; // pointer is over the HUD (reported by the page)
 let holdInteract = false; // true only while the interact-hold hotkey (default F) is held down
@@ -119,6 +123,9 @@ let scFeedVisible = false; // is the in-canvas SC Feed notifier armed (it only S
 let unlockAlertVisible = true;
 let partyVisible = false; // is the in-canvas Party split widget currently shown
 let battagliaVisible = false; // is the in-canvas Battaglia grind tracker currently shown
+// Settings as a canvas WIDGET. Named ...Widget... throughout to keep it distinct from
+// `configWin`, the standalone settings WINDOW — both exist, same page, two host modes.
+let configWidgetVisible = false;
 let webViewVisible = false; // is the in-canvas Web Page widget currently shown
 let bindingChartVisible = false; // is the in-canvas Binding Chart WIDGET shown (not the full-screen overlay)
 let miningArm = false;      // load the mining iframe hidden at startup (auto-show waiting to pop)
@@ -276,10 +283,13 @@ function startServer() {
   } else {
     // Dev: run the TS server via tsx. Same flag, same reason — `shell:true` means cmd.exe, which is
     // a console app too.
+    // SC_DEV unlocks the dev-replay endpoint (simulate finishing a mission without playing —
+    // see src/dev-replay.ts). It is set HERE and nowhere else, so the packaged spawn above can
+    // never carry it: that endpoint writes to the real blueprint collection, which syncs.
     server = spawn("npx tsx src/overlay-server.ts", {
       cwd: ROOT,
       shell: true,
-      env: { ...process.env, APP_VERSION },
+      env: { ...process.env, APP_VERSION, SC_DEV: "1" },
       stdio,
       windowsHide: true,
     });
@@ -351,13 +361,20 @@ function refitCanvasWindows() {
 // the window itself is fixed. Click-through except over the widget the pointer is on (applyMouse).
 function createOverlay() {
   const bounds = fullDisplayBounds(); // spans all monitors
+  overlayLoaded = false; // a fresh window has no listeners until its did-finish-load
   overlay = new BrowserWindow({
     x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+    icon: appIconPath(),
     frame: false,
     transparent: true,
     resizable: false,
     movable: false,
-    skipTaskbar: true,
+    // 🔑 `false` ON PURPOSE, and it is the only reason the overlay appears in Alt-Tab: that flag
+    // hides a window from the taskbar, and Windows builds the Alt-Tab list from the same place.
+    // Being switchable is the point — the overlay is click-through and Star Citizen recentres the
+    // mouse while it has focus, so "Alt-Tab to the overlay" is how you take focus off the game and
+    // use the widgets normally. `focusable: true` below was always set; only this was blocking it.
+    skipTaskbar: false,
     alwaysOnTop: true,
     hasShadow: false,
     fullscreenable: false,
@@ -381,21 +398,41 @@ function createOverlay() {
   // left it open last session, else armed-hidden if auto-show is on (so it can self-pop).
   overlay.webContents.on("did-finish-load", () => {
     try { overlay.setBounds(bounds); } catch { /* re-assert the full span past any creation-time clamp */ }
-    sendMiningVisible(miningVisible ? { on: true } : { on: false, arm: miningArm });
-    sendNotepadVisible({ on: notepadVisible });
-    sendTwitchChatVisible({ on: twitchChatVisible });
-    sendScFeedVisible({ on: scFeedVisible });
-    sendUnlockAlertVisible({ on: unlockAlertVisible });
-    sendPartyVisible({ on: partyVisible });
-    sendBattagliaVisible({ on: battagliaVisible });
-    sendWebViewVisible({ on: webViewVisible });
-    sendBindingChartVisible({ on: bindingChartVisible });
+    // 🔑 `initial: true` marks this as REPLAYING saved state, not the user turning something on.
+    // The renderer treats "turn this widget on" as "bring its tab to the front of its group" —
+    // correct for a click, wrong here, because replaying nine widgets in order left whichever
+    // member came last as the fronted tab and SAVED that over the user's choice. Without this
+    // flag a stack can never remember which tab you were looking at.
+    sendMiningVisible(miningVisible ? { on: true, initial: true } : { on: false, arm: miningArm, initial: true });
+    sendNotepadVisible({ on: notepadVisible, initial: true });
+    sendTwitchChatVisible({ on: twitchChatVisible, initial: true });
+    sendScFeedVisible({ on: scFeedVisible, initial: true });
+    sendUnlockAlertVisible({ on: unlockAlertVisible, initial: true });
+    sendPartyVisible({ on: partyVisible, initial: true });
+    sendBattagliaVisible({ on: battagliaVisible, initial: true });
+    sendConfigWidgetVisible({ on: configWidgetVisible, initial: true });
+    sendWebViewVisible({ on: webViewVisible, initial: true });
+    sendBindingChartVisible({ on: bindingChartVisible, initial: true });
     pushWidgetStates();
+    overlayLoaded = true;
+    flushSetupNudge();
   });
   applyMouse();
   startMousePoll();
+  // Focusing the overlay is now a deliberate act — it's in Alt-Tab, so switching to it means
+  // "I want to use the overlay". Tell the renderer, which keeps the settings cog up for as long
+  // as that lasts instead of fading it after 10s: having just switched to the thing, hunting for
+  // its controls is exactly the wrong experience.
+  const sendFocus = (on) => {
+    overlayFocused = on;
+    applyMouse(); // focused = interactive everywhere, which is what restores the real cursor
+    if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:window-focus", on);
+  };
+  overlay.on("focus", () => sendFocus(true));
+  overlay.on("blur", () => sendFocus(false));
   overlay.on("closed", () => {
     overlay = null;
+    overlayLoaded = false;
   });
 }
 
@@ -468,9 +505,16 @@ function applyMouse() {
   // hook is deliberately passive/non-consuming (EAC-safe), so the fix is to not need it. Falls
   // back to the old always-hold behaviour until the foreground watcher has answered once, so a
   // failed helper can't silently make the overlay click-grabby mid-game.
+  // 🔑 A FOCUSED overlay is interactive everywhere, and that is what makes the real mouse cursor
+  // visible over it. Cursor SHAPE belongs to the window under the pointer: while click-through,
+  // the pointer is really over Star Citizen's window, which sets no cursor — so it vanishes even
+  // though the overlay has focus. Taking the whole window interactive puts the pointer genuinely
+  // over ours, and Windows draws the normal arrow again. Safe because focusing the overlay is a
+  // deliberate act (Alt-Tab / taskbar): while it holds focus you are using the overlay, not
+  // playing, and Alt-Tabbing back hands clicks straight back to the game.
   const holdActive = holdMode && (!foreground.ready() || foreground.gameInFront());
   const canHover = holdActive ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
-  const interactive = dragging || (hovering && canHover);
+  const interactive = dragging || overlayFocused || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }
 
@@ -574,7 +618,7 @@ function sendMiningVisible(state) {
 }
 // Push widget on/off state to the in-overlay hub checkboxes (kept in sync with the tray).
 function pushWidgetStates() {
-  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }); }
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }); }
   catch { /* renderer gone */ }
 }
 // The Notepad widget is a plain in-canvas iframe (no auto-show / SSE), so its visibility is a
@@ -665,6 +709,33 @@ function setBattagliaVisible(on) {
   refreshTray();
 }
 function toggleBattaglia() { setBattagliaVisible(!battagliaVisible); }
+
+// Settings as a canvas widget — same shell-owned visibility contract as every widget above.
+// The standalone settings WINDOW (openConfig) stays: the first-run wizard deep-links into it and
+// must still work when the canvas is switched off or broken, which is exactly when someone needs
+// to reach the AMD-compatibility and master-overlay switches.
+function sendConfigWidgetVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:config-visible", state); }
+  catch { /* window went away mid-send */ }
+}
+function setConfigWidgetVisible(on) {
+  configWidgetVisible = !!on;
+  sendConfigWidgetVisible({ on: configWidgetVisible });
+  // Deliberately NOT persisted: Settings always starts closed. Its frame (position/size) is
+  // remembered by widgets.json like every widget; only the open state is not.
+  refreshTray();
+}
+/** THE way to open Settings, from the cog and the tray alike. Settings is not a widget you
+ *  toggle in the widget list — it is a panel you open, which happens to be rendered as a widget
+ *  so it can be placed, sized and skinned like everything else.
+ *  🔑 The standalone WINDOW survives only as the fallback for a canvas that isn't there: with
+ *  the overlay switched off or destroyed the widget cannot appear at all, and that is precisely
+ *  when someone needs to reach the AMD-compatibility and master-overlay switches. Never the
+ *  primary route, never a second thing to discover. */
+function openSettingsSurface() {
+  if (overlayEnabled && overlay && !overlay.isDestroyed()) setConfigWidgetVisible(true);
+  else openConfig();
+}
 // Web Page widget - any http(s) page the user pins to the canvas.
 function sendWebViewVisible(state) {
   try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:webview-visible", state); }
@@ -801,6 +872,20 @@ function registerMoveHotkey(accel) {
   return r;
 }
 
+// Confirms a fabricator claim prompt. Goes straight to the SIDECAR rather than into the widget:
+// the sidecar owns the prompt (including its 30s expiry), and its broadcast is what clears the
+// card — so a hotkey press and a button click travel the exact same path and can't disagree.
+// A press with no prompt live is a harmless no-op the server answers with why:"expired".
+let fabClaimAccel = null;
+function registerFabClaimHotkey(accel) {
+  if (fabClaimAccel) hotkeys.unregister(fabClaimAccel);
+  fabClaimAccel = null;
+  if (!accel || typeof accel !== "string") return { ok: true };
+  const r = hotkeys.register(accel, () => postApi("/api/fab/claim?accept=1"));
+  if (r.ok) fabClaimAccel = accel;
+  return r;
+}
+
 // ── actions ─────────────────────────────────────────────────────────────────
 
 // Reposition mode: whole panel becomes a drag surface (banner + Done in the page),
@@ -843,6 +928,11 @@ function setOverlayEnabled(on) {
     }
   }
   configWin?.webContents.send("overlay:enabled-changed", on);
+  // Settings also runs as a canvas WIDGET, whose copy of the master-switch checkbox needs the
+  // same signal. Only meaningful when turning ON — switching off destroys the canvas, and the
+  // widget with it, so there is nothing left to tell. 🔑 That is also why the tray keeps this
+  // toggle: turning the overlay off from inside the overlay is a one-way trip otherwise.
+  if (on) overlay?.webContents.send("overlay:enabled-changed", on);
   refreshTray();
 }
 function toggleShow() {
@@ -863,6 +953,7 @@ function openConfig() {
   configWin = new BrowserWindow({
     x, y, width, height,
     title: "SC Overlay — Config",
+    icon: appIconPath(),
     autoHideMenuBar: true,
     alwaysOnTop: true,
     webPreferences: { contextIsolation: true, preload: path.join(__dirname, "config-preload.cjs") },
@@ -875,6 +966,65 @@ function openConfig() {
   configWin.on("closed", () => {
     configWin = null;
   });
+}
+
+// ── first-run setup wizard ────────────────────────────────────────────────────
+// Same window treatment as Settings (screen-scaled, screen-saver always-on-top) so it can't
+// be buried under the HUD. Slightly wider than Settings because it's a rail + pane layout.
+function openSetup() {
+  if (setupWin) { setupWin.show(); setupWin.focus(); return; }
+  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const scale = Math.max(1, Math.min(2.25, disp.size.height / 1080));
+  const width = Math.min(disp.workArea.width - 40, Math.round(900 * scale));
+  const height = Math.min(disp.workArea.height - 40, Math.round(640 * scale));
+  const x = Math.round(disp.workArea.x + (disp.workArea.width - width) / 2);
+  const y = Math.round(disp.workArea.y + (disp.workArea.height - height) / 2);
+  setupWin = new BrowserWindow({
+    x, y, width, height,
+    title: "SC Overlay — Setup",
+    icon: appIconPath(),
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, "setup-preload.cjs") },
+  });
+  setupWin.setAlwaysOnTop(true, "screen-saver");
+  setupWin.loadURL(`${SETUP_URL}?v=${Date.now()}`);
+  setupWin.on("closed", () => { setupWin = null; });
+}
+
+/** Open the wizard on a FIRST run, or drop the one-time banner on an existing user who never
+ *  finished setup. The distinction matters: the wizard takes over the screen, and doing that
+ *  to someone who has been running the app for months reads as the update breaking something.
+ *  🔑 Asks the SIDECAR rather than deciding here — `freshInstall` is judged there, before
+ *  anything can write a config, and the shell has no equivalent signal of its own. */
+async function maybeRunSetup() {
+  let s = null;
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/api/setup`, { signal: AbortSignal.timeout(5000) });
+    if (r.ok) s = await r.json();
+  } catch { /* sidecar not up yet — a wizard we can't populate is worse than none */ }
+  if (!s || s.setupDone) return;
+  if (s.freshInstall) { openSetup(); return; }
+  // Existing user: nudge only, and only once. The canvas owns the banner; if the overlay is
+  // switched off there's nowhere to show it, and it simply waits for a launch where there is.
+  if (!s.nudgeDismissed) {
+    const unresolved = Object.keys(s.steps).filter((k) => !s.steps[k].done && !s.steps[k].optional);
+    if (unresolved.length) { pendingSetupNudge = { steps: unresolved.length }; flushSetupNudge(); }
+  }
+}
+
+/** 🔑 The nudge is QUEUED, not sent directly. This runs during startup, racing the canvas's
+ *  first load — a send that lands before the page's listener exists is dropped silently, which
+ *  is the same trap the widget-visibility replay hit (hence the did-finish-load push above).
+ *  So it's held here and flushed by whichever of the two finishes second.
+ *  🔑 Gated on `overlayLoaded`, NOT on `overlay` being non-null: the window object exists the
+ *  moment createOverlay() returns, long before its page has a listener, so testing the window
+ *  would "deliver" the nudge into nothing and then clear the queue. */
+let pendingSetupNudge = null;
+function flushSetupNudge() {
+  if (!pendingSetupNudge || !overlay || !overlayLoaded) return;
+  overlay.webContents.send("overlay:setup-nudge", pendingSetupNudge);
+  pendingSetupNudge = null;
 }
 
 // ── run-as-administrator (for in-game hotkeys) ────────────────────────────────
@@ -1097,7 +1247,8 @@ function refreshTray() {
       { label: "Tools", enabled: false },
       { label: "Refresh missions (re-read log)", click: refreshMissions },
       { label: "Verify from logs", click: verifyFromLogs },
-      { label: "Settings…", click: openConfig },
+      { label: "Settings…", click: openSettingsSurface },
+      { label: "Run setup again…", click: openSetup },
       ...(cachedElevated === false
         ? [{ label: "Restart as administrator (for in-game hotkeys)", click: restartAsAdmin }]
         : []),
@@ -1120,14 +1271,22 @@ function refreshTray() {
   );
 }
 
-function createTray() {
-  // The asar only packs electron/**, so overlay/ isn't inside it — in the packaged
-  // app the icon ships with the sidecar under resources/server/overlay/. Resolve
-  // there when packaged, else from the repo (dev). (Was ROOT/overlay → blank tray.)
-  const iconPath = app.isPackaged
+/** The app icon, for the tray AND every window.
+ *  🔑 The asar only packs electron/**, so overlay/ isn't inside it — in the packaged app the
+ *  icon ships with the sidecar under resources/server/overlay/. Resolve there when packaged,
+ *  else from the repo (dev). (Resolving from ROOT/overlay when packaged → blank tray.)
+ *  `build/icon.png` is NOT usable here: it is only an electron-builder input and never ships.
+ *  A window with no `icon:` falls back to the EXECUTABLE's icon, which in dev is electron.exe —
+ *  which is why the Electron logo showed up on the settings window, the wizard, and (now that
+ *  the overlay is Alt-Tabbable) the overlay's own taskbar entry. */
+function appIconPath() {
+  return app.isPackaged
     ? path.join(process.resourcesPath, "server", "overlay", "tray-icon.png")
     : path.join(ROOT, "overlay", "tray-icon.png");
-  const icon = nativeImage.createFromPath(iconPath);
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(appIconPath());
   tray = new Tray(icon);
   tray.setToolTip("SC Overlay");
   tray.on("click", toggleShow);
@@ -1169,6 +1328,10 @@ if (!app.requestSingleInstanceLock()) {
     if (overlayEnabled) createOverlay();
     createTray();
     setupUpdater();
+    // First run → wizard; existing user with unfinished setup → one dismissible banner. Runs
+    // after createOverlay() because the banner is sent to the canvas, and only when the server
+    // actually answered — the wizard reads every step's state from it.
+    if (up) void maybeRunSetup();
     // Keep the canvas windows covering the whole virtual desktop when monitors change.
     screen.on("display-added", refitCanvasWindows);
     screen.on("display-removed", refitCanvasWindows);
@@ -1181,6 +1344,7 @@ if (!app.requestSingleInstanceLock()) {
     let miningKey = "Shift+F3";
     let interactKey = "F";
     let moveKey = "Ctrl+Alt+M";
+    let fabClaimKey = "F4";
     try {
       const p = path.join(process.env.APPDATA || process.env.HOME || ".", "sc-blueprint-tracker", "config.json");
       const c = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -1194,6 +1358,7 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
+      if (typeof c.fabClaimHotkey === "string") fabClaimKey = c.fabClaimHotkey;
       if (c.holdToInteract === true) holdMode = true; // opt-in: require holding the interact key
     } catch { /* defaults */ }
     foreground.want("hold", holdMode); // only track the foreground app if something asks
@@ -1202,6 +1367,7 @@ if (!app.requestSingleInstanceLock()) {
     registerMiningHotkey(miningKey);
     registerInteractHotkey(interactKey);
     registerMoveHotkey(moveKey);
+    registerFabClaimHotkey(fabClaimKey);
     // Learn our elevation state (async) so the tray can offer "Restart as administrator" when
     // we're NOT elevated — the state hotkeys-over-a-focused-game depend on.
     checkElevated().then(() => refreshTray());
@@ -1291,6 +1457,17 @@ if (!app.requestSingleInstanceLock()) {
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
   });
 
+  // ── setup wizard ────────────────────────────────────────────────────────────
+  ipcMain.on("setup:open-settings", () => openSettingsSurface());
+  // Re-validated here, not just in the preload: a renderer is never the authority on what the
+  // shell is allowed to launch. https only, same rule as overlay:open-url.
+  ipcMain.on("setup:open-external", (_e, url) => {
+    if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+  });
+  ipcMain.on("setup:close", () => setupWin?.close());
+  // The nudge banner's "set it up" button, and its dismiss. Both come from the canvas.
+  ipcMain.on("setup:open-wizard", () => openSetup());
+
   // Live-apply a captured hotkey (config window), no restart. Persistence is handled
   // separately by the config save; these just (re)register the global shortcut.
   ipcMain.handle("set-overlay-hotkey", (_e, accel) =>
@@ -1305,6 +1482,8 @@ if (!app.requestSingleInstanceLock()) {
     registerInteractHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-move-hotkey", (_e, accel) =>
     registerMoveHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("set-fabclaim-hotkey", (_e, accel) =>
+    registerFabClaimHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("overlay:reset-layout", () => { resetWidgetLayout(); return true; });
   // Primary display's offset + size within the full-desktop canvas, so the page can default a
   // new/reset widget onto the PRIMARY monitor (not a corner of a left/top secondary display).
@@ -1370,7 +1549,7 @@ if (!app.requestSingleInstanceLock()) {
     applyMouse();
   });
   // The cog's "Open settings…" opens the full config window.
-  ipcMain.on("overlay:open-settings", () => openConfig());
+  ipcMain.on("overlay:open-settings", () => openSettingsSurface());
   // The live-on-Twitch diamond opens the stream in the default browser (https only).
   ipcMain.on("overlay:open-url", (_e, url) => {
     if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url);
@@ -1419,7 +1598,7 @@ if (!app.requestSingleInstanceLock()) {
   // Binding chart is hotkey-only (never kept on). Both widgets now live in the one overlay
   // renderer, so mining is a shell-owned visibility flag (setMiningVisible) rather than a window.
   // (sendMiningVisible / pushWidgetStates / setMiningVisible are defined at module scope above.)
-  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible }));
+  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {
     if (on) { miningAutoSuppress = 0; setMiningVisible(true); }
     else setMiningVisible(false, { manual: true });
@@ -1430,6 +1609,7 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on("app:set-unlockalert", (_e, on) => setUnlockAlertVisible(!!on));
   ipcMain.on("app:set-party", (_e, on) => setPartyVisible(!!on));
   ipcMain.on("app:set-battaglia", (_e, on) => setBattagliaVisible(!!on));
+  ipcMain.on("app:set-config", (_e, on) => setConfigWidgetVisible(!!on));
   // SC Feed alert tone picker, mirroring mining:pick-tone (renderers can't open OS dialogs).
   ipcMain.handle("scfeed:pick-tone", async () => {
     const r = await dialog.showOpenDialog(overlay ?? undefined, {

@@ -714,7 +714,8 @@
   // ---- settings (all in the cog) ----
   const renderVoice = () => {
     $("voiceChk").checked = voiceOn();
-    $("scanBoxChk").checked = localStorage.getItem("miningScanBox") === "on";
+    // Inverted pref: absent = shown. Default is ON now, so the checkbox reads !hidden.
+    $("scanBoxChk").checked = localStorage.getItem("miningScanBoxHidden") !== "1";
     $("debrisChk").checked = debrisOn();
   };
   $("debrisChk").addEventListener("change", () => {
@@ -727,7 +728,9 @@
   // box appears the instant you tick it.
   $("scanBoxChk").addEventListener("change", () => {
     const on = $("scanBoxChk").checked;
-    localStorage.setItem("miningScanBox", on ? "on" : "off");
+    // Stored INVERTED (miningScanBoxHidden, absent = show) so the default is shown — this is the
+    // same key the canvas reads, and the only place either writes it.
+    localStorage.setItem("miningScanBoxHidden", on ? "0" : "1");
     try { host()?.scanBox?.(on); } catch { /* standalone: no canvas to draw on */ }
   });
   $("volSlider").value = Math.round(getVol() * 100);
@@ -742,6 +745,11 @@
   });
   $("cogAngle").addEventListener("change", () => { if (EMBEDDED) host()?.persist?.(); else persistWidget(); });
   renderVoice();
+  // The canvas owns the scan box and can hide it from the box's own Hide button, which changes
+  // the pref out from under this sheet. renderVoice() only ran at init, so the checkbox went
+  // stale: it still read "ticked" after a Hide, and clicking it wrote the value it already had —
+  // which is why re-showing the box took a click OFF and then back ON.
+  window.__miningSyncSettings = () => renderVoice();
   let cfg = {};
   // Global UI scale from config. In canvas mode it's only the BASELINE for this widget (a
   // per-widget resize overrides it); in a plain browser it zooms the content as before.

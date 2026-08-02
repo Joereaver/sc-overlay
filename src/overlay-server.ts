@@ -1,8 +1,8 @@
 import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
-import { extname, join, dirname } from "node:path";
+import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync } from "node:fs";
+import { extname, join, dirname, basename } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
@@ -12,6 +12,9 @@ import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
 import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
+import { MissionFeedbackStore } from "./mission-feedback.js";
+import { FabClaims } from "./fab-claim.js";
+import { SCENARIOS, replayLines, replayMissionId } from "./dev-replay.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
 import { loadCatalog, ocrImage, hasScanHud, classifyScreen, type CatalogEntry, type OcrResult, type ScanRegion } from "./screen-read.js";
@@ -84,6 +87,11 @@ interface Config {
    *  game.log can't give — it sees every accepted mission equally). Independent of fabCapture;
    *  either one arms the capture loop. Read by electron/capture.cjs each poll. */
   missionOcr: boolean;
+  /** Opt-in: when the fabricator shows a blueprint the tracker has no record of, offer to
+   *  tick it. Recovers ownership the log can never report (receipts predating the install,
+   *  or rotated-away logbackups) using the one screen that only lists what you own.
+   *  Independent of fabCapture — this needs no upload and no sync token. */
+  fabClaim: boolean;
   /** Mining Assistant: arms the capture loop to read the Refinement Center (job timers)
    *  and the mining scanner signature. Opt-in; read by electron/capture.cjs each poll. */
   miningAssistant: boolean;
@@ -176,6 +184,10 @@ interface Config {
   holdToInteract: boolean;
   /** Global hotkey that toggles arrange/move mode (Electron accelerator syntax). */
   moveHotkey: string;
+  /** Hotkey that CONFIRMS a fabricator claim prompt. A hotkey rather than only a click
+   *  because the overlay is click-through over the game — confirming with the mouse means
+   *  entering hold-to-interact mid-kiosk, which is exactly when you can least afford it. */
+  fabClaimHotkey: string;
   /** Recent-activity timestamps: relative ("2h ago") when true, absolute date+clock
    *  when false. Read by the overlay via the mission view's `prefs`. */
   timeRelative: boolean;
@@ -210,6 +222,18 @@ interface Config {
    *  instead of keeping the ship's manufacturer skin. Affects theme="auto" AND the /api/ship
    *  signal. Default false = stay on the last ship's manufacturer until you board another. */
   revertThemeOnFoot: boolean;
+  /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
+   *  wizard is finished; the wizard never auto-opens again once true. */
+  setupDone: boolean;
+  /** The wizard's "review your settings" step. Nothing else in the app can observe that a user
+   *  looked at Settings, so this is the only record — it is set when they come back from it. */
+  setupSettingsReviewed: boolean;
+  /** The wizard's optional "share your profile" step, which happens entirely on the website.
+   *  The app can't detect an RSI handle verification, so this records that the user resolved it. */
+  setupShareResolved: boolean;
+  /** Existing users don't get the wizard thrown at them on update — they get one dismissible
+   *  banner. Set when they dismiss it or open the wizard from it, so it never returns. */
+  setupNudgeDismissed: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -221,6 +245,7 @@ const DEFAULTS: Config = {
   syncEnabled: false,
   fabCapture: false,
   missionOcr: false,
+  fabClaim: false,
   miningAssistant: false,
   scanRegion: null,
   miningAutoShow: false,
@@ -259,6 +284,7 @@ const DEFAULTS: Config = {
   interactHotkey: "F",
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
+  fabClaimHotkey: "F4",
   timeRelative: true,
   shareLogs: false,
   seenChangelog: "",
@@ -268,6 +294,10 @@ const DEFAULTS: Config = {
   overlayTwist: 0, // flat by default; the user can dial in a skew angle in the hub
   overlayScale: 100,
   revertThemeOnFoot: false,
+  setupDone: false,
+  setupSettingsReviewed: false,
+  setupShareResolved: false,
+  setupNudgeDismissed: false,
 };
 
 function loadConfig(): Config {
@@ -281,13 +311,20 @@ function loadConfig(): Config {
   }
   return { ...DEFAULTS };
 }
+// 🔑 Whether this is a genuinely FIRST run, decided BEFORE anything can write a config —
+// the setup wizard takes over the screen, so it must never fire at someone who has been
+// using the app for months. `overlay/config.json` is deliberately never packaged
+// (tools/build-server.mjs filters it out), so in a shipped build an absent user config is
+// the only honest fresh-install signal. An ABSENT `setupDone` cannot serve here: every
+// existing user's config predates the field and would read as fresh.
+const freshInstall = !existsSync(configPath) && !existsSync(seedConfigPath);
 let config: Config = loadConfig();
 
 /** Scan common Star Citizen install locations for per-channel game.log files, newest
  *  first. SC installs as <root>\StarCitizen\<CHANNEL>\game.log (LIVE, PTU, EPTU,
  *  TECH-PREVIEW, HOTFIX, GAME, …). The channel whose log was written most recently is
  *  the one the player actually plays, so that's the recommended pick. */
-function detectGameLogs(): { path: string; channel: string; mtimeMs: number }[] {
+function detectGameLogs(): { path: string; channel: string; mtimeMs: number; live: boolean }[] {
   const bases: string[] = [];
   for (const d of ["C", "D", "E", "F", "G", "H"])
     for (const sub of [
@@ -301,7 +338,7 @@ function detectGameLogs(): { path: string; channel: string; mtimeMs: number }[] 
   // Also scan the parent of the currently-configured path (its siblings = channels).
   try { bases.push(dirname(dirname(config.logPath))); } catch { /* ignore */ }
 
-  const found: { path: string; channel: string; mtimeMs: number }[] = [];
+  const found: { path: string; channel: string; mtimeMs: number; live: boolean }[] = [];
   const seen = new Set<string>();
   for (const base of bases) {
     let channels: string[];
@@ -312,20 +349,99 @@ function detectGameLogs(): { path: string; channel: string; mtimeMs: number }[] 
       if (seen.has(key)) continue;
       try {
         const st = statSync(p);
-        if (st.isFile()) { found.push({ path: p, channel: ch, mtimeMs: st.mtimeMs }); seen.add(key); }
+        if (st.isFile()) { found.push({ path: p, channel: ch, mtimeMs: st.mtimeMs, live: isLiveLog(p) }); seen.add(key); }
       } catch { /* no game.log in this channel */ }
     }
   }
-  return found.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  // 🔑 A LIVE log beats a newer one. Picking purely by mtime pointed the app at PTU for
+  // anyone who had dabbled there most recently — and since only live progress counts, that
+  // meant tracking nothing real while their actual history sat in a sibling folder.
+  // Judged by the log's own `--envtag`, never the folder name: names are user-renamable
+  // (and on some installs the channels are junctions to one folder), the header is not.
+  // Name is the LAST tie-break and nothing more. It matters only when several candidates are
+  // equally live and equally recent — which happens when the channel folders are junctions to
+  // one install (Sub's setup: six paths, one inode, identical mtimes). Without it the winner
+  // is directory order, so a live player can be told they're on "EPTU". It can never override
+  // the env tag or recency, so a renamed folder still can't misrepresent a log.
+  const nameRank = (ch: string) => {
+    const c = ch.toUpperCase();
+    return c === "LIVE" ? 0 : c === "GAME" ? 1 : 2;
+  };
+  return found.sort((a, b) => {
+    if (a.live !== b.live) return a.live ? -1 : 1;
+    if (a.mtimeMs !== b.mtimeMs) return b.mtimeMs - a.mtimeMs;
+    return nameRank(a.channel) - nameRank(b.channel);
+  });
+}
+
+/** Is this game.log a LIVE (PUB) session? Reads only the header, where the tag lives —
+ *  these files reach tens of MB and detection runs at startup.
+ *  Unknown reads as LIVE: a log too short to carry a header yet must not be ranked below
+ *  a real test-server log. Mirrors the same tolerance as the tracker's own env gate. */
+function isLiveLog(p: string): boolean {
+  try {
+    const fd = openSync(p, "r");
+    try {
+      const buf = Buffer.alloc(4096);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      const m = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(buf.toString("utf8", 0, n));
+      const tag = (m?.[1] || m?.[2] || "").toUpperCase();
+      return !tag || tag === "PUB";
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return true; // unreadable → don't demote it on a guess
+  }
+}
+
+/** Is the sync token actually good? A non-empty string proves nothing — it can be revoked or
+ *  typed wrong — so this asks the site. Used by both `/api/diagnostics` and `/api/setup`; one
+ *  copy, because two would drift on exactly the detail that matters (401 = the token is bad and
+ *  the user must act, anything else = the network is down and they must not).
+ *
+ *  🔑 Memoised for 5s. The setup wizard POLLS this while its connect step is open, waiting for a
+ *  freshly-pasted token to go green; without the memo that step would hit subliminal.gg on every
+ *  tick. The window is deliberately short — a user who pastes a token expects it to verify now,
+ *  not in a minute. */
+type TokenVerdict = "none" | "ok" | "rejected" | "unreachable";
+let tokenMemo: { at: number; forToken: string; verdict: TokenVerdict } | null = null;
+async function verifySyncToken(): Promise<TokenVerdict> {
+  if (!config.syncToken) return "none";
+  // Keyed on the token itself, so pasting a NEW one is never answered from the old one's memo.
+  if (tokenMemo && tokenMemo.forToken === config.syncToken && Date.now() - tokenMemo.at < 5000)
+    return tokenMemo.verdict;
+  let verdict: TokenVerdict;
+  try {
+    const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
+      headers: { Authorization: `Bearer ${config.syncToken}` },
+      signal: AbortSignal.timeout(6000),
+    });
+    verdict = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
+  } catch { verdict = "unreachable"; }
+  tokenMemo = { at: Date.now(), forToken: config.syncToken, verdict };
+  return verdict;
 }
 
 // Save to the writable user dir; a write failure must never crash the server
 // (an EPERM writing under Program Files is exactly what took it down before).
+//
+// 🔑 A failure here is INVISIBLE in the worst possible way: every endpoint still answers
+// {ok:true} because it only reports that the in-memory config was updated, so the app behaves
+// perfectly until it restarts and every setting the user changed is gone. Worse, the one place
+// this was reported — console.error — goes nowhere whenever the sidecar's stdio isn't being
+// captured, which is exactly when you most need it. So the last failure is REMEMBERED and
+// surfaced by /api/diagnostics, and a save that succeeds clears it.
+let lastSaveError: { at: string; error: string } | null = null;
+let lastSaveOk: string | null = null;
 const saveConfig = async (): Promise<void> => {
   try {
     mkdirSync(userDir, { recursive: true });
     await writeFile(configPath, JSON.stringify(config, null, 2));
+    lastSaveOk = new Date().toISOString();
+    lastSaveError = null;
   } catch (e) {
+    lastSaveError = { at: new Date().toISOString(), error: String(e) };
     console.error("[config] save failed:", String(e));
   }
 };
@@ -559,10 +675,19 @@ function shipInfo() {
 // The overlay view plus user prefs the overlay needs (kept out of the tracker, which
 // doesn't know about config). Sent on every mission broadcast so a config change (e.g.
 // the time-format toggle) reaches the overlay live via broadcastMissions().
+/** Fabricator claim prompts — offer to tick a blueprint the kiosk is showing that we have
+ *  no record of. Session-scoped on purpose: the two-prompts-per-item budget resets when the
+ *  app restarts, which is the point (a prompt missed today is worth re-offering tomorrow). */
+const fabClaims = new FabClaims();
+
 function missionsPayload(): string {
   return JSON.stringify({
     ...tracker.view(),
     appVersion: APP_VERSION,
+    // The live claim prompt (or null). Rides the missions SSE because that is what the
+    // Unlock Alerts widget already listens to — no new channel, and it self-clears when
+    // the 30s window lapses because `current()` expires it on read.
+    fabClaim: fabClaims.current(Date.now()),
     live: twitchLive,
     ship: shipInfo(), // flown-ship manufacturer/theme/accent — push-live for external overlays
     prefs: {
@@ -570,6 +695,8 @@ function missionsPayload(): string {
       hideCatbar: config.hideCatbar,
       missionOcr: config.missionOcr,
       fabCapture: config.fabCapture,
+      fabClaim: config.fabClaim,
+      fabClaimKey: config.fabClaimHotkey,   // shown in the prompt ("or press F4")
       theme: effectiveTheme(),
       overlayTwist: config.overlayTwist,
       overlayScale: config.overlayScale,
@@ -600,6 +727,52 @@ const economy = new MiningEconomyStore(dataDir);
 const party = new PartyTracker(join(userDir, "party.json"), join(userDir, "party-sessions"));
 
 const mining = new MiningTracker({ dataDir, stateDir: userDir });
+
+// Crowdsourced mission facts (what you actually do in it, difficulty, soloable) collected by
+// the completion report. Local-only for now — this file IS the upload queue for when the
+// subliminal.gg endpoint lands.
+const missionFeedback = new MissionFeedbackStore(userDir);
+
+/** Push answered missions to subliminal.gg. Uses the SAME device token as the blueprint
+ *  sync (there is only one credential and one account), so a player who has connected the
+ *  tracker is already set up — and a player who hasn't simply keeps their answers locally
+ *  until they do. The endpoint upserts per (player, contract), so re-sending the whole
+ *  queue is harmless and rows stay `pending` until a request actually succeeds. */
+async function flushMissionFeedback(): Promise<void> {
+  if (!config.syncEnabled || !config.syncToken) return;
+  const pending = missionFeedback.pending();
+  if (pending.length === 0) return;
+  const base = (process.env.SC_SYNC_BASE || "https://subliminal.gg").replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${base}/api/sc/mission-feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.syncToken}` },
+      body: JSON.stringify({ answers: pending }),
+    });
+    if (!res.ok) {
+      // Leave everything pending and try again later. A 401 means the token needs
+      // re-pasting; anything else is transient as far as this queue is concerned.
+      console.log(`[feedback] upload refused (${res.status}) — ${pending.length} answers still queued`);
+      return;
+    }
+    missionFeedback.markUploaded(pending);
+    console.log(`[feedback] uploaded ${pending.length} answer(s) to ${base}`);
+  } catch (err) {
+    console.log(`[feedback] upload failed (${(err as Error).message}) — ${pending.length} answers still queued`);
+  }
+}
+// Retry the queue periodically: the site may be down, the token may not be pasted yet, or
+// the player may be offline mid-session. Nothing here is urgent enough to warrant more.
+setInterval(() => void flushMissionFeedback(), 10 * 60_000);
+// 🔑 And once at startup. Without this an app that STARTS with a queue — answered offline,
+// or answered before the endpoint existed — sits on it until someone answers something new
+// or ten minutes pass. The delay lets the sidecar finish booting first; nothing about a
+// backlog is urgent enough to race startup for.
+setTimeout(() => void flushMissionFeedback(), 15_000);
+
+// Monotonic per-process counter so two runs of the same dev scenario are two distinct
+// completions rather than one the tracker de-duplicates by missionId.
+let replaySeq = 0;
 const miningClients = new Set<ServerResponse>();
 function miningSend(msg: unknown): void {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
@@ -1135,20 +1308,93 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Re-scan the current log + all rotated logbackups for received-blueprint receipts
   // and fold them into the collected set (recovers history + accidental un-ticks).
   if (url === "/api/missions/verify" && req.method === "POST") {
+    // 🔑 Scan EVERY channel folder, not just the configured one. A player who has LIVE and
+    // PTU as separate installs gets pointed at whichever they played most recently — so
+    // someone who dabbles in PTU had their entire LIVE history sitting unscanned in a
+    // sibling folder while verify found nothing (the envtag gate correctly rejected every
+    // PTU session it was given). Scanning siblings is safe precisely BECAUSE that gate
+    // reads the environment out of each log's header rather than trusting the folder name:
+    // a renamed or oddly-named channel can neither hide a live log nor smuggle in a test one.
     const paths: string[] = [];
-    if (existsSync(config.logPath)) paths.push(config.logPath);
-    try {
-      const backups = join(dirname(config.logPath), "logbackups");
-      for (const f of readdirSync(backups)) {
-        if (f.toLowerCase().endsWith(".log")) paths.push(join(backups, f));
+    const seenPaths = new Set<string>();
+    const addLog = (p: string) => {
+      const k = p.toLowerCase();
+      if (!seenPaths.has(k) && existsSync(p)) { seenPaths.add(k); paths.push(p); }
+    };
+    const addChannel = (dir: string) => {
+      addLog(join(dir, "game.log"));
+      try {
+        const backups = join(dir, "logbackups");
+        for (const f of readdirSync(backups)) {
+          if (f.toLowerCase().endsWith(".log")) addLog(join(backups, f));
+        }
+      } catch {
+        /* no logbackups dir for this channel */
       }
+    };
+    addChannel(dirname(config.logPath)); // the configured channel first
+    try {
+      const root = dirname(dirname(config.logPath)); // …/StarCitizen — its children are channels
+      for (const ch of readdirSync(root)) addChannel(join(root, ch));
     } catch {
-      /* no logbackups dir */
+      /* unusual layout — the configured channel alone still works */
     }
     const result = tracker.verifyFromLogs(paths);
     syncFull(); // push the recovered collection to subliminal.gg if sync is on
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, ...result }));
+    return;
+  }
+
+  // The capture loop saw a blueprint at the Fabrication Kiosk. Decide whether to offer a
+  // tick. Posted on EVERY kiosk frame, so the interesting work is all in FabClaims (which
+  // refuses to re-prompt, nag, or restart its own timer) — this route only supplies the
+  // one thing that module can't know: whether the tracker already accounts for it.
+  if (url === "/api/fab/seen" && req.method === "POST") {
+    const body = await readBody(req);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const item = typeof body.item === "string" && body.item ? body.item : null;
+    const items = Array.isArray(body.items) ? body.items.filter((i: unknown) => typeof i === "string") : [];
+    const d = fabClaims.seen(
+      { item, items, name, enabled: config.fabClaim === true, owned: !!name && tracker.isAlreadyOwned(name) },
+      Date.now(),
+    );
+    // Logged from the SIDECAR, because electron/ stdout goes nowhere on a detached GUI app —
+    // and `why` is emitted verbatim so the log can't drift from the rule that produced it.
+    if (d.why !== "disabled" && d.why !== "already-owned") {
+      console.log(`[fab-claim] ${name || "(unnamed)"}: ${d.why}`);
+    }
+    if (d.prompt) broadcastMissions();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, why: d.why }));
+    return;
+  }
+
+  // The player answered a claim prompt. `accept` ticks it (and every same-named sibling);
+  // anything else just dismisses. Expiry is enforced inside FabClaims, so a click that
+  // lands after the 30s window ticks nothing and says so.
+  if (url === "/api/fab/claim" && req.method === "POST") {
+    const body = await readBody(req);
+    // Accept via BODY (the widget button) or QUERY (the global hotkey, which fires from the
+    // shell with no body). Without the query form a hotkey press would read as a dismissal —
+    // the opposite of what the player just asked for.
+    const accept = body.accept === true || /[?&]accept=1(&|$)/.test(req.url ?? "");
+    if (!accept) {
+      fabClaims.dismiss();
+      broadcastMissions();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, added: false, why: "dismissed" }));
+      return;
+    }
+    const p = fabClaims.accept(Date.now());
+    const added = p ? tracker.setFabOwned(p.name) : false;
+    if (added) {
+      console.log(`[fab-claim] ${p!.name}: CONFIRMED at the fabricator -> ticked (source=fab)`);
+      syncFull(); // push it to subliminal.gg like any other collection change
+    }
+    broadcastMissions();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, added, name: p?.name ?? null, why: p ? (added ? "added" : "already-owned") : "expired" }));
     return;
   }
 
@@ -1402,6 +1648,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (body.clearToken === true) config.syncToken = "";
     if (typeof body.fabCapture === "boolean") config.fabCapture = body.fabCapture;
     if (typeof body.missionOcr === "boolean") config.missionOcr = body.missionOcr;
+    if (typeof body.fabClaim === "boolean") config.fabClaim = body.fabClaim;
     if (typeof body.miningAssistant === "boolean") config.miningAssistant = body.miningAssistant;
     // The dragged scan region. `null` resets to the default band. Stored as fractions, and only
     // if it's usable: a region dragged off-frame or collapsed to nothing would silently stop all
@@ -1466,6 +1713,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();
+    if (typeof body.fabClaimHotkey === "string") config.fabClaimHotkey = body.fabClaimHotkey.trim();
     if (typeof body.timeRelative === "boolean") config.timeRelative = body.timeRelative;
     if (typeof body.shareLogs === "boolean") config.shareLogs = body.shareLogs;
     if (typeof body.showLoadout === "boolean") config.showLoadout = body.showLoadout;
@@ -1647,6 +1895,58 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
+  // The first-run setup wizard's view of the world: which of its steps are ALREADY satisfied,
+  // so it can auto-complete them instead of making a user redo work the app can see is done.
+  // 🔑 Carries no secret — the token is a verdict, never the string (same rule as diagnostics).
+  if (url === "/api/setup" && req.method === "GET") {
+    const logPath = config.logPath || "";
+    let logFound = false;
+    let logChannel = "";
+    try {
+      if (logPath && existsSync(logPath) && statSync(logPath).isFile()) {
+        logFound = true;
+        logChannel = basename(dirname(logPath));
+      }
+    } catch { /* unreadable path — logFound stays false, which is the answer */ }
+
+    const token = await verifySyncToken();
+    // "Skipped" is a real resolution, so a step is DONE when the app can see it done OR the
+    // user said to move on. What must never happen is a step passing silently on neither.
+    const steps = {
+      gameLog: { done: logFound, path: logPath, channel: logChannel, live: logFound && isLiveLog(logPath) },
+      connect: { done: token === "ok", token, syncEnabled: config.syncEnabled === true },
+      settings: { done: config.setupSettingsReviewed === true },
+      share: { done: config.setupShareResolved === true, optional: true },
+    };
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      // `freshInstall` is decided at startup, before anything can write a config — see the
+      // comment there for why an absent `setupDone` can't stand in for it.
+      freshInstall,
+      setupDone: config.setupDone === true,
+      nudgeDismissed: config.setupNudgeDismissed === true,
+      steps,
+    }));
+    return;
+  }
+
+  // The wizard records progress here. Each field is independent so a user who resolves one
+  // step and quits keeps that step — the wizard is resumable, not all-or-nothing.
+  if (url === "/api/setup" && req.method === "POST") {
+    const body = await readBody(req);
+    if (typeof body.settingsReviewed === "boolean") config.setupSettingsReviewed = body.settingsReviewed;
+    if (typeof body.shareResolved === "boolean") config.setupShareResolved = body.shareResolved;
+    if (typeof body.done === "boolean") config.setupDone = body.done;
+    // Dismissing the nudge and finishing the wizard both mean "never nag me again", so
+    // finishing implies dismissal — otherwise a user who completes setup from the banner
+    // would still see the banner on the next launch.
+    if (body.dismissNudge === true || body.done === true) config.setupNudgeDismissed = true;
+    await saveConfig();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // Everything this process can say about its own health, in one request. Support threads are
   // otherwise a guessing game — "it stopped working" with no way to tell a dead sidecar from a
   // missing game.log from an expired token. The Settings button copies this to the clipboard.
@@ -1678,26 +1978,27 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     } catch { /* stays false */ }
 
     // Is the sync token still good? Ask the site rather than trusting that a non-empty string works.
-    let syncToken: "none" | "ok" | "rejected" | "unreachable" = "none";
-    if (config.syncToken) {
-      try {
-        const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
-          headers: { Authorization: `Bearer ${config.syncToken}` },
-          signal: AbortSignal.timeout(6000),
-        });
-        syncToken = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
-      } catch { syncToken = "unreachable"; }
-    }
+    const syncToken = await verifySyncToken();
 
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({
       app: { version: APP_VERSION || "unknown", sidecarPort: PORT, uptimeMinutes: Math.round(process.uptime() / 60) },
       gameLog: { path: logPath || "(not set)", ...logStat, watching: watcher ? "yes" : "no" },
-      data: { patch: tracker.view().patch ?? "(none loaded)", userDir, userDirWritable },
+      // `userDirWritable` probes the DIRECTORY; `configSave` reports what actually happened to
+      // config.json. They can disagree — a writable dir with an unwritable config file is a real
+      // state, and it presents as "none of my settings stick" with nothing else to go on.
+      data: {
+        patch: tracker.view().patch ?? "(none loaded)", userDir, userDirWritable,
+        configPath,
+        configSave: lastSaveError
+          ? { ok: false, at: lastSaveError.at, error: lastSaveError.error }
+          : { ok: true, lastSavedAt: lastSaveOk ?? "(not saved this session)" },
+      },
       sync: { enabled: config.syncEnabled === true, token: syncToken },
       screenReading: {
         fabCapture: config.fabCapture === true,
         missionOcr: config.missionOcr === true,
+        fabClaim: config.fabClaim === true,
         miningAssistant: config.miningAssistant === true,
         shareLogs: config.shareLogs === true,
       },
@@ -1749,6 +2050,92 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     }
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // ── Dev replay ────────────────────────────────────────────────────────────────────────
+  // Simulate a mission ending so the report card and its questions can be tested without
+  // playing. Feeds real log LINES through the real parser into the live tracker.
+  // 🔑 Gated THREE ways, because this writes to the real collection: dev builds only
+  // (`SC_DEV` is set by main.cjs on the non-packaged spawn and by nothing else), loopback only,
+  // and it can only "receive" a blueprint the player already owns.
+  // Let the overlay WINDOW write a line into sidecar.log. It's a detached GUI process with no
+  // console, so this is the only way anything it observes becomes readable — see the comment on
+  // mrNote() in missions.html. Same dev+loopback gate as the replay below.
+  if (url === "/api/dev/note" && req.method === "GET") {
+    if (process.env.SC_DEV === "1" && fromThisMachine(req)) {
+      console.log(`[overlay] ${new URL(req.url ?? "/", "http://localhost").searchParams.get("msg") ?? ""}`);
+    }
+    res.writeHead(204, { "Cache-Control": "no-store" });
+    res.end();
+    return;
+  }
+
+  if (url === "/api/dev/replay") {
+    if (process.env.SC_DEV !== "1" || !fromThisMachine(req)) {
+      res.writeHead(404, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ error: "not available" }));
+      return;
+    }
+    if (req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ scenarios: SCENARIOS }));
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      const s = SCENARIOS.find((x) => x.id === (body as { scenario?: string })?.scenario);
+      if (!s) {
+        res.writeHead(400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ error: "unknown scenario", known: SCENARIOS.map((x) => x.id) }));
+        return;
+      }
+      // Only ever re-receive something already owned — see dev-replay.ts. A scenario that wants
+      // a drop but finds nothing owned still runs; it just has no blueprint, and says so.
+      const blueprint = s.drop ? tracker.ownedPoolBlueprint(s.contractKey) : null;
+      // Pin `now` so the completion timestamp we hand back is exactly the one the card will
+      // carry. The CLI compares them: without that it happily reports the PREVIOUS run's card
+      // as this run's success, which it did for the abandon scenario.
+      const now = Date.now();
+      const lines = replayLines(s, replayMissionId(++replaySeq), blueprint, now);
+      for (const line of lines) {
+        const ev = parseMissionEvent(parseLine(line));
+        if (ev) { tracker.apply(ev); party.apply(ev); }
+      }
+      // Force the tiles for this simulated run. The receipt above genuinely happened, but it
+      // cannot move an already-owned blueprint's unlock date into the window the report reads
+      // from — see forceCompletionBlueprints() for the full reason.
+      if (blueprint) tracker.forceCompletionBlueprints([blueprint]);
+      console.log(`[dev-replay] ${s.id} — ${lines.length} lines, blueprint=${blueprint ?? "none"}`);
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({
+        ok: true, scenario: s.id, lines: lines.length, blueprint, at: new Date(now).toISOString(),
+        outcome: s.outcome,
+        note: s.drop && !blueprint ? "you own nothing in this mission's pool, so it ran without a drop" : null,
+      }));
+      return;
+    }
+  }
+
+  // Crowdsourced mission facts. POST one answer from the completion report; GET reads back
+  // what this player already said about a contract so the report can pre-select it.
+  // 🔑 `url` is already stripped of its query string, so the key comes off `req.url` — a route
+  // written as `url.startsWith("/api/mission-feedback?")` could never match.
+  if (url === "/api/mission-feedback" && req.method === "POST") {
+    const body = await readBody(req);
+    const saved = missionFeedback.record({ ...(body as object), changelist: tracker.view().build, appVersion: APP_VERSION });
+    // Push straight away so an answer reaches the site while the player is still at their
+    // desk; the interval above is only the retry path. Deliberately not awaited — the
+    // report card must never wait on the network to acknowledge a click.
+    if (saved) void flushMissionFeedback();
+    res.writeHead(saved ? 200 : 400, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(saved ? { ok: true, answer: saved } : { ok: false, error: "no answers in submission" }));
+    return;
+  }
+  if (url === "/api/mission-feedback" && req.method === "GET") {
+    const key = new URL(req.url ?? "/", "http://localhost").searchParams.get("key");
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ answer: missionFeedback.get(key), total: missionFeedback.count() }));
     return;
   }
 

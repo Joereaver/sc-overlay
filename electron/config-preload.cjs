@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("overlayConfig", {
   setWebViewHotkey: (accel) => ipcRenderer.invoke("set-webview-hotkey", accel),
   setInteractHotkey: (accel) => ipcRenderer.invoke("set-interact-hotkey", accel),
   setMoveHotkey: (accel) => ipcRenderer.invoke("set-move-hotkey", accel),
+  setFabClaimHotkey: (accel) => ipcRenderer.invoke("set-fabclaim-hotkey", accel),
   // Opt-in "hold to interact" mode (live-applied), and a layout reset for lost widgets.
   setHoldMode: (on) => ipcRenderer.invoke("app:set-hold-mode", !!on),
   resetLayout: () => ipcRenderer.invoke("overlay:reset-layout"),

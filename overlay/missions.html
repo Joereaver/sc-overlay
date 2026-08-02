@@ -626,6 +626,15 @@
     cursor: pointer; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px;
     background: rgba(8, 17, 26, 0.85); }
   #scanBox .sb-reset:hover { color: var(--cyan-bright); }
+  /* Hide sits beside Reset, INSIDE the box — the shell hit-tests #scanBox's own rect, so a
+     control outside it is visible and permanently unclickable (exactly what stranded Reset when
+     it sat 19px above the top edge). `right` is offset past Reset's width rather than using a
+     flex row, so neither control moves if the other's label changes. */
+  #scanBox .sb-hide { position: absolute; right: 52px; top: 4px; font-family: var(--sans);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--cyan-dim);
+    cursor: pointer; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px;
+    background: rgba(8, 17, 26, 0.85); }
+  #scanBox .sb-hide:hover { color: var(--cyan-bright); }
   body.scanbox.sb-dragging #scanBox { border-style: solid; background: rgba(var(--accent-rgb), 0.10); }
   /* The last number the OCR read — just the number, centered, JUST BELOW the box (Sub, 2026-07-29:
      outside it, centered, and without the labels the first version carried). Below rather than
@@ -816,43 +825,6 @@
     text-transform: uppercase; color: var(--green); border: 1px solid rgba(46, 230, 160, 0.45);
     background: rgba(46, 230, 160, 0.1); padding: 2px 9px; border-radius: 3px; }
 
-  /* Mission-complete summary card — shown briefly over the completed mission. */
-  .cc { margin-top: 10px; border: 1px solid rgba(var(--value-rgb), 0.5); border-radius: 5px;
-    background: linear-gradient(180deg, rgba(var(--value-rgb), 0.14), rgba(46, 230, 160, 0.06));
-    padding: 9px 11px 10px; box-shadow: 0 0 18px rgba(var(--value-rgb), 0.14) inset;
-    animation: ccIn 0.35s ease both; }
-  @keyframes ccIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-  .cc-head { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700;
-    letter-spacing: 0.16em; text-transform: uppercase; color: var(--gold); }
-  .cc-check { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
-    border-radius: 50%; background: var(--green); color: #062018; font-size: 10px; font-weight: 800; }
-  /* Abandoned variant: amber/red, no stats — just explains why the pool vanished. */
-  .cc.abn { border-color: rgba(255, 132, 120, 0.5);
-    background: linear-gradient(180deg, rgba(255, 132, 120, 0.12), rgba(255, 132, 120, 0.04));
-    box-shadow: 0 0 18px rgba(255, 132, 120, 0.12) inset; }
-  .cc.abn .cc-head { color: var(--amber); }
-  .cc-check.abn { background: var(--red); color: #200a08; }
-  .cc-stats { display: flex; gap: 16px; margin-top: 8px; }
-  .cc-stat { display: flex; flex-direction: column; line-height: 1.05; }
-  .cc-val { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 18px; font-weight: 700; color: var(--gold); }
-  .cc-lbl { font-size: 8.5px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-dim); margin-top: 2px; }
-
-  /* Unlocked-blueprint reveal: the actual item render + name for each drop.
-     Column count = min(drops, 4); tiles fill their cell, so fewer drops = bigger
-     images. A single drop gets the full-width hero treatment (.single). */
-  .cc-bps { display: grid; grid-template-columns: repeat(var(--cols, 4), 1fr); gap: 8px; margin-top: 9px; }
-  .cc-bps.single { grid-template-columns: 1fr; }
-  .cc-bp { display: flex; flex-direction: column; align-items: center; min-width: 0; }
-  .cc-bp-thumb { position: relative; width: 100%; aspect-ratio: 1; border-radius: 4px;
-    background: radial-gradient(circle at 50% 38%, rgba(var(--accent-rgb), 0.14), rgba(8, 17, 26, 0.55));
-    border: 1px solid rgba(var(--accent-rgb), 0.28); overflow: hidden;
-    display: flex; align-items: center; justify-content: center; }
-  .cc-bp-thumb img { width: 100%; height: 100%; object-fit: contain; }
-  .cc-bp-thumb.noimg::before { content: "◆"; color: var(--cyan-dim); font-size: 15px; }
-  .cc-bp-name { margin-top: 4px; width: 100%; text-align: center; font-size: 9px; line-height: 1.15;
-    letter-spacing: 0.02em; color: var(--cyan-text); overflow: hidden; text-overflow: ellipsis;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .cc-bps.single .cc-bp-name { font-size: 12px; margin-top: 7px; -webkit-line-clamp: 1; }
 
   .pool { padding: 9px 11px 11px; position: relative; z-index: 2; }
   .row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; margin-top: 3px; border-radius: 3px;
@@ -1028,6 +1000,169 @@
   #whatsnew .wn-dismiss input { width: 15px; height: 15px; accent-color: var(--cyan); }
   #whatsnew .wn-close { margin-left: auto; font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
     padding: 6px 15px; cursor: pointer; border: 1px solid var(--cyan); border-radius: 5px; color: #06121a; background: var(--cyan); }
+
+  /* ── Setup nudge ────────────────────────────────────────────────────────────────────────
+     For EXISTING users updating into the first-run wizard. Deliberately NOT #whatsnew's modal
+     treatment: a screen-blocking takeover aimed at someone who has run the app for months
+     reads as the update breaking something. This is a small banner, low on the primary
+     monitor, that never blocks the game and goes away for good on either button.
+
+     🔑 Positioned off --prim-* like #whatsnew, never `vw`/`vh` — this window is the whole
+     multi-monitor canvas, so a viewport unit would place it relative to a box that spans every
+     display and land it somewhere nobody is looking. Both buttons sit INSIDE the banner's own
+     box, so the single #setupNudge rect the shell hit-tests covers them (the scan-box Reset
+     button was unclickable for exactly the opposite reason). */
+  #setupNudge { display: none; position: fixed; z-index: 68;
+    left: calc(var(--prim-left, 0px) + var(--prim-w, 100%) / 2); transform: translateX(-50%);
+    top: calc(var(--prim-top, 0px) + var(--prim-h, 100%) - 118px);
+    width: min(430px, calc(var(--prim-w, 100%) - 60px));
+    align-items: center; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--cyan); border-radius: 9px;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55), 0 0 20px rgba(var(--accent-rgb), 0.16); }
+  #setupNudge.show { display: flex; }
+  html.amd-lite #setupNudge { background: var(--panel-solid); }
+  #setupNudge .sn-txt { flex: 1; min-width: 0; }
+  #setupNudge .sn-title { font-family: var(--sans); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); }
+  #setupNudge .sn-body { font-size: 11.5px; line-height: 1.45; color: var(--cyan-text); margin-top: 3px; }
+  #setupNudge .sn-go { flex: none; font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    padding: 6px 13px; cursor: pointer; border: 1px solid var(--cyan); border-radius: 5px; color: #06121a; background: var(--cyan); }
+  #setupNudge .sn-x { flex: none; width: 21px; height: 21px; display: grid; place-items: center; cursor: pointer;
+    border: 1px solid var(--divider); border-radius: 4px; color: var(--cyan-dim); font-size: 12px; background: rgba(var(--accent-rgb), 0.06); }
+  #setupNudge .sn-x:hover { color: var(--cyan); border-color: var(--cyan); }
+
+  /* ── Mission report ─────────────────────────────────────────────────────────────────────
+     The after-mission card TAKES OVER the Mission & BP Tracker widget: it covers #panel edge to
+     edge for its ~40s, then uncovers it. Sub's call (2026-07-30) over the screen-centred modal
+     the first version shipped as — the panel is already where your eyes go after a mission, and
+     a second floating surface in the middle of the screen was one surface too many.
+
+     🔑 Living inside #panel is what makes this cheap. It inherits the panel's position, size,
+     manufacturer skin and rotateY tilt automatically, and #panel is ALREADY in the shell's RSEL
+     region list — so the report needs no region of its own and can never hand the shell a
+     screen-sized interactive rect. The earlier fixed-position version needed both.
+
+     🔑 `inset: 0` on a `position: relative` parent, NOT a fixed viewport box — so none of the
+     --prim-h / vh reasoning applies here any more. The panel is as tall as it is.
+
+     🔑 border-radius matches #panel's 12px, or the square corners of an opaque cover poke out
+     past the panel's rounded ones. */
+  #mreport { display: none; position: absolute; inset: 0; z-index: 24; border-radius: 12px; overflow: hidden; }
+  #mreport.show { display: block; }
+  /* 🔑 OPAQUE, not the panel's own translucent gradient (Sub, 2026-07-30): the panel is
+     semi-transparent by design so gameplay reads through it, but this card is dense text you
+     only get 40 seconds to read, and the game showing through made it harder to read for no
+     benefit. --panel-solid is the same token the AMD-lite path already uses for exactly this. */
+  #mreport .mr-card { width: 100%; height: 100%; display: flex; flex-direction: column; padding: 12px 14px 13px;
+    border-radius: 12px; background: var(--panel-solid);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.10);
+    opacity: 0; transition: opacity 0.22s ease; }
+  #mreport.show .mr-card { opacity: 1; }
+  html.amd-lite #mreport .mr-card { background: var(--panel-solid); transition: none; }
+
+  #mreport .mr-head { display: flex; align-items: center; gap: 8px; flex: none; }
+  #mreport .mr-check { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px;
+    border-radius: 50%; background: var(--green, #2ee6a0); color: #04201a; font-size: 11px; font-weight: 700; }
+  #mreport .mr-lbl { flex: 1; font-family: var(--sans); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan); }
+  #mreport .mr-x { flex: none; width: 21px; height: 21px; display: grid; place-items: center; cursor: pointer;
+    border: 1px solid var(--divider); border-radius: 4px; color: var(--cyan-dim); font-size: 12px; background: rgba(var(--accent-rgb), 0.06); }
+  #mreport .mr-x:hover { color: var(--cyan); border-color: var(--cyan); background: rgba(var(--accent-rgb), 0.16); }
+  /* The countdown is a hairline along the bottom of the header, not a number — a visible "39,
+     38, 37" turns an optional question into a timed test. It just has to read as "this goes away". */
+  #mreport .mr-bar { flex: none; height: 2px; margin-top: 9px; border-radius: 2px; background: rgba(var(--accent-rgb), 0.16); overflow: hidden; }
+  #mreport .mr-bar i { display: block; height: 100%; width: 100%; background: var(--cyan); transform-origin: left center; }
+  #mreport.answered .mr-bar { opacity: 0; }
+
+  #mreport .mr-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin-top: 10px; }
+  #mreport .mr-title { font-family: var(--sans); font-size: 15px; font-weight: 700; color: var(--cyan-text); line-height: 1.25; }
+  #mreport .mr-meta { margin-top: 3px; font-size: 10.5px; color: var(--cyan-dim); }
+  #mreport .mr-meta b { font-weight: 600; color: var(--cyan); }
+
+  #mreport .mr-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 9px; margin-top: 11px; }
+  #mreport .mr-stat { border: 1px solid var(--border); border-radius: 5px; padding: 7px 9px; background: rgba(var(--accent-rgb), 0.05); }
+  #mreport .mr-val { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--gold); line-height: 1.05; }
+  #mreport .mr-slbl { font-size: 8.5px; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase; color: var(--cyan-dim); margin-top: 3px; }
+
+  #mreport .mr-pool { margin-top: 11px; }
+  #mreport .mr-poolhead { display: flex; align-items: baseline; gap: 6px; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.11em; text-transform: uppercase; color: var(--cyan-dim); }
+  #mreport .mr-poolhead b { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--cyan); letter-spacing: 0; }
+  #mreport .mr-track { height: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.32); box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5); overflow: hidden; }
+  #mreport .mr-track i { display: block; height: 100%; background: var(--cyan); }
+
+  #mreport .mr-bps { display: grid; grid-template-columns: repeat(var(--cols, 3), 1fr); gap: 8px; margin-top: 11px; }
+  #mreport .mr-bp { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  /* 🔑 FIXED HEIGHT, not aspect-ratio: 1. Item art is PORTRAIT, and squaring it was the worst of
+     both worlds. Measured 2026-07-30 on Atzkav Sniper Rifle Battery: the fabricator capture is
+     373×746 (aspect 0.50) and the clay render 168×273 (0.62). A square box letterboxed half the
+     width away AND made the tallest element in the report taller than it needed to be, which is
+     what pushed the tiles past the bottom of the panel.
+     A fixed height + object-fit:contain means ANY aspect fits without cropping — a wide capture
+     letterboxes vertically, a tall one horizontally — and the report's total height stops
+     depending on what art the item happens to have. */
+  #mreport .mr-bp-thumb { position: relative; width: 100%; height: var(--thumb-h, 92px); border-radius: 4px; display: grid; place-items: center;
+    border: 1px solid rgba(var(--accent-rgb), 0.25); background: radial-gradient(circle at 50% 38%, rgba(var(--accent-rgb), 0.14), rgba(8, 17, 26, 0.55)); overflow: hidden; }
+  /* 🔑 An ABSOLUTE max-height, not a percentage one. Item art is portrait (measured: the Atzkav
+     Sniper Rifle Battery capture is 373×746, the clay render 168×273) and it was rendering
+     169×338 inside a 92px box, with `overflow:hidden` chopping the rest — the "it's getting cut
+     off" report.
+     Why every percentage attempt failed: .mr-bp-thumb is a `place-items:center` GRID, so its row
+     is auto-sized, and BOTH `height:100%` and `max-height:100%` on a grid item resolve against
+     that auto row — i.e. to `auto`. object-fit:contain then gets a box exactly the size of the
+     image and does nothing. Only an absolute length actually constrains it, so the height lives
+     in one variable both rules read and cannot drift apart. */
+  /* 150px, sized against MEASURED slack rather than guessed: on a 673px panel the report's
+     content came to 452px of a 604px body, leaving 152px spare. Portrait art at 0.5 aspect only
+     renders ~half the tile's height in width, so a short box made the item tiny (92px tall → 46px
+     of actual battery). On a panel too short for it the body just scrolls. */
+  #mreport .mr-bps { --thumb-h: 150px; }
+  #mreport .mr-bp-thumb img { display: block; width: auto; height: auto; max-width: 100%; max-height: var(--thumb-h); }
+  #mreport .mr-bp-thumb.noimg::before { content: "◆"; color: var(--cyan-dim); font-size: 15px; }
+  #mreport .mr-bp-name { margin-top: 5px; width: 100%; text-align: center; font-size: 9.5px; line-height: 1.2; color: var(--cyan-text);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* ── the crowdsourcing block ──────────────────────────────────────────────────────────
+     Sits BELOW the report, behind a divider, and is never a gate — ignoring it is how you
+     opt out, which is why there is no submit button and no "skip" affordance to feel guilty
+     about. Each control posts on click. */
+  /* 🔑 The questions are PINNED, not scrolled. They are the whole reason the card exists, and
+     they were the first thing to fall below the fold: measured 597px of content in a 413px body,
+     so the only reachable controls were the two pinned ones (✕ and Close) — exactly the "couldn't
+     click anything" report. The SUMMARY is the part that may scroll; it is the part you can lose
+     without losing the feature. flex:none here, and the body keeps flex:1 1 auto + min-height:0,
+     so a short panel shrinks the summary instead of hiding the controls. */
+  #mreport .mr-ask-slot { flex: none; }
+  #mreport .mr-ask { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); }
+  #mreport .mr-askhead { font-size: 9.5px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--cyan-dim); }
+  #mreport .mr-q { margin-top: 9px; }
+  #mreport .mr-qlbl { font-size: 11px; color: var(--cyan-text); margin-bottom: 5px; }
+  #mreport .mr-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  #mreport .mr-opt { font-family: var(--sans); font-size: 11px; font-weight: 500; padding: 5px 11px; cursor: pointer;
+    border: 1px solid var(--divider); border-radius: 5px; color: var(--cyan-text); background: rgba(var(--accent-rgb), 0.05); user-select: none; }
+  #mreport .mr-opt:hover { border-color: var(--cyan); color: var(--cyan); background: rgba(var(--accent-rgb), 0.14); }
+  #mreport .mr-opt.on { border-color: var(--cyan); background: var(--cyan); color: #06121a; }
+  /* The difficulty row is 1–5 and reads as a scale, so it gets equal-width cells with the
+     ends labelled — a bare row of numbers gives no clue which direction is harder. */
+  #mreport .mr-scale { display: flex; gap: 6px; }
+  #mreport .mr-scale .mr-opt { flex: 1; text-align: center; padding: 6px 0; font-family: var(--mono); }
+  #mreport .mr-ends { display: flex; justify-content: space-between; margin-top: 4px; font-size: 9px; color: var(--cyan-dim); }
+  #mreport .mr-thanks { margin-top: 10px; font-size: 10.5px; color: var(--green, #2ee6a0); }
+  #mreport .mr-known { margin-top: 9px; font-size: 10.5px; color: var(--cyan-dim); }
+  #mreport .mr-known b { color: var(--cyan); font-weight: 600; }
+
+  /* A real Close button as well as the ✕ (Sub, 2026-07-30). The ✕ is a 21px target in a corner;
+     this card takes the whole widget over, so the way out should be obvious and easy to hit.
+     flex:none so it is PINNED below the scrolling body — the same reason #whatsnew pins its
+     footer: a dismiss control that scrolls out of reach is how the 0.1.31 trapped-user bug
+     worked. */
+  #mreport .mr-foot { flex: none; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); }
+  #mreport .mr-close { display: block; width: 100%; font-family: var(--sans); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.04em; padding: 9px 0; cursor: pointer; border: 1px solid var(--cyan); border-radius: 5px;
+    color: var(--cyan); background: rgba(var(--accent-rgb), 0.10); }
+  #mreport .mr-close:hover { color: #06121a; background: var(--cyan); }
   #whatsnew .wn-close:hover { background: var(--cyan-bright); }
 
   /* Collapsible "Mission Info" drawer: faction/giver, mission type, reputation.
@@ -1175,11 +1310,30 @@
         <span class="fv-toast" id="footToast"></span>
       </div>
     </div>
+
+    <!-- The mission report TAKES OVER this widget rather than floating over the screen (Sub,
+         2026-07-30). It's the last child of #panel and covers it edge to edge, so it inherits the
+         panel's position, size, skin and tilt for free, and the shell already reports #panel as
+         interactive — no extra region, no screen-sized rect, nothing new to hit-test. -->
+    <div id="mreport">
+      <div class="mr-card">
+        <div class="mr-head">
+          <span class="mr-check">✓</span>
+          <span class="mr-lbl">Mission complete</span>
+          <span class="mr-x" id="mrX" title="Close">✕</span>
+        </div>
+        <div class="mr-bar"><i id="mrBar"></i></div>
+        <div class="mr-body" id="mrBody"></div>
+        <div class="mr-ask-slot" id="mrAsk"></div>
+        <div class="mr-foot"><button type="button" class="mr-close" id="mrClose">Close</button></div>
+      </div>
+    </div>
   </div>
 
   <!-- Diagnostic outline of the area the signature classifier reads (Mining Scanner cog). -->
   <div id="scanBox">
     <span class="sb-tag">Scan read area · drag to move</span>
+    <span class="sb-hide" id="sbHide" title="Hide the read area. Re-enable it from the Mining Scanner's settings.">Hide</span>
     <span class="sb-reset" id="sbReset" title="Put the read area back to its default position and size">Reset</span>
     <!-- The number the OCR read, to compare against the real one on screen. Present for EVERY read,
          including the ones the app refused — those are the ones that explain a mistake. -->
@@ -1268,6 +1422,15 @@
     </div>
   </div>
 
+  <div id="setupNudge">
+    <div class="sn-txt">
+      <div class="sn-title">Finish setting up</div>
+      <div class="sn-body" id="snBody"></div>
+    </div>
+    <button class="sn-go" id="snGo">Set up</button>
+    <span class="sn-x" id="snX" title="Dismiss">✕</span>
+  </div>
+
 <script>
   const $ = (id) => document.getElementById(id);
   let current = null;
@@ -1282,13 +1445,17 @@
   // Global cog is SUMMONED, not always-on: it appears when a widget's cog is clicked (this
   // window's, or the Mining window's via IPC) and fades out again when unused, so it's only
   // there when the person needs it. Shared state so the hub can keep it alive while open.
-  let cogHideT = null, cogHovered = false, hubOpen = false;
+  // `winFocused` = the overlay WINDOW has focus, i.e. the user switched to it on purpose (it is
+  // in Alt-Tab and the taskbar). While that holds, the cog is pinned rather than fading: you
+  // don't switch to the overlay and then want its controls to disappear out from under you.
+  let cogHideT = null, cogHovered = false, hubOpen = false, winFocused = false;
   function rescheduleCogHide() {
     clearTimeout(cogHideT);
-    // 10s auto-hide. Never fade out while the hub is open, the pointer is on the cog/hub, or a
-    // widget's settings menu is open — so the cog can't vanish mid-travel as you reach for it.
+    // 10s auto-hide. Never fade out while the overlay window is focused, the hub is open, the
+    // pointer is on the cog/hub, or a widget's settings menu is open — so the cog can't vanish
+    // mid-travel as you reach for it.
     cogHideT = setTimeout(() => {
-      if (hubOpen || cogHovered || $("cogMenu")?.classList.contains("open")) return;
+      if (winFocused || hubOpen || cogHovered || $("cogMenu")?.classList.contains("open")) return;
       $("globalCog")?.classList.remove("show");
     }, 10000);
   }
@@ -1458,8 +1625,12 @@
     $("patch").textContent = patchTxt;
     $("appVer").innerHTML = "SC Overlay" + (v.appVersion ? " v" + escapeHtml(v.appVersion) : "") + ' <span class="fv-beta">BETA</span>';
     $("collected").textContent = v.collectedTotal ?? 0;
-    $("completed").innerHTML = v.completion ? completionCard(v.completion)
-      : v.completed ? '<span class="completed">Mission complete</span>' : "";
+    // The report is the ONLY completion summary now — the old in-panel `.cc` card (duration +
+    // blueprint tiles appended under the mission header) is deleted, not hidden. It ran
+    // everywhere, so the report does too rather than leaving OBS browser sources with nothing
+    // on completion. `#completed` keeps only the plain persistent "Mission complete" state text.
+    $("completed").innerHTML = (!v.completion && v.completed) ? '<span class="completed">Mission complete</span>' : "";
+    renderReport(v);
     renderPicker(v);
 
     if (!v.contractKey) {
@@ -1813,46 +1984,271 @@
     return '<div class="rew">' + parts.join("") + "</div>";
   }
 
-  // Mission-complete summary card: payout, time taken, blueprints received. Shown
-  // for ~30s over the completed mission, then the overlay moves to the next one.
+  // m:ss for a mission duration. Used by the mission report below (the old in-panel summary
+  // card this comment used to describe is gone — the report replaced it).
   function fmtDur(ms){ if(ms==null) return null; const s=Math.max(0,Math.round(ms/1000)); const m=Math.floor(s/60); return m+":"+String(s%60).padStart(2,"0"); }
-  function completionCard(c){
-    if (c.kind === "abandoned") {
-      return '<div class="cc abn"><div class="cc-head"><span class="cc-check abn">✕</span> Mission Abandoned</div></div>';
-    }
-    const stats = [];
-    if (c.aUEC != null) stats.push('<div class="cc-stat"><span class="cc-val">+' + c.aUEC.toLocaleString() + '</span><span class="cc-lbl">aUEC</span></div>');
-    // No live "Awarded aUEC" was logged (current patches dropped it) → fall back to the
-    // mission's static dataset payout (FixedReward), labelled "payout" (expected, not confirmed).
-    else { const pt = payoutText(c.payout); if (pt) stats.push('<div class="cc-stat"><span class="cc-val">' + pt + '</span><span class="cc-lbl">payout</span></div>'); }
-    const dur = fmtDur(c.durationMs);
-    if (dur) stats.push('<div class="cc-stat"><span class="cc-val">' + dur + '</span><span class="cc-lbl">time</span></div>');
-    const bps = c.blueprints || [];
-    if (bps.length) stats.push('<div class="cc-stat"><span class="cc-val">+' + bps.length + '</span><span class="cc-lbl">blueprint' + (bps.length>1?"s":"") + '</span></div>');
-    // Adaptive grid: 1 drop → full-width hero; 2/3 → that many columns; 4+ → 4 columns, wraps.
-    const cols = Math.min(bps.length, 4);
-    const bpsCls = "cc-bps" + (bps.length === 1 ? " single" : "");
-    const bpsHtml = bps.length
-      ? '<div class="' + bpsCls + '" style="--cols:' + cols + '">' + bps.map(bpTile).join("") + '</div>'
-      : "";
-    return '<div class="cc"><div class="cc-head"><span class="cc-check">✓</span> Mission Complete</div>' +
-      (stats.length ? '<div class="cc-stats">' + stats.join("") + '</div>' : "") +
-      bpsHtml + '</div>';
+
+  // ── Mission report ──────────────────────────────────────────────────────────────────────
+  // The after-mission card. It TAKES OVER this widget for ~40s, then uncovers it. Driven by
+  // v.completion, which during its hold describes the mission that just ENDED regardless of
+  // which mission the panel is tracking — so a player running several contracts at once gets a
+  // report for the one they actually finished, not the one they happen to have pinned.
+  // This is the ONLY completion summary; the old in-panel `.cc` card was deleted, not hidden.
+  const REPORT_HOLD_MS = 40000;
+  // Once someone touches the card the countdown is cancelled — Sub's rule: "if they start
+  // interacting with it, let it stay up". This is the ceiling on that, NOT a second countdown:
+  // a card that can never close is the trapped-user bug this project keeps rediscovering, and
+  // three minutes is far past any honest interaction with three controls.
+  const REPORT_MAX_MS = 180000;
+  let mrAt = null, mrTimer = null, mrRaf = null, mrContract = null, mrAnswers = {};
+
+  const DIFFICULTY = [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]];
+  const COMBAT_OPTS = [["fps", "On foot"], ["ship", "Ship"], ["mixed", "Both"], ["none", "No combat"]];
+  const COMBAT_SAYS = { fps: "on-foot combat", ship: "ship combat", mixed: "on-foot and ship combat", none: "no combat" };
+
+  function mrStat(val, lbl) {
+    return '<div class="mr-stat"><div class="mr-val">' + escapeHtml(val) + '</div><div class="mr-slbl">' + escapeHtml(lbl) + '</div></div>';
   }
-  // One unlocked-blueprint tile: fabricator capture → clay render → glyph. Same order as the
-  // received-pop; see blueprintReward() for why the capture has to win.
-  function bpTile(b){
+
+  function reportBody(c) {
+    const meta = [];
+    if (c.giver) meta.push("<b>" + escapeHtml(c.giver) + "</b>");
+    if (c.missionType) meta.push(escapeHtml(c.missionType));
+    if (c.rank != null) meta.push("rank " + c.rank);
+    let h = '<div class="mr-title">' + escapeHtml(c.title || "Mission") + "</div>";
+    if (meta.length) h += '<div class="mr-meta">' + meta.join(" · ") + "</div>";
+
+    const stats = [];
+    if (c.aUEC != null) stats.push(mrStat("+" + c.aUEC.toLocaleString(), "aUEC"));
+    else { const pt = payoutText(c.payout); if (pt) stats.push(mrStat(pt, "payout")); }
+    const dur = fmtDur(c.durationMs);
+    if (dur) stats.push(mrStat(dur, "time"));
+    // Only meaningful next to a payout, and deliberately absent on calculated-reward missions
+    // rather than shown as a zero — see completionRate().
+    if (c.aUecPerHour != null) stats.push(mrStat(Math.round(c.aUecPerHour / 1000) + "k", "aUEC/hr"));
+    if (c.timesCompleted) stats.push(mrStat("×" + c.timesCompleted, "completed"));
+    const bps = c.blueprints || [];
+    if (bps.length) stats.push(mrStat("+" + bps.length, "blueprint" + (bps.length > 1 ? "s" : "")));
+    if (stats.length) h += '<div class="mr-stats">' + stats.join("") + "</div>";
+
+    if (bps.length) {
+      // 🔑 The floor is 2, not 1. A single drop used to get a full-width hero tile, which on a
+      // 380px panel is an enormous picture of one helmet — Sub: make it "the same size as if
+      // they had unlocked two", i.e. half. Laying one tile into a 2-column grid gives exactly
+      // that cell size with no separate single-drop rule to keep in step.
+      const cols = Math.min(Math.max(bps.length, 2), 3);
+      h += '<div class="mr-bps" style="--cols:' + cols + '">' + bps.map(mrBpTile).join("") + "</div>";
+    }
+
+    // Pool standing AFTER the run — the single most on-brand thing this card can say, and the
+    // reason someone runs the mission again.
+    if (c.poolProgress && c.poolProgress.total > 0) {
+      const p = c.poolProgress, pct = Math.round((p.owned / p.total) * 100);
+      h += '<div class="mr-pool"><div class="mr-poolhead">Blueprint pool<b>' + p.owned + " / " + p.total + "</b></div>" +
+           '<div class="mr-track"><i style="width:' + pct + '%"></i></div></div>';
+    }
+
+    if (c.reputationGained && c.reputationGained.length) {
+      // `faction` is the readable name; `scope` is the internal ladder id ("FactionReputation").
+      const r = c.reputationGained.map((x) => escapeHtml(x.faction || x.scope) + " +" + x.amount).join(" · ");
+      h += '<div class="mr-meta" style="margin-top:9px">Reputation ' + r + "</div>";
+    }
+
+    return h; // the ask block is rendered separately into its own pinned slot
+  }
+
+  function mrBpTile(b) {
     const first = b.image || b.imageFallback, second = b.image ? b.imageFallback : null;
+    // Chain the fallback with a FLAG, never by comparing img.src to the fallback URL — .src
+    // reads back absolute, so a relative fallback never compares equal and the handler
+    // re-sets the same broken source forever.
     const onerr = second
       ? "if(!this.dataset.fb){this.dataset.fb=1;this.src=this.getAttribute('data-alt');return;}this.parentElement.classList.add('noimg');this.remove()"
       : "this.parentElement.classList.add('noimg');this.remove()";
     const thumb = first
-      ? '<span class="cc-bp-thumb"><img src="' + escapeHtml(first) + '"' +
-        (second ? ' data-alt="' + escapeHtml(second) + '"' : "") +
+      ? '<span class="mr-bp-thumb"><img src="' + escapeHtml(first) + '"' + (second ? ' data-alt="' + escapeHtml(second) + '"' : "") +
         ' alt="" onerror="' + onerr + '"></span>'
-      : '<span class="cc-bp-thumb noimg"></span>';
-    return '<div class="cc-bp">' + thumb + '<span class="cc-bp-name">' + escapeHtml(b.name || "Blueprint") + '</span></div>';
+      : '<span class="mr-bp-thumb noimg"></span>';
+    return '<div class="mr-bp">' + thumb + '<span class="mr-bp-name">' + escapeHtml(b.name || "Blueprint") + "</span></div>";
   }
+
+  // The crowdsourcing block. Nothing here is required and there is no submit button — each
+  // control posts on click, and ignoring the whole section is how you opt out.
+  function reportAsk(c) {
+    if (!c.contractKey) return ""; // never resolved to a dataset mission — nothing to file against
+    let h = '<div class="mr-ask"><div class="mr-askhead">Help everyone else</div>';
+
+    const known = c.classification && c.classification.combat;
+    if (known) {
+      // Already answered by the game files (59% of missions) — so state it as a fact instead of
+      // asking. Telling the player what we know is worth more than a redundant question.
+      h += '<div class="mr-known">Game data says this is <b>' + COMBAT_SAYS[known] + "</b>.</div>";
+    } else {
+      h += '<div class="mr-q"><div class="mr-qlbl">What did this mission involve?</div><div class="mr-opts">' +
+        COMBAT_OPTS.map(([v, l]) => '<span class="mr-opt' + (mrAnswers.combat === v ? " on" : "") + '" data-q="combat" data-v="' + v + '">' + l + "</span>").join("") +
+        "</div></div>";
+    }
+
+    h += '<div class="mr-q"><div class="mr-qlbl">How hard was it?</div><div class="mr-opts mr-scale">' +
+      DIFFICULTY.map(([v, l]) => '<span class="mr-opt' + (mrAnswers.difficulty === v ? " on" : "") + '" data-q="difficulty" data-v="' + v + '">' + l + "</span>").join("") +
+      '</div><div class="mr-ends"><span>Trivial</span><span>Brutal</span></div></div>';
+
+    h += '<div class="mr-q"><div class="mr-qlbl">Did you run it solo?</div><div class="mr-opts">' +
+      [["1", "Solo"], ["0", "With a crew"]].map(([v, l]) =>
+        '<span class="mr-opt' + (mrAnswers.solo === (v === "1") ? " on" : "") + '" data-q="solo" data-v="' + v + '">' + l + "</span>").join("") +
+      "</div></div>";
+
+    if (mrAnswers.saved) h += '<div class="mr-thanks">Thanks — that\'s saved.</div>';
+    return h + "</div>";
+  }
+
+  // 🔑 The report lives INSIDE #panel, and `body.bp-hidden #panel {display:none}` means a closed
+  // Mission & BP Tracker would make it structurally impossible to show — a regression the earlier
+  // screen-centred version did not have. Someone who closes the widget would silently stop seeing
+  // what they unlocked and stop being asked anything. So the report un-hides the panel for its own
+  // duration and puts it back exactly as it was; `w.s.visible` is never touched, so the user's
+  // actual preference survives, and the restore is unconditional so it cannot strand the panel open.
+  let mrForcedPanel = false;
+  function showReport(c) {
+    if (document.body.classList.contains("bp-hidden")) {
+      document.body.classList.remove("bp-hidden");
+      mrForcedPanel = true;
+    }
+    mrContract = c.contractKey;
+    mrAnswers = {};
+    // Pre-select whatever this player said last time about this contract, so a re-run shows
+    // their own answer rather than asking the same question from blank.
+    if (c.contractKey) {
+      fetch("/api/mission-feedback?key=" + encodeURIComponent(c.contractKey))
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d || !d.answer || mrContract !== c.contractKey) return;
+          if (d.answer.combat) mrAnswers.combat = d.answer.combat;
+          if (d.answer.difficulty) mrAnswers.difficulty = d.answer.difficulty;
+          if (d.answer.solo != null) mrAnswers.solo = d.answer.solo;
+          $("mrAsk").innerHTML = reportAsk(c);
+        })
+        .catch(() => {});
+    }
+    // No abandoned variant any more — an abandon never produces a completion at all.
+    $("mrBody").innerHTML = reportBody(c);
+    $("mrAsk").innerHTML = reportAsk(c);
+    const box = $("mreport");
+    box.classList.remove("answered");
+    box.classList.add("show");
+    mrCountdown(REPORT_HOLD_MS);
+  }
+
+  // Show the card once per completion. `at` is the identity — without it every view tick during
+  // the 30s server-side hold would restart the countdown and the card would never expire.
+  // The card outlives v.completion on purpose: the server holds for 30s, the report for 40s,
+  // and a card that vanished mid-answer would throw away the answer.
+  //
+  // 🔑 But a completion is NOT complete when it fires. The game logs "Contract Complete" and
+  // then "Received Blueprint" about half a second later, so the card is necessarily built
+  // before the drop is known and `blueprints` is empty at that instant (reproduced: [] at
+  // completion, populated 0.5s on). Rendering once per `at` meant the blueprint you just
+  // unlocked never appeared. So the body re-renders while the SAME completion is showing
+  // whenever its contents change — without touching the countdown, and without disturbing
+  // answers, which are re-derived from mrAnswers rather than read out of the DOM.
+  function reportSig(c) {
+    return [c.at, (c.blueprints || []).map((b) => b.name).join("|"), c.aUEC,
+            c.poolProgress ? c.poolProgress.owned + "/" + c.poolProgress.total : "", c.timesCompleted].join("~");
+  }
+  let mrSig = "";
+  // 🔑 Wrapped, and it REPORTS to the sidecar. This window is a detached GUI process: a throw in
+  // here shows nothing, logs nothing, and leaves a missing card indistinguishable from a card the
+  // tracker never sent — which is exactly the hole a real missed report (2026-07-31T01:33:50Z)
+  // fell into. The sidecar side already logs that it built the card, so the pair of lines says
+  // which half failed. Diagnostics must go to sidecar.log; console.log here goes nowhere.
+  function mrNote(msg) {
+    try { fetch("/api/dev/note?msg=" + encodeURIComponent(msg)).catch(() => {}); } catch { /* never break render */ }
+  }
+  function renderReport(v) {
+    const c = v.completion;
+    if (!c) return;
+    try {
+      if (c.at !== mrAt) {
+        mrAt = c.at; mrSig = reportSig(c);
+        showReport(c);
+        mrNote('report shown for "' + (c.title || "?") + '"');
+        return;
+      }
+      const sig = reportSig(c);
+      if (sig === mrSig) return;
+      mrSig = sig;
+      if ($("mreport").classList.contains("show")) { $("mrBody").innerHTML = reportBody(c); $("mrAsk").innerHTML = reportAsk(c); }
+    } catch (err) {
+      mrNote("report FAILED to render: " + (err && err.message ? err.message : err));
+    }
+  }
+
+  // The hairline countdown. Driven by rAF against a real deadline rather than a CSS transition
+  // so cancelling it mid-flight leaves the bar where it is instead of snapping.
+  function mrCountdown(ms) {
+    const bar = $("mrBar"), end = Date.now() + ms;
+    if (mrTimer) clearTimeout(mrTimer);
+    if (mrRaf) cancelAnimationFrame(mrRaf);
+    const tick = () => {
+      const left = Math.max(0, end - Date.now());
+      bar.style.transform = "scaleX(" + (left / ms) + ")";
+      if (left > 0) mrRaf = requestAnimationFrame(tick);
+    };
+    tick();
+    mrTimer = setTimeout(hideReport, ms);
+  }
+
+  function hideReport() {
+    if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
+    if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
+    $("mreport").classList.remove("show");
+    if (mrForcedPanel) { document.body.classList.add("bp-hidden"); mrForcedPanel = false; }
+    // 🔑 mrAt is NOT cleared. It's the "already shown this completion" marker, and the server
+    // keeps serving v.completion for its full 30s hold — so clearing it here would make the very
+    // next view tick decide this was a new completion and pop the card straight back up. A ✕ has
+    // to mean gone.
+    mrContract = null; mrAnswers = {};
+  }
+
+  // `?harness=1` = the widget DOM suite, which drives the LIVE sidecar and the LIVE config. A stray
+  // synthetic click on a question would file a rating no human ever gave, straight into the
+  // crowdsourced set — the one kind of corruption that can't be spotted later, because a fabricated
+  // answer looks exactly like a real one.
+  const MR_HARNESS = new URLSearchParams(location.search).has("harness");
+  function sendFeedback() {
+    if (!mrContract || MR_HARNESS) return;
+    fetch("/api/mission-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contractKey: mrContract,
+        combat: mrAnswers.combat ?? null,
+        difficulty: mrAnswers.difficulty ?? null,
+        solo: mrAnswers.solo ?? null,
+      }),
+    }).then((r) => { if (r.ok) { mrAnswers.saved = true; } }).catch(() => {});
+  }
+
+  $("mrX").addEventListener("click", hideReport);
+  $("mrClose").addEventListener("click", hideReport);
+  $("mreport").addEventListener("click", (e) => {
+    const opt = e.target.closest(".mr-opt");
+    if (!opt) return;
+    const q = opt.dataset.q, raw = opt.dataset.v;
+    // Clicking the selected value again clears it — an accidental tap must be undoable, or the
+    // first answer someone gives is permanent and the data is worse for it.
+    if (q === "difficulty") { const v = Number(raw); mrAnswers.difficulty = mrAnswers.difficulty === v ? null : v; }
+    else if (q === "solo") { const v = raw === "1"; mrAnswers.solo = mrAnswers.solo === v ? null : v; }
+    else { mrAnswers.combat = mrAnswers.combat === raw ? null : raw; }
+    sendFeedback();
+    // Interaction cancels the countdown (Sub's rule) — replaced by the ceiling, not by nothing.
+    $("mreport").classList.add("answered");
+    if (mrTimer) clearTimeout(mrTimer);
+    if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
+    mrTimer = setTimeout(hideReport, REPORT_MAX_MS);
+    const cur = current && current.completion;
+    if (cur) $("mrAsk").innerHTML = reportAsk(cur); // only the answers change; leave the summary alone
+  });
 
   // Mission picker: the log can't tell us which mission you've *selected* to track,
   // so list every accepted mission and let you choose. Auto = newest with a pool.
@@ -1978,11 +2374,20 @@
     btn.disabled = true; btn.textContent = "Verifying…"; $("vstatus").textContent = "";
     try {
       const r = await (await fetch("/api/missions/verify", { method: "POST" })).json();
+      // `unresolved` = receipts we WITNESSED but can't tie to a dataset item. They count
+      // as collected locally yet can never sync, so the site shows them missing and the
+      // player re-adds them by hand. Silent until now — surface the count, and hang the
+      // names off the tooltip so a report names them without needing the log.
+      const unres = Array.isArray(r.unresolved) ? r.unresolved : [];
       $("vstatus").textContent = r.ok
         ? "scanned " + r.files + " live logs · +" + r.added + " new"
           + (r.restored ? " · " + r.restored + " restored" : "")
           + (r.skipped ? " · " + r.skipped + " PTU skipped" : "")
+          + (unres.length ? " · " + unres.length + " unknown" : "")
         : "verify failed";
+      $("vstatus").title = unres.length
+        ? "Received but not in the dataset (can't sync):\n" + unres.join("\n")
+        : "";
     } catch {
       $("vstatus").textContent = "verify failed";
     } finally {
@@ -2119,6 +2524,31 @@
         setAngle: (deg) => setWidgetAngle(w, deg),
         persist: () => persistLayout(w),
       }),
+    },
+    {
+      // 🔑 key "config", not "settings": the bridge is named window["__" + key + "Host"], and
+      // config.html reaches for __configHost. The page name, the bridge and the saved-layout key
+      // all line up; only the LABEL is "Settings".
+      key: "config", page: "config.html", title: "Settings",
+      def: { x: 200, y: 80 }, size: { w: 720, h: 620, minW: 420, maxW: 6000, minH: 320, maxH: 3000 },
+      focusFn: "__configFocus", // hotkey capture + text fields need the shared keyboard grab
+      // Re-expose the settings-window preload API to the embedded page. Listed explicitly rather
+      // than spread: `overlayApi.cfg` is a contextBridge proxy, and wrapping each call keeps this
+      // working whether or not that object survives a spread.
+      host: () => {
+        const c = window.overlayApi?.cfg;
+        if (!c) return {};
+        const out = {};
+        for (const k of [
+          "pickPng", "pickLog", "setOverlayHotkey", "setBindingHotkey", "setMiningHotkey",
+          "setWebViewHotkey", "setInteractHotkey", "setMoveHotkey", "setFabClaimHotkey",
+          "setHoldMode", "resetLayout", "metrics", "openDataFolder", "isElevated",
+          "restartAsAdmin", "getOverlayEnabled", "setOverlayEnabled", "onOverlayEnabledChanged",
+        ]) {
+          if (typeof c[k] === "function") out[k] = (...a) => c[k](...a);
+        }
+        return out;
+      },
     },
     {
       key: "notepad", page: "notepad.html", title: "Journal",
@@ -2514,15 +2944,20 @@
     document.body.classList.toggle("scanbox", !!on);
     if (on) drawScanBox();
   }
-  /** The one rule for whether the outline is up: the Mining Scanner's own pref says so AND that
-   *  widget is actually on screen. It is a calibration overlay for that widget — leaving it behind
-   *  when the scanner is closed (or is the hidden member of a stack) puts an unexplained dashed
-   *  box over the game with no control anywhere to remove it. Hiding it does NOT clear the pref, so
-   *  reopening the scanner brings it back exactly as the player left it. */
+  /** The one rule for whether the outline is up: the Mining Scanner is on screen and the player
+   *  hasn't hidden it. It is a calibration overlay for that widget — leaving it behind when the
+   *  scanner is closed (or is the hidden member of a stack) puts an unexplained dashed box over
+   *  the game with no control anywhere to remove it.
+   *
+   *  🔑 Default is SHOWN (Sub, 2026-08-01: he was scanning without the box up and wanted it there
+   *  automatically). The pref is therefore stored INVERTED — `miningScanBoxHidden`, absent = show —
+   *  under a NEW key rather than flipping the meaning of the old one, so nobody's saved "off"
+   *  silently becomes "on" or vice versa. Hiding does not clear anything else, so reopening the
+   *  scanner brings the box back exactly where the player left it. */
   function syncScanBox() {
-    let pref = false;
-    try { pref = localStorage.getItem("miningScanBox") === "on"; } catch { /* no storage */ }
-    setScanBox(pref && wShown(WBY.mining));
+    let hidden = false;
+    try { hidden = localStorage.getItem("miningScanBoxHidden") === "1"; } catch { /* no storage */ }
+    setScanBox(!hidden && wShown(WBY.mining));
   }
   // ── The number the OCR read, under the box ──────────────────────────────────────────────────
   // The point is comparison: the player reads the real signature and this one, and a discrepancy
@@ -2566,7 +3001,9 @@
     if (!el) return;
     let mode = null, sx = 0, sy = 0, start = null;
     el.addEventListener("pointerdown", (e) => {
-      if (e.target && e.target.id === "sbReset") return;   // handled below
+      // Both controls live INSIDE the box, so a pointerdown on either would otherwise start a
+      // drag of the box under them.
+      if (e.target && (e.target.id === "sbReset" || e.target.id === "sbHide")) return; // handled below
       mode = (e.target && e.target.classList.contains("sb-grip")) ? "resize" : "move";
       sx = e.clientX; sy = e.clientY;
       start = { ...(scanRegion || SCAN_DEFAULT) };
@@ -2602,6 +3039,17 @@
     };
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
+    // Hide is the opt-out for people who don't want the outline on screen. It only writes the
+    // pref and re-runs the ONE rule — it never pokes the box directly, so this can't drift from
+    // what syncScanBox() decides on the next widget show/hide or launch.
+    document.getElementById("sbHide")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      try { localStorage.setItem("miningScanBoxHidden", "1"); } catch { /* no storage */ }
+      syncScanBox();
+      // Tell the Mining Scanner's settings sheet its checkbox just changed. Without this it keeps
+      // the value it rendered at init, and re-showing the box needs a redundant off-then-on.
+      try { frameWin(WBY.mining)?.__miningSyncSettings?.(); } catch { /* iframe not ready */ }
+    });
     document.getElementById("sbReset")?.addEventListener("click", (e) => {
       e.stopPropagation();
       saveScanRegion(null);
@@ -2836,16 +3284,23 @@
     wEl(w)?.classList.remove("has-settings");
   }
 
-  function setWidgetVisible(w, on) {
+  // `bringToFront` distinguishes a USER turning a widget on from the shell REPLAYING saved
+  // visibility at startup. Both arrive on the same channel, and treating the replay as nine
+  // deliberate "show this" actions re-fronted each group member in turn — last one wins, by
+  // registry order — then persisted it, so a stack could never remember the tab you left it on.
+  function setWidgetVisible(w, on, bringToFront = true) {
     const el = wEl(w); if (!el) return;
     w.s.visible = !!on;
     const g = groupOf(w);
     if (on) {
       ensureFrame(w);
-      if (g) { g.active = w.key; saveGroups(); } // turning one on brings its tab forward
+      if (g && bringToFront) { g.active = w.key; saveGroups(); } // turning one on brings its tab forward
       showEl(w, true); // fires onShow
       applyFrame(w);
       if (g) refreshGroupDisplay(g);
+      // Turned on while arrange is ALREADY active? Then it joins arrange too. After the group
+      // refresh, because that is what decides whether this member is the displayed one.
+      syncArrange(w);
     } else {
       showEl(w, false); // fires onHide
       unloadFrame(w);
@@ -2914,7 +3369,9 @@
       // `arm` = "keep listening while hidden" (mining's auto-show). Everything else gets unloaded
       // when it's closed, so it stops costing anything.
       w.keepLoaded = !!s.arm;
-      if (s.on) setWidgetVisible(w, true);
+      // s.initial = the shell replaying saved state on launch, not a click. It must NOT re-front
+      // this widget's group tab (see setWidgetVisible).
+      if (s.on) setWidgetVisible(w, true, !s.initial);
       else { if (s.arm) ensureFrame(w); setWidgetVisible(w, false); }
     });
   }
@@ -2994,6 +3451,13 @@
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
       renderGroupTabs();
+      // 🔑 APPLY the restored `active` — restoring it isn't enough. Two things make this the only
+      // place it can happen: the loader is async (it awaits getWidgets), so the shell's per-widget
+      // visibility messages can land BEFORE GROUPS exists, at which point groupOf() is null and
+      // nothing group-aware runs; and showEl is driven per widget, so without this every visible
+      // member of a stack ends up displayed at once in the same box. Same trap as the tracker's
+      // forced-open rule and syncScanBox below: it has to be decided at the END, once state settles.
+      for (const g of GROUPS) refreshGroupDisplay(g);
       // Now that visibility is settled, decide whether the scan read area is up. It can't be
       // decided at parse time: the widget's frame doesn't exist yet, so it would always come out
       // "hidden" and a player who left the outline on would find it gone.
@@ -3111,6 +3575,23 @@
     try { frameWin(w)?.["__" + w.key + "Preview"]?.(on); } catch { /* iframe not ready */ }
   }
 
+  /** Put ONE widget into (or out of) arrange decoration — the drag banner and, for a notifier,
+   *  its sample card. Reads the single source of truth, `body.arranging`, rather than taking a
+   *  flag, so no caller can disagree with the mode the canvas is actually in.
+   *
+   *  🔑 Called by the arrange TOGGLE for every widget AND by the show path for one. That second
+   *  call is the whole point: arrange used to decorate only the widgets that existed at the
+   *  moment it was entered, so a widget switched on afterwards opened undecorated — Sub: "it's
+   *  just not in the move mode like every other app is" — and the only cure was leaving and
+   *  re-entering arrange, which re-ran the sweep. Same shape as syncScanBox: one rule, applied
+   *  from every path that can change the answer. */
+  function syncArrange(w) {
+    const el = wEl(w); if (!el) return;
+    const on = document.body.classList.contains("arranging") && el.style.display !== "none";
+    el.classList.toggle("moving", on);
+    if (w.notifier) notifierPreview(w, on);
+  }
+
   if (CANVAS) {
     $("panel").classList.add("canvas");
     document.body.classList.add("canvas");
@@ -3127,11 +3608,7 @@
       if (WBY.blueprint.s.visible === false) document.body.classList.add("bp-hidden");
       if (q.has("arrange")) { // headless-test the arrange chrome (incl. any widget also shown via its own flag)
         $("panel").classList.add("moving"); document.body.classList.add("arranging");
-        for (const w of WIDGETS) {
-          const el = wEl(w); if (el && el.style.display !== "none") el.classList.add("moving");
-        }
-        for (const w of WIDGETS)
-          if (w.notifier && wEl(w)?.classList.contains("moving")) notifierPreview(w, true);
+        for (const w of WIDGETS) syncArrange(w);
       }
       if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
       if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><ul><li>Newest note one</li><li>Newest note two</li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li>Older note</li></ul></div>'; $("whatsnew").classList.add("show"); } // headless-test the patch-notes modal
@@ -3222,6 +3699,19 @@
     }
     window.overlayApi.onGameFocus?.((on) => { gameFocused = on; armGameHide(); });
 
+    // Switching TO the overlay (Alt-Tab / taskbar) is a deliberate "I want to use this", so the
+    // cog comes up and stays up for as long as the window holds focus. Losing focus doesn't yank
+    // it away — it just re-arms the normal 10s fade, so it behaves exactly as before once you're
+    // back in the game.
+    // 🔑 `armGameHide()` is re-armed on blur too: the game-focus timer bails early when the cog
+    // isn't up, so without this a cog pinned by window focus would never get its game-focus timer
+    // started and would sit there once you tabbed back into Star Citizen.
+    window.overlayApi.onWindowFocus?.((on) => {
+      winFocused = on;
+      if (on) { clearGameHide(); summonGlobalCog(); }
+      else { rescheduleCogHide(); armGameHide(); }
+    });
+
     // Only pay for the foreground helper while the cog is up — same opt-in contract the OCR loop
     // and hold-to-interact use, so with the cog down this costs nothing. Watching the CLASS
     // catches every path that summons or hides it (widget cog, panel pointerdown, arrange mode,
@@ -3284,12 +3774,7 @@
       document.body.classList.toggle("arranging", on);
       // Every shown widget joins arrange mode. SC Feed is invisible unless it has news, so it
       // also gets a sample card held up — otherwise there'd be nothing to aim its drop zone at.
-      for (const w of WIDGETS) {
-        const el = wEl(w); if (!el) continue;
-        const shown = on && el.style.display !== "none";
-        el.classList.toggle("moving", shown);
-        if (w.notifier) notifierPreview(w, shown);
-      }
+      for (const w of WIDGETS) syncArrange(w);
     });
     // Close the Blueprint panel from the panel itself (setBlueprintVisible persists it, and the
     // hub checkbox reads that flag when it opens, so the two stay in step).
@@ -3328,7 +3813,12 @@
       // unless the shell makes the window interactive over it. Listed ONLY while it's shown —
       // it's a calibration mode you switch on, and a box that size must not sit in the cursor
       // hit-test the rest of the time.
-      const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+      // #mreport is deliberately ABSENT: it lives inside #panel and covers it exactly, so the
+      // panel's own rect already makes it clickable. Listing it would report the same rectangle
+      // twice for no gain.
+      // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
+    // it would swallow game clicks along a blank strip above the taskbar for the whole session.
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
@@ -3407,6 +3897,36 @@
       card.addEventListener("mouseleave", () => { wnLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); }); }
     window.__showWhatsNew = showWhatsNew; // reachable from the hub button (different block scope)
     showWhatsNew(false); // auto-show on launch
+
+    // ── setup nudge ──────────────────────────────────────────────────────────────────────
+    // The shell decides WHETHER this shows (only an existing user with unfinished setup who
+    // hasn't dismissed it before); this only renders it. It is not a modal — setModal() is never
+    // called, so the overlay stays click-through everywhere except the banner's own rect.
+    // 🔑 Inside the `if (window.overlayApi)` guard on purpose: there is no shell in an OBS
+    // browser source, so the nudge can neither arrive nor open a wizard there, and reaching
+    // for `overlayApi.hover` outside the guard would throw on a page that renders fine today.
+    const nudge = $("setupNudge");
+    // Dismissal is persisted server-side, not here: it must survive a restart, and the shell
+    // reads it back from /api/setup on the next launch to decide whether to send this at all.
+    const closeNudge = () => {
+      nudge.classList.remove("show");
+      window.overlayApi.hover(false);
+      fetch("/api/setup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dismissNudge: true }),
+      }).catch(() => { /* best-effort — worst case it offers once more next launch */ });
+    };
+    $("snX").addEventListener("click", closeNudge);
+    $("snGo").addEventListener("click", () => { window.overlayApi.openSetupWizard?.(); closeNudge(); });
+    nudge.addEventListener("mouseenter", () => window.overlayApi.hover(true));
+    nudge.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+    window.overlayApi.onSetupNudge?.((s) => {
+      const n = Number(s && s.steps) || 0;
+      $("snBody").textContent = n === 1
+        ? "One step of setup is still unfinished. It takes about a minute."
+        : n + " steps of setup are still unfinished. It takes about a minute.";
+      nudge.classList.add("show");
+    });
   }
 
   // Filter bar: click a lit tab to filter the pool to that category; click it again

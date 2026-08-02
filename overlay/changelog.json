@@ -1,4 +1,19 @@
 {
+  "0.1.37": {
+    "date": "2026-08-02T03:37:33Z",
+    "notes": [
+      "An after-action report. About 40 seconds after you finish a mission, the tracker asks a few quick questions about what it actually involved — how hard it was, whether you needed a crew. Your answers go to subliminal.gg and build a picture of each mission that the game files alone cannot give: the game knows what a mission awards, not what it is like to run.",
+      "A setup wizard on first run. If you install the app without going through the website first, it now walks you through finding your game log, connecting your account, and reviewing your settings. It skips anything already done, so nothing is asked twice. Reachable any time from the tray, under Run setup again.",
+      "Settings is now a panel on the overlay. It opens where the rest of the app lives, and you can place, resize and skin it like any other widget instead of it being a separate window over the game. Open it from the cog or the tray, the same as before.",
+      "The overlay now appears in Alt-Tab. Switch to it and you get your real mouse cursor back across the whole overlay, which makes reaching the cog and the smaller widgets much easier than guessing where the pointer went. Switch back and clicks go straight to the game again.",
+      "The scan read area shows itself. Open the Mining Scanner and the outline is simply there, rather than waiting to be found in a settings menu. A Hide button on the box itself turns it off if you would rather not see it.",
+      "The Mining Scanner stops reading the screen when it is closed. Previously the opt-in alone kept it scanning every few seconds whether or not the widget was open. Auto-show still works — that is the one case where it is closed on purpose and needs the read to open itself.",
+      "Fixed: the SC Feed card that appeared at launch and never went away. It now behaves like any other notification and clears itself. While it was up it could also swallow clicks meant for the game.",
+      "Fixed: turning a widget on while in arrange mode left it out of arrange, with no drag handles, until you left and re-entered.",
+      "Fixed: the app icon now shows on its windows instead of the default Electron one.",
+      "Also: opt-in prompts to tick blueprints the fabricator shows you already own but the app has no record of (off by default), and the diagnostics report now says where settings are saved and whether saving actually worked."
+    ]
+  },
   "0.1.36": {
     "date": "2026-07-30T05:33:31Z",
     "notes": [
