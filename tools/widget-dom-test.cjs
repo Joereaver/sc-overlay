@@ -749,6 +749,49 @@ const PATCHNOTES = `(async () => {
 // The sidecar does all the work and this window is only the display, so a dead one is invisible
 // unless something says so. Asserts the banner is purely a function of pushed state — it must not
 // linger after recovery, and its button has to be reachable.
+// ── Suite: chrome must not open BEHIND the Web Page widget's native view ──────
+// That widget's content is a native surface painted above all page content, so canvas DOM landing
+// on it is invisible and unclickable while looking perfectly healthy in the inspector — which is
+// exactly how its own settings cog became unreachable. The only observable contract is that the
+// canvas REPORTS a mask, so that is what this asserts.
+const VIEWMASK = `(async () => {
+  ${PRELUDE}
+  const masks = [];
+  try {
+  window.overlayApi = Object.assign({}, window.overlayApi, { maskWebView: (on) => masks.push(!!on) });
+  const web = WBY.webView;
+  ok("the Web Page widget is in the registry", !!web, web ? web.key : "MISSING");
+
+  // 🔑 It is the ONLY native view. Every other widget is a DOM iframe and stacks by z-index, so
+  // none of them can be hidden behind their own content — assert that here, so a second
+  // native-view widget added later trips this test instead of shipping the same bug.
+  ok("only one widget is native-view backed", WIDGETS.filter(w => w.key === "webView").length === 1);
+
+  setWidgetVisible(web, true);
+  await sleep(250);
+  const el = document.getElementById("w-" + web.key);
+  ok("its wrapper exists once shown", !!el);
+  const cog = el && el.querySelector(".wh-cog");
+  ok("it has a settings cog", !!cog);
+
+  if (cog) {
+    masks.length = 0;
+    cog.click();
+    await sleep(120);
+    ok("opening the Web Page cog masks the native view", masks.some(m => m === true),
+       "masks=" + JSON.stringify(masks));
+    masks.length = 0;
+    document.body.click();
+    await sleep(120);
+    ok("closing it un-masks", masks.some(m => m === false), "masks=" + JSON.stringify(masks));
+  }
+
+  setWidgetVisible(web, false);
+  await sleep(100);
+  } catch (err) { ok("suite ran without throwing", false, String(err && err.stack || err).slice(0, 300)); }
+  return out;
+})()`;
+
 const SVCDOWN = `(async () => {
   ${PRELUDE}
   const svc = document.getElementById("svcDown");
@@ -1640,6 +1683,7 @@ app.whenReady().then(async () => {
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
     fails += await run("setup nudge", SETUPNUDGE, null);
     fails += await run("background service down", SVCDOWN, null);
+    fails += await run("chrome over the native view", VIEWMASK, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and

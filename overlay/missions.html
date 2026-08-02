@@ -3125,6 +3125,21 @@
   // to get canvas coordinates, which is what the shell wants.
   //
   // Everything that moves a widget has to re-report: dragging, resizing, tab switches, show/hide.
+  /** The Web Page widget's content is a NATIVE view painted above ALL page content, so any canvas
+   *  chrome landing on the same rectangle is drawn BEHIND it — present in the DOM, correct size,
+   *  simply invisible and unclickable. That is how the Web Page widget's own ⚙ ended up
+   *  unreachable: it opened behind the website.
+   *  🔑 Reported as ONE boolean from ONE place. Each caller toggling the mask itself is how the
+   *  three existing reasons (arrange, modal, chrome) would start disagreeing — close the hub while
+   *  a settings popover is still open and a per-caller mask would un-cover the view underneath it.
+   *  Only the Web Page widget is a native view; every other widget is a DOM iframe and stacks
+   *  normally by z-index, so none of them can have this problem. */
+  function syncViewMask() {
+    const chromeOpen = !!document.querySelector(".widget.cfgopen")
+      || !!document.querySelector("#hub.open");
+    window.overlayApi?.maskWebView?.(chromeOpen);
+  }
+
   let webViewHole = null;   // last rect the page told us, in page coordinates
   function reportWebViewHole(w, r) {
     if (r) webViewHole = r;
@@ -3237,6 +3252,7 @@
     const t = e.target;
     if (t instanceof Element && t.closest(".wcfg, .wh-cog")) return;
     document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+    syncViewMask();
   });
 
   // Put ONE widget back to its default SIZE, in the MIDDLE of the primary monitor. The tray's
@@ -3600,11 +3616,13 @@
         // into it); everything else opens the local popover, which carries Text size itself.
         if (el.classList.contains("has-settings")) {
           try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); } catch { /* iframe gone */ }
+          syncViewMask();
           return;
         }
         el.classList.add("cfgopen");
         showTextScale(w);
         showAngle(w);
+        syncViewMask();
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
       el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
@@ -3714,6 +3732,8 @@
       hubOpen = open;
       hub.classList.toggle("open", open);
       gc.classList.toggle("open", open);
+      syncViewMask(); // the hub can land on top of the native view too
+
       if (!open) { window.overlayApi.setModal?.(false); window.overlayApi.hover?.(false); rescheduleCogHide(); return; }
       clearTimeout(cogHideT); // keep the cog shown while the hub is open
       // Read the RAW config for appearance (theme may be "auto" — PREFS carries the resolved

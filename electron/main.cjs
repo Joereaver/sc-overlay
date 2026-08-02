@@ -224,9 +224,20 @@ function destroyWebView() {
   webView = null;
 }
 
-/** Arrange mode, a modal, or the overlay being switched off must all cover the view. */
-function maskWebView(on) {
-  webViewMasked = !!on;
+/** The view is a NATIVE surface painted above ALL page content, so anything the canvas draws in
+ *  the same place loses to it — silently, since the DOM element is present and healthy, just
+ *  invisible. Every reason to cover it is tracked separately and OR-ed, because they overlap:
+ *  leaving arrange while a widget's settings are still open must not un-mask it.
+ *    arrange  — you are positioning widgets, not reading a web page
+ *    modal    — the what's-new card and friends must be readable and closeable
+ *    chrome   — a widget's settings popover, the cog hub: canvas DOM over the view's rectangle.
+ *               This is the one that was missing: the Web Page widget's own ⚙ opened BEHIND the
+ *               site, so there was no way to reach it. */
+let maskArrange = false, maskModal = false, maskChrome = false;
+function recomputeWebViewMask() {
+  const next = maskArrange || maskModal || maskChrome;
+  if (next === webViewMasked) return;
+  webViewMasked = next;
   applyWebViewBounds();
 }
 
@@ -1627,7 +1638,8 @@ if (!app.requestSingleInstanceLock()) {
     modalOpen = !!on;
     // A modal (what's-new card, the hub) renders in the canvas and would be painted UNDER a
     // native view, so the view stands down while one is up.
-    maskWebView(modalOpen);
+    maskModal = modalOpen;
+    recomputeWebViewMask();
     applyMouse();
   });
   // Notepad "typing mode" on/off. ON: bring the overlay foreground so the note field gets the
@@ -1670,8 +1682,11 @@ if (!app.requestSingleInstanceLock()) {
   // all visible widgets become movable; either "Done" exits for all.
   // Arrange draws drag banners and handles OVER the widgets; a native view would sit on top of
   // all of it, so it steps aside for the duration.
-  ipcMain.on("overlay:begin-move", () => { maskWebView(true); setArrangeAll(true); });
-  ipcMain.on("overlay:end-move", () => { maskWebView(false); setArrangeAll(false); });
+  ipcMain.on("overlay:begin-move", () => { maskArrange = true; recomputeWebViewMask(); setArrangeAll(true); });
+  ipcMain.on("overlay:end-move", () => { maskArrange = false; recomputeWebViewMask(); setArrangeAll(false); });
+  // Canvas chrome that has to be readable is open over the view (a widget's settings popover, the
+  // cog hub). The renderer is the only thing that knows this — main cannot see the DOM.
+  ipcMain.on("overlay:mask-view", (_e, on) => { maskChrome = !!on; recomputeWebViewMask(); });
 
   // ── the Web Page widget's view ──────────────────────────────────────────────
   // The renderer owns the widget's chrome and geometry and leaves a hole; these carry the hole's

@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // Cursor entered/left the view. The canvas can't see this itself — the view is a native
   // surface, not an iframe — and without it the Web Page widget's bar never comes out.
   onWebViewCursor: (cb) => ipcRenderer.on("webview:cursor", (_e, on) => cb(!!on)),
+  // Canvas chrome is open over the native view and would otherwise be painted behind it.
+  maskWebView: (on) => ipcRenderer.send("overlay:mask-view", !!on),
   // Per-widget canvas layout: read saved positions/sizes on load, and persist them as the
   // user drags/resizes a widget in arrange mode. Layout = { [id]: {x, y, scale, visible} }.
   getWidgets: () => ipcRenderer.invoke("overlay:get-widgets"),
