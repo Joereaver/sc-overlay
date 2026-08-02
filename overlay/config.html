@@ -175,12 +175,51 @@
   // being a 4K TV left at 100% OS scaling (→ 2×). Users can still Ctrl+= to zoom further on top.
   // Runs pre-paint (in <head>) so there's no flash of tiny text.
   (function () {
+    // 🔑 Embedded on the canvas the widget owns the box, and the canvas already applies its own
+    // per-widget text scaling — screen-scaling on top of that compounds into an unreadable size.
+    if (new URLSearchParams(location.search).has("embedded")) return;
     function applyScale() {
       var h = (window.screen && window.screen.height) || 1080;
       document.documentElement.style.zoom = Math.max(1, Math.min(2.25, h / 1080));
     }
     applyScale();
     window.addEventListener("resize", applyScale);
+  })();
+
+  // ── running as a canvas WIDGET instead of a window ──────────────────────────────────────
+  // Two host modes, one file (the same pattern the Journal and Mining Scanner use). In a window
+  // this page gets `window.overlayConfig` from config-preload.cjs; as an iframe on the canvas it
+  // gets no preload at all, so synthesize the identical API on top of the parent's __configHost.
+  // Doing it HERE — before any of the page's own script runs — is what lets all ~23 existing
+  // `window.overlayConfig.…` call sites work untouched instead of being rewritten to a bridge.
+  (function () {
+    if (!new URLSearchParams(location.search).has("embedded")) return;
+    document.documentElement.classList.add("embedded");
+    if (window.overlayConfig) return; // a real preload wins; never shadow it
+    var host = function () {
+      try { return (window.parent && window.parent.__configHost) || null; } catch (e) { return null; }
+    };
+    // Absent host → every call is a no-op resolving to null, exactly as the page already expects
+    // from an older shell (it guards each of these before use).
+    var call = function (name) {
+      return function () {
+        var h = host();
+        if (!h || typeof h[name] !== "function") return Promise.resolve(null);
+        try { return Promise.resolve(h[name].apply(h, arguments)); } catch (e) { return Promise.resolve(null); }
+      };
+    };
+    window.overlayConfig = {
+      pickPng: call("pickPng"), pickLog: call("pickLog"),
+      setOverlayHotkey: call("setOverlayHotkey"), setBindingHotkey: call("setBindingHotkey"),
+      setMiningHotkey: call("setMiningHotkey"), setWebViewHotkey: call("setWebViewHotkey"),
+      setInteractHotkey: call("setInteractHotkey"), setMoveHotkey: call("setMoveHotkey"),
+      setFabClaimHotkey: call("setFabClaimHotkey"),
+      setHoldMode: call("setHoldMode"), resetLayout: call("resetLayout"),
+      metrics: call("metrics"), openDataFolder: call("openDataFolder"),
+      isElevated: call("isElevated"), restartAsAdmin: call("restartAsAdmin"),
+      getOverlayEnabled: call("getOverlayEnabled"), setOverlayEnabled: call("setOverlayEnabled"),
+      onOverlayEnabledChanged: function (cb) { var h = host(); if (h && h.onOverlayEnabledChanged) h.onOverlayEnabledChanged(cb); },
+    };
   })();
 </script>
 </head>

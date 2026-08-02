@@ -84,6 +84,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // Battaglia grind tracker: shell-owned visibility, same as the widgets above.
   setBattaglia: (on) => ipcRenderer.send("app:set-battaglia", !!on),
   onBattagliaVisible: (cb) => ipcRenderer.on("overlay:battaglia-visible", (_e, s) => cb(s)),
+  // Settings as a canvas widget (the standalone window still exists — see openSettings above).
+  setConfig: (on) => ipcRenderer.send("app:set-config", !!on),
+  onConfigVisible: (cb) => ipcRenderer.on("overlay:config-visible", (_e, s) => cb(s)),
   // Reveal one of the app's own data folders in Explorer (allow-listed in main).
   openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
   // First-run setup: existing users with unfinished setup get one dismissible banner here
@@ -112,4 +115,31 @@ contextBridge.exposeInMainWorld("overlayApi", {
   clearTone: () => ipcRenderer.invoke("mining:clear-tone"),
   miningAutoShow: () => ipcRenderer.send("mining:show"),
   onMiningVisible: (cb) => ipcRenderer.on("overlay:mining-visible", (_e, s) => cb(s)),
+
+  // ── Settings as an embedded canvas widget ──────────────────────────────────────
+  // config.html normally runs in its OWN window with its own preload (config-preload.cjs).
+  // Embedded on the canvas it is an iframe and has no preload at all, so the canvas re-exposes
+  // that same API as `__configHost` and the page synthesizes `window.overlayConfig` on top of
+  // it — which is why none of config.html's ~23 existing call sites had to change.
+  // 🔑 Every channel here is one the settings WINDOW already uses; this adds reach, not power.
+  cfg: {
+    pickPng: () => ipcRenderer.invoke("pick-png"),
+    pickLog: (current) => ipcRenderer.invoke("pick-log", current),
+    setOverlayHotkey: (a) => ipcRenderer.invoke("set-overlay-hotkey", a),
+    setBindingHotkey: (a) => ipcRenderer.invoke("set-binding-hotkey", a),
+    setMiningHotkey: (a) => ipcRenderer.invoke("set-mining-hotkey", a),
+    setWebViewHotkey: (a) => ipcRenderer.invoke("set-webview-hotkey", a),
+    setInteractHotkey: (a) => ipcRenderer.invoke("set-interact-hotkey", a),
+    setMoveHotkey: (a) => ipcRenderer.invoke("set-move-hotkey", a),
+    setFabClaimHotkey: (a) => ipcRenderer.invoke("set-fabclaim-hotkey", a),
+    setHoldMode: (on) => ipcRenderer.invoke("app:set-hold-mode", !!on),
+    resetLayout: () => ipcRenderer.invoke("overlay:reset-layout"),
+    metrics: () => ipcRenderer.invoke("app:metrics"),
+    openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
+    isElevated: () => ipcRenderer.invoke("app:is-elevated"),
+    restartAsAdmin: () => ipcRenderer.invoke("app:restart-as-admin"),
+    getOverlayEnabled: () => ipcRenderer.invoke("overlay:get-enabled"),
+    setOverlayEnabled: (on) => ipcRenderer.invoke("overlay:set-enabled", on),
+    onOverlayEnabledChanged: (cb) => ipcRenderer.on("overlay:enabled-changed", (_e, on) => cb(on)),
+  },
 });

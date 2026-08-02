@@ -1347,6 +1347,7 @@
     <div class="hub-row tog"><label><input type="checkbox" id="wgUnlockAlert" /> Unlock Alerts</label><button type="button" class="hub-reset" data-w="unlockAlert" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgParty" /> Loot Split</label><button type="button" class="hub-reset" data-w="party" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgBattaglia" /> Event Tracker</label><button type="button" class="hub-reset" data-w="battaglia" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgConfig" /> Settings</label><button type="button" class="hub-reset" data-w="config" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgWebView" /> Web Page</label><button type="button" class="hub-reset" data-w="webView" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgBindingChart" /> Infographic Viewer</label><button type="button" class="hub-reset" data-w="bindingChart" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-sec">Global appearance</div>
@@ -2516,6 +2517,31 @@
       }),
     },
     {
+      // 🔑 key "config", not "settings": the bridge is named window["__" + key + "Host"], and
+      // config.html reaches for __configHost. The page name, the bridge and the saved-layout key
+      // all line up; only the LABEL is "Settings".
+      key: "config", page: "config.html", title: "Settings",
+      def: { x: 200, y: 80 }, size: { w: 720, h: 620, minW: 420, maxW: 6000, minH: 320, maxH: 3000 },
+      focusFn: "__configFocus", // hotkey capture + text fields need the shared keyboard grab
+      // Re-expose the settings-window preload API to the embedded page. Listed explicitly rather
+      // than spread: `overlayApi.cfg` is a contextBridge proxy, and wrapping each call keeps this
+      // working whether or not that object survives a spread.
+      host: () => {
+        const c = window.overlayApi?.cfg;
+        if (!c) return {};
+        const out = {};
+        for (const k of [
+          "pickPng", "pickLog", "setOverlayHotkey", "setBindingHotkey", "setMiningHotkey",
+          "setWebViewHotkey", "setInteractHotkey", "setMoveHotkey", "setFabClaimHotkey",
+          "setHoldMode", "resetLayout", "metrics", "openDataFolder", "isElevated",
+          "restartAsAdmin", "getOverlayEnabled", "setOverlayEnabled", "onOverlayEnabledChanged",
+        ]) {
+          if (typeof c[k] === "function") out[k] = (...a) => c[k](...a);
+        }
+        return out;
+      },
+    },
+    {
       key: "notepad", page: "notepad.html", title: "Journal",
       def: { x: 480, y: 60 }, size: { w: 320, h: 380, minW: 220, maxW: 900, minH: 160, maxH: 900 },
       focusFn: "__notepadFocus",
@@ -3598,7 +3624,7 @@
         $("hubTheme").value = c.theme || "mobiglas";
       }).catch(() => { /* fall back to whatever's in the inputs */ });
       $("wgBlueprint").checked = WBY.blueprint.s.visible !== false;
-      window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
+      window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; $("wgConfig").checked = !!s.config; } });
       window.overlayApi.setModal?.(true); window.overlayApi.hover?.(true);
     }
     gc.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); setHub(!hub.classList.contains("open")); });
@@ -3673,10 +3699,11 @@
     $("wgUnlockAlert").addEventListener("change", () => window.overlayApi.setUnlockAlert($("wgUnlockAlert").checked));
     $("wgParty").addEventListener("change", () => window.overlayApi.setParty($("wgParty").checked));
     $("wgBattaglia").addEventListener("change", () => window.overlayApi.setBattaglia($("wgBattaglia").checked));
+    $("wgConfig").addEventListener("change", () => window.overlayApi.setConfig($("wgConfig").checked));
     $("wgWebView").addEventListener("change", () => window.overlayApi.setWebView($("wgWebView").checked));
     $("wgBindingChart").addEventListener("change", () => window.overlayApi.setBindingChart($("wgBindingChart").checked));
     // Stay in sync if a widget is toggled elsewhere (tray) while the hub is open.
-    window.overlayApi.onWidgetStates?.((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
+    window.overlayApi.onWidgetStates?.((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; $("wgConfig").checked = !!s.config; } });
     // Global appearance — persisted config (also broadcasts to OBS sources).
     $("hubTheme").addEventListener("change", () => setPref({ theme: $("hubTheme").value }));
     // Layout
