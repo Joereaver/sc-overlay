@@ -555,15 +555,6 @@ function pollCursor() {
   // the cursor can't cover the slack distance faster than the slow tick.
   retuneMousePoll(distanceToRegions(overlayRegions, overlay, pt));
   if (overlay && !overlay.isDestroyed()) {
-    // Star Citizen hides the OS cursor while it has focus, so reaching for the cog is guesswork.
-    // We are the only thing that knows where the pointer is, so hand the canvas the coordinates
-    // and let it draw one. Canvas-relative, since the page's coordinate space is the window's.
-    if (wantCursor) {
-      try {
-        const b = overlay.getBounds();
-        overlay.webContents.send("overlay:cursor-at", { x: pt.x - b.x, y: pt.y - b.y });
-      } catch { /* gone */ }
-    }
     const over = insideRegions(overlayRegions, overlay, pt);
     if (over !== hovering) {
       hovering = over; applyMouse();
@@ -589,14 +580,8 @@ function pollCursor() {
 // tick, and any tick that finds itself close re-arms the fast rate before it matters.
 const POLL_FAST_MS = 30, POLL_SLOW_MS = 200, NEAR_PX = 260;
 let pollRate = 0;
-// The renderer asks for a drawn cursor only while you are demonstrably reaching for the overlay
-// (arrange mode, the interact key held, or the cog up) — never for a whole session.
-let wantCursor = false;
 function retuneMousePoll(dist) {
-  // 🔑 A drawn cursor MUST hold the fast rate. The backoff exists for hit-testing, where 200ms
-  // out in open screen costs nothing — but that is exactly the stretch you cross while aiming at
-  // the cog, and a 5fps cursor there is worse than none. Bounded by wantCursor being momentary.
-  const want = (wantCursor || dist <= NEAR_PX) ? POLL_FAST_MS : POLL_SLOW_MS;
+  const want = dist <= NEAR_PX ? POLL_FAST_MS : POLL_SLOW_MS;
   if (want === pollRate || !mousePoll) return;
   clearInterval(mousePoll);
   pollRate = want;
@@ -1480,15 +1465,6 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on("setup:close", () => setupWin?.close());
   // The nudge banner's "set it up" button, and its dismiss. Both come from the canvas.
   ipcMain.on("setup:open-wizard", () => openSetup());
-
-  // The canvas asks for a drawn cursor while it is showing overlay chrome you might be aiming
-  // at. Re-tunes the poll immediately rather than waiting for the next tick, which at the slow
-  // rate would otherwise be a visible 200ms of nothing after the request.
-  ipcMain.on("overlay:want-cursor", (_e, on) => {
-    if (wantCursor === !!on) return;
-    wantCursor = !!on;
-    if (wantCursor) retuneMousePoll(0);
-  });
 
   // Live-apply a captured hotkey (config window), no restart. Persistence is handled
   // separately by the config save; these just (re)register the global shortcut.

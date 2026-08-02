@@ -1032,17 +1032,6 @@
     border: 1px solid var(--divider); border-radius: 4px; color: var(--cyan-dim); font-size: 12px; background: rgba(var(--accent-rgb), 0.06); }
   #setupNudge .sn-x:hover { color: var(--cyan); border-color: var(--cyan); }
 
-  /* ── drawn cursor ───────────────────────────────────────────────────────────────────────
-     Star Citizen hides the OS cursor while it holds focus, so aiming at the cog or a small
-     widget is guesswork. The shell already knows where the pointer is (it polls to hit-test),
-     so it hands us the coordinates and we draw one. Purely decorative: pointer-events:none and
-     deliberately NOT in the RSEL region list, or a cursor would claim a clickable rect that
-     follows the pointer around and swallow every click on the game. */
-  #fauxCursor { display: none; position: fixed; left: 0; top: 0; z-index: 95; pointer-events: none;
-    width: 15px; height: 21px; margin: -2px 0 0 -2px;
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.9)); }
-  #fauxCursor.show { display: block; }
-
   /* ── Mission report ─────────────────────────────────────────────────────────────────────
      The after-mission card TAKES OVER the Mission & BP Tracker widget: it covers #panel edge to
      edge for its ~40s, then uncovers it. Sub's call (2026-07-30) over the screen-centred modal
@@ -1434,13 +1423,6 @@
     </div>
   </div>
 
-  <!-- An SVG arrow rather than a dot: at a glance it has to read as "the mouse pointer", and a
-       plain dot reads as a HUD marker belonging to the game. Cyan fill + dark outline so it
-       stays visible over both the black of space and a bright planet surface. -->
-  <svg id="fauxCursor" viewBox="0 0 15 21" aria-hidden="true">
-    <path d="M1 1 L1 16.5 L4.8 12.9 L7.4 18.8 L10.1 17.6 L7.6 11.9 L12.7 11.6 Z"
-          fill="var(--cyan)" stroke="#04121a" stroke-width="1.6" stroke-linejoin="round" />
-  </svg>
   <div id="setupNudge">
     <div class="sn-txt">
       <div class="sn-title">Finish setting up</div>
@@ -3700,7 +3682,7 @@
         gc.classList.remove("show", "open");
       }, COG_GAME_HIDE_MS);
     }
-    window.overlayApi.onGameFocus?.((on) => { gameFocused = on; armGameHide(); syncFauxCursor(); });
+    window.overlayApi.onGameFocus?.((on) => { gameFocused = on; armGameHide(); });
 
     // Switching TO the overlay (Alt-Tab / taskbar) is a deliberate "I want to use this", so the
     // cog comes up and stays up for as long as the window holds focus. Losing focus doesn't yank
@@ -3714,34 +3696,6 @@
       if (on) { clearGameHide(); summonGlobalCog(); }
       else { rescheduleCogHide(); armGameHide(); }
     });
-
-    // ── drawn cursor ──────────────────────────────────────────────────────────────────────
-    // Only while ALL of these hold:
-    //  · the GAME has focus — that is the only time the real cursor is hidden. Drawing it when
-    //    the overlay is focused (Alt-Tabbed to) would put a second arrow beside the real one.
-    //  · there is something on screen worth aiming at — the cog, an open hub, or arrange mode.
-    //    Without this the shell's poll would be pinned at 33Hz for the whole session to draw a
-    //    pointer nobody is using; the cost is real, so it is paid only while it buys something.
-    const faux = $("fauxCursor");
-    let arranging = false;
-    function syncFauxCursor() {
-      const aimable = gameFocused && (cogIsUp() || arranging);
-      window.overlayApi.wantCursor?.(aimable);
-      if (!aimable) faux.classList.remove("show");
-    }
-    window.overlayApi.onCursorAt?.((p) => {
-      if (!p) return;
-      // translate3d, not left/top: this moves ~33×/s and must not force layout each time.
-      faux.style.transform = "translate3d(" + p.x + "px," + p.y + "px,0)";
-      faux.classList.add("show");
-    });
-    // Re-evaluate on every signal that can change the answer. Cheap — it is one boolean and an
-    // IPC send that main ignores when unchanged.
-    window.overlayApi.onMoveMode?.((on) => { arranging = !!on; syncFauxCursor(); });
-    const fauxWatch = new MutationObserver(syncFauxCursor);
-    fauxWatch.observe(gc, { attributes: true, attributeFilter: ["class"] });
-    fauxWatch.observe(hub, { attributes: true, attributeFilter: ["class"] });
-    syncFauxCursor();
 
     // Only pay for the foreground helper while the cog is up — same opt-in contract the OCR loop
     // and hold-to-interact use, so with the cog down this costs nothing. Watching the CLASS

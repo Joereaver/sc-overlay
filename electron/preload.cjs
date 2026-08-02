@@ -23,11 +23,6 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // is in the FOREGROUND (used to fade the cog while you play), this reports that the user
   // deliberately switched TO the overlay via Alt-Tab or the taskbar.
   onWindowFocus: (cb) => ipcRenderer.on("overlay:window-focus", (_e, on) => cb(!!on)),
-  // Star Citizen hides the OS cursor while it has focus, so the canvas draws its own. `wantCursor`
-  // is an opt-in with a real cost (it pins the shell's cursor poll at 33Hz), so ask only while
-  // something aim-able is on screen.
-  wantCursor: (on) => ipcRenderer.send("overlay:want-cursor", !!on),
-  onCursorAt: (cb) => ipcRenderer.on("overlay:cursor-at", (_e, p) => cb(p)),
   // The app version (authoritative), for the "what's new" card.
   getVersion: () => ipcRenderer.invoke("app:version"),
   // While a modal (what's-new card) is open, keep the HUD hover-interactive even when
