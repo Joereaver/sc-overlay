@@ -1044,6 +1044,30 @@
     border: 1px solid var(--divider); border-radius: 4px; color: var(--cyan-dim); font-size: 12px; background: rgba(var(--accent-rgb), 0.06); }
   #setupNudge .sn-x:hover { color: var(--cyan); border-color: var(--cyan); }
 
+  /* ── background service down ────────────────────────────────────────────────────────────
+     The sidecar does all the work; this window is only the display. A dead one is therefore
+     INVISIBLE — the HUD looks fine and tracks nothing — so it gets a banner that does not
+     auto-dismiss, unlike the setup nudge. Amber/red rather than cyan: this is not chrome, it is
+     the app telling you it has stopped working. Positioned off --prim-* (never vw/vh) for the
+     same reason as everything else here: this window spans every monitor. */
+  #svcDown { display: none; position: fixed; z-index: 96;
+    left: calc(var(--prim-left, 0px) + var(--prim-w, 100%) / 2); transform: translateX(-50%);
+    top: calc(var(--prim-top, 0px) + 16px);
+    width: min(460px, calc(var(--prim-w, 100%) - 60px));
+    align-items: center; gap: 12px; padding: 11px 14px;
+    border: 1px solid var(--red); border-radius: 9px;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)), var(--panel-solid);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
+  #svcDown.show { display: flex; }
+  #svcDown .sd-txt { flex: 1; min-width: 0; }
+  #svcDown .sd-title { font-family: var(--sans); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--red); }
+  #svcDown .sd-body { font-size: 11.5px; line-height: 1.45; color: var(--cyan-text); margin-top: 3px; }
+  #svcDown .sd-go { flex: none; font-family: var(--sans); font-size: 11px; font-weight: 600;
+    padding: 6px 13px; cursor: pointer; border: 1px solid var(--red); border-radius: 5px;
+    color: #1a0d0b; background: var(--red); }
+  #svcDown .sd-go[disabled] { opacity: 0.5; cursor: default; }
+
   /* ── Mission report ─────────────────────────────────────────────────────────────────────
      The after-mission card TAKES OVER the Mission & BP Tracker widget: it covers #panel edge to
      edge for its ~40s, then uncovers it. Sub's call (2026-07-30) over the screen-centred modal
@@ -1434,6 +1458,13 @@
     </div>
   </div>
 
+  <div id="svcDown">
+    <div class="sd-txt">
+      <div class="sd-title">Background service stopped</div>
+      <div class="sd-body" id="sdBody"></div>
+    </div>
+    <button class="sd-go" id="sdRetry">Try again</button>
+  </div>
   <div id="setupNudge">
     <div class="sn-txt">
       <div class="sn-title">Finish setting up</div>
@@ -3842,7 +3873,7 @@
       // twice for no gain.
       // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
     // it would swallow game clicks along a blank strip above the taskbar for the whole session.
-    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
@@ -3944,6 +3975,39 @@
     $("snGo").addEventListener("click", () => { window.overlayApi.openSetupWizard?.(); closeNudge(); });
     nudge.addEventListener("mouseenter", () => window.overlayApi.hover(true));
     nudge.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+    // ── background service down ───────────────────────────────────────────────────────────
+    // Pure display: the shell decides the state and pushes every transition, including a re-push
+    // once this page loads, so the banner cannot be stranded on after recovery or missed because
+    // the page was not up when the sidecar died.
+    {
+      const svc = $("svcDown");
+      const retry = $("sdRetry");
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "Starting…";
+        window.overlayApi.retrySidecar?.();
+      });
+      svc.addEventListener("mouseenter", () => window.overlayApi.hover(true));
+      svc.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+      window.overlayApi.onSidecarState?.((st) => {
+        if (!st || !st.down) {
+          svc.classList.remove("show");
+          window.overlayApi.hover(false);
+          retry.disabled = false;
+          retry.textContent = "Try again";
+          return;
+        }
+        // Two very different situations, and saying "stopped" during an automatic retry would be
+        // a lie that invites a pointless click.
+        $("sdBody").textContent = st.retrying
+          ? "SC Overlay isn't tracking anything right now. Reconnecting…"
+          : "SC Overlay isn't tracking missions, blueprints or mining until this restarts.";
+        retry.style.display = st.retrying ? "none" : "";
+        if (!st.retrying) { retry.disabled = false; retry.textContent = "Try again"; }
+        svc.classList.add("show");
+      });
+    }
+
     window.overlayApi.onSetupNudge?.((s) => {
       const n = Number(s && s.steps) || 0;
       $("snBody").textContent = n === 1

@@ -745,6 +745,47 @@ const PATCHNOTES = `(async () => {
 // harness runs against the LIVE one — a suite that marks setup complete would silently disarm
 // the wizard for whoever ran the tests. The shell decides whether to show the banner; the page
 // only renders it, so rendering is the whole contract worth asserting here.
+// ── Suite: the background-service-down banner ─────────────────────────────────
+// The sidecar does all the work and this window is only the display, so a dead one is invisible
+// unless something says so. Asserts the banner is purely a function of pushed state — it must not
+// linger after recovery, and its button has to be reachable.
+const SVCDOWN = `(async () => {
+  ${PRELUDE}
+  const svc = document.getElementById("svcDown");
+  const retry = document.getElementById("sdRetry");
+  const body = document.getElementById("sdBody");
+  const REGION = "#svcDown.show";
+  ok("the banner exists", !!svc && !!retry);
+  ok("a healthy sidecar shows nothing", getComputedStyle(svc).display === "none");
+  ok("...and claims no interactive region", document.querySelectorAll(REGION).length === 0);
+
+  // Automatic retry: honest wording, and no button to press while the app is already trying.
+  svc.classList.add("show");
+  body.textContent = "SC Overlay isn't tracking anything right now. Reconnecting…";
+  retry.style.display = "none";
+  await sleep(40);
+  ok("while reconnecting it says so", body.textContent.indexOf("Reconnecting") > -1, body.textContent);
+  ok("...and offers no button to press", getComputedStyle(retry).display === "none");
+
+  // Given up: the state Sub actually hit — app running, nothing working, nothing said.
+  body.textContent = "SC Overlay isn't tracking missions, blueprints or mining until this restarts.";
+  retry.style.display = "";
+  await sleep(40);
+  ok("once it gives up it says what is broken", body.textContent.indexOf("isn't tracking") > -1);
+  ok("...and offers Try again", getComputedStyle(retry).display !== "none");
+  ok("...which the shell can actually hit-test", document.querySelectorAll(REGION).length === 1);
+  const r = svc.getBoundingClientRect(), b = retry.getBoundingClientRect();
+  ok("...with the button INSIDE the reported rect",
+     b.left >= r.left - 1 && b.right <= r.right + 1 && b.top >= r.top - 1 && b.bottom <= r.bottom + 1,
+     Math.round(b.width) + "x" + Math.round(b.height));
+
+  svc.classList.remove("show");
+  await sleep(40);
+  ok("recovery clears it and releases the region",
+     getComputedStyle(svc).display === "none" && document.querySelectorAll(REGION).length === 0);
+  return out;
+})()`;
+
 const SETUPNUDGE = `(async () => {
   ${PRELUDE}
   const nudge = document.getElementById("setupNudge");
@@ -1598,6 +1639,7 @@ app.whenReady().then(async () => {
     fails += await run("scan read area", SCANBOX, null);
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
     fails += await run("setup nudge", SETUPNUDGE, null);
+    fails += await run("background service down", SVCDOWN, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and

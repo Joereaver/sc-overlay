@@ -303,14 +303,35 @@ function startServer() {
     if (serverRestarts >= 5) {
       noteInSidecarLog(`server exited (code ${code}, signal ${signal}) — 5 crashes, not restarting again`);
       console.error("[electron] server has crashed 5 times — not restarting it again");
+      announceSidecar({ down: true, retrying: false });
       return;
     }
     const wait = Math.min(30000, 1000 * 2 ** serverRestarts);
     serverRestarts += 1;
     noteInSidecarLog(`server exited (code ${code}, signal ${signal}) — restarting in ${wait}ms (attempt ${serverRestarts})`);
     console.error(`[electron] server exited (code ${code}) — restarting in ${wait}ms, see ${SIDECAR_LOG}`);
-    serverRestartTimer = setTimeout(startServer, wait);
+    announceSidecar({ down: true, retrying: true });
+    serverRestartTimer = setTimeout(() => { void respawnAndConfirm(); }, wait);
   });
+}
+
+/** Everything the app does happens in the sidecar; the overlay is only the display. So a dead
+ *  sidecar is INVISIBLE — the HUD sits there looking perfectly normal and silently tracks
+ *  nothing, and the natural read is "this app doesn't work" rather than "a background process
+ *  needs restarting". Sub hit exactly that: after a squatter was cleared his app had already
+ *  burned its five retries, and nothing on screen said so.
+ *  🔑 State is PUSHED on every transition rather than polled, and re-pushed on canvas load, so a
+ *  banner can never be left showing after recovery (or missed because the page wasn't up yet). */
+let sidecarState = { down: false, retrying: false };
+function announceSidecar(state) {
+  sidecarState = state;
+  try {
+    if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:sidecar-state", state);
+  } catch { /* window went away mid-send */ }
+}
+async function respawnAndConfirm() {
+  startServer();
+  if (await waitForServer(60)) announceSidecar({ down: false, retrying: false });
 }
 
 /** Free the port BEFORE spawning, if a sidecar of ours is squatting on it.
@@ -470,6 +491,9 @@ function createOverlay() {
     sendBindingChartVisible({ on: bindingChartVisible, initial: true });
     pushWidgetStates();
     overlayLoaded = true;
+    // Re-push, because a sidecar that died BEFORE this page existed would otherwise have shouted
+    // into a window with no listener — and the banner would never appear at all.
+    if (sidecarState.down) announceSidecar(sidecarState);
     flushSetupNudge();
   });
   applyMouse();
@@ -1387,7 +1411,18 @@ if (!app.requestSingleInstanceLock()) {
     await reclaimStalePort();
     startServer();
     const up = await waitForServer();
-    if (!up) console.error("[electron] server did not come up on :" + PORT);
+    if (!up) {
+      console.error("[electron] server did not come up on :" + PORT);
+      // Nothing else can report this: the HUD page is SERVED BY the sidecar, so with it dead the
+      // canvas never loads and there is no surface to draw a banner on. A native box is the only
+      // thing left that the user will actually see.
+      announceSidecar({ down: true, retrying: false });
+      dialog.showErrorBox("SC Overlay — background service didn't start",
+        "The part of SC Overlay that reads your game log and tracks blueprints could not start, " +
+        "so nothing will be tracked.\n\nThis is usually another copy still running, or port " +
+        PORT + " being in use.\n\nQuit SC Overlay from the tray and start it again. If it keeps " +
+        "happening, Settings → Copy diagnostics says why, and the detail is in:\n" + SIDECAR_LOG);
+    }
     overlayEnabled = readOverlayEnabled();
     if (overlayEnabled) createOverlay();
     createTray();
@@ -1531,6 +1566,19 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on("setup:close", () => setupWin?.close());
   // The nudge banner's "set it up" button, and its dismiss. Both come from the canvas.
   ipcMain.on("setup:open-wizard", () => openSetup());
+
+  // "Try again" on the sidecar-down banner. Resets the strike count: those five attempts were
+  // spent on whatever was wrong at the time, and the user pressing this is new information —
+  // usually that they have just fixed it.
+  ipcMain.on("app:retry-sidecar", () => {
+    clearTimeout(serverRestartTimer);
+    serverRestarts = 0;
+    announceSidecar({ down: true, retrying: true });
+    void (async () => {
+      await reclaimStalePort(); // the usual reason a respawn fails: something else took the port
+      await respawnAndConfirm();
+    })();
+  });
 
   // Live-apply a captured hotkey (config window), no restart. Persistence is handled
   // separately by the config save; these just (re)register the global shortcut.

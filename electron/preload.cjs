@@ -91,6 +91,11 @@ contextBridge.exposeInMainWorld("overlayApi", {
   openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
   // First-run setup: existing users with unfinished setup get one dismissible banner here
   // rather than the wizard taking over their screen. `openSetupWizard` is what its button calls.
+  // The background service (sidecar) going down and coming back. It does ALL the work — the
+  // overlay is only the display — so without this a dead sidecar looks like a perfectly normal
+  // HUD that silently tracks nothing.
+  onSidecarState: (cb) => ipcRenderer.on("overlay:sidecar-state", (_e, s) => cb(s)),
+  retrySidecar: () => ipcRenderer.send("app:retry-sidecar"),
   onSetupNudge: (cb) => ipcRenderer.on("overlay:setup-nudge", (_e, s) => cb(s)),
   openSetupWizard: () => ipcRenderer.send("setup:open-wizard"),
   // Web Page widget + the Binding Chart WIDGET (the full-screen binding overlay is separate).
