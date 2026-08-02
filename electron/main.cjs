@@ -364,7 +364,12 @@ function createOverlay() {
     transparent: true,
     resizable: false,
     movable: false,
-    skipTaskbar: true,
+    // 🔑 `false` ON PURPOSE, and it is the only reason the overlay appears in Alt-Tab: that flag
+    // hides a window from the taskbar, and Windows builds the Alt-Tab list from the same place.
+    // Being switchable is the point — the overlay is click-through and Star Citizen recentres the
+    // mouse while it has focus, so "Alt-Tab to the overlay" is how you take focus off the game and
+    // use the widgets normally. `focusable: true` below was always set; only this was blocking it.
+    skipTaskbar: false,
     alwaysOnTop: true,
     hasShadow: false,
     fullscreenable: false,
@@ -408,6 +413,15 @@ function createOverlay() {
   });
   applyMouse();
   startMousePoll();
+  // Focusing the overlay is now a deliberate act — it's in Alt-Tab, so switching to it means
+  // "I want to use the overlay". Tell the renderer, which keeps the settings cog up for as long
+  // as that lasts instead of fading it after 10s: having just switched to the thing, hunting for
+  // its controls is exactly the wrong experience.
+  const sendFocus = (on) => {
+    if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:window-focus", on);
+  };
+  overlay.on("focus", () => sendFocus(true));
+  overlay.on("blur", () => sendFocus(false));
   overlay.on("closed", () => {
     overlay = null;
     overlayLoaded = false;

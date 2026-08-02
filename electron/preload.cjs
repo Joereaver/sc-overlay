@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // hasn't reported yet — callers should treat null as "don't act on it".
   wantForeground: (on) => ipcRenderer.invoke("app:want-foreground", !!on),
   onGameFocus: (cb) => ipcRenderer.on("overlay:game-focus", (_e, on) => cb(!!on)),
+  // The overlay window itself gaining/losing focus. Distinct from onGameFocus: that reports what
+  // is in the FOREGROUND (used to fade the cog while you play), this reports that the user
+  // deliberately switched TO the overlay via Alt-Tab or the taskbar.
+  onWindowFocus: (cb) => ipcRenderer.on("overlay:window-focus", (_e, on) => cb(!!on)),
   // The app version (authoritative), for the "what's new" card.
   getVersion: () => ipcRenderer.invoke("app:version"),
   // While a modal (what's-new card) is open, keep the HUD hover-interactive even when

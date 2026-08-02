@@ -1435,13 +1435,17 @@
   // Global cog is SUMMONED, not always-on: it appears when a widget's cog is clicked (this
   // window's, or the Mining window's via IPC) and fades out again when unused, so it's only
   // there when the person needs it. Shared state so the hub can keep it alive while open.
-  let cogHideT = null, cogHovered = false, hubOpen = false;
+  // `winFocused` = the overlay WINDOW has focus, i.e. the user switched to it on purpose (it is
+  // in Alt-Tab and the taskbar). While that holds, the cog is pinned rather than fading: you
+  // don't switch to the overlay and then want its controls to disappear out from under you.
+  let cogHideT = null, cogHovered = false, hubOpen = false, winFocused = false;
   function rescheduleCogHide() {
     clearTimeout(cogHideT);
-    // 10s auto-hide. Never fade out while the hub is open, the pointer is on the cog/hub, or a
-    // widget's settings menu is open — so the cog can't vanish mid-travel as you reach for it.
+    // 10s auto-hide. Never fade out while the overlay window is focused, the hub is open, the
+    // pointer is on the cog/hub, or a widget's settings menu is open — so the cog can't vanish
+    // mid-travel as you reach for it.
     cogHideT = setTimeout(() => {
-      if (hubOpen || cogHovered || $("cogMenu")?.classList.contains("open")) return;
+      if (winFocused || hubOpen || cogHovered || $("cogMenu")?.classList.contains("open")) return;
       $("globalCog")?.classList.remove("show");
     }, 10000);
   }
@@ -3625,6 +3629,19 @@
       }, COG_GAME_HIDE_MS);
     }
     window.overlayApi.onGameFocus?.((on) => { gameFocused = on; armGameHide(); });
+
+    // Switching TO the overlay (Alt-Tab / taskbar) is a deliberate "I want to use this", so the
+    // cog comes up and stays up for as long as the window holds focus. Losing focus doesn't yank
+    // it away — it just re-arms the normal 10s fade, so it behaves exactly as before once you're
+    // back in the game.
+    // 🔑 `armGameHide()` is re-armed on blur too: the game-focus timer bails early when the cog
+    // isn't up, so without this a cog pinned by window focus would never get its game-focus timer
+    // started and would sit there once you tabbed back into Star Citizen.
+    window.overlayApi.onWindowFocus?.((on) => {
+      winFocused = on;
+      if (on) { clearGameHide(); summonGlobalCog(); }
+      else { rescheduleCogHide(); armGameHide(); }
+    });
 
     // Only pay for the foreground helper while the cog is up — same opt-in contract the OCR loop
     // and hold-to-interact use, so with the cog down this costs nothing. Watching the CLASS
