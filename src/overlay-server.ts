@@ -418,11 +418,20 @@ async function verifySyncToken(): Promise<TokenVerdict> {
     return tokenMemo.verdict;
   let verdict: TokenVerdict;
   try {
-    const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
+    // 🔑 MUST be an endpoint that actually authenticates. This asked `/api/sc/fab-needed`, which
+    // answers 200 to anyone — no bearer at all included — so every token verified as good. The
+    // setup wizard's connect step is built on this, and it was telling users with a mistyped
+    // token "Connected — your collection will sync". `/api/sc/entitlement` is read-only and 401s
+    // without a valid bearer, so it can actually tell them apart.
+    const r = await fetch("https://subliminal.gg/api/sc/entitlement", {
       headers: { Authorization: `Bearer ${config.syncToken}` },
       signal: AbortSignal.timeout(6000),
     });
-    verdict = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
+    // 401 is the ONLY "your token is bad". A definite non-401 answer means the server recognised
+    // the caller — including 403, which is a VALID token that simply isn't entitled to something
+    // (skins are subscriber-gated). Reading 403 as rejected would tell a perfectly connected
+    // non-subscriber their token was refused.
+    verdict = r.status === 401 ? "rejected" : r.status < 500 ? "ok" : "unreachable";
   } catch { verdict = "unreachable"; }
   tokenMemo = { at: Date.now(), forToken: config.syncToken, verdict };
   return verdict;
@@ -2015,7 +2024,10 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
           ? { ok: false, at: lastSaveError.at, error: lastSaveError.error }
           : { ok: true, lastSavedAt: lastSaveOk ?? "(not saved this session)" },
       },
-      sync: { enabled: config.syncEnabled === true, token: syncToken },
+      // `enabled` is the user's setting; `active` is whether sync can actually push. They differ
+      // when SC_NO_SYNC is set (the throwaway first-run profile), and reporting only the setting
+      // made diagnostics say sync was on while every push was being refused.
+      sync: { enabled: config.syncEnabled === true, active: sync.active, token: syncToken },
       screenReading: {
         fabCapture: config.fabCapture === true,
         missionOcr: config.missionOcr === true,
