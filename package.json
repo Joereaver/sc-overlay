@@ -27,7 +27,8 @@
     "test:feedback": "tsx src/mission-feedback.test.ts",
     "test:fabclaim": "tsx src/fab-claim.test.ts",
     "simulate": "node tools/simulate.mjs",
-    "test:logenv": "tsx src/log-env.test.ts"
+    "test:logenv": "tsx src/log-env.test.ts",
+    "dev:fresh": "node tools/dev-fresh.mjs"
   },
   "dependencies": {
     "@gutenye/ocr-node": "^1.4.8",

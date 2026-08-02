@@ -1495,7 +1495,12 @@ async function run(label, script, preload, query, page) {
   // The unlock-pop suite points an <img> at a URL that must 404 — that IS the assertion (no
   // capture for this item yet → fall back to the render). Named so it can't be mistaken for a real
   // missing asset.
-  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp/;
+  // 🔑 `/api/binding-image` 404s when no chart has been chosen, and that is a SHIPPED state, not a
+  // fault — the Infographic Viewer reads the 404 as "show the pick-a-PNG empty state". Without it
+  // here the whole suite only passes for a developer who happens to have a chart configured, and
+  // fails outright against a fresh profile (npm run dev:fresh), which is exactly when you most
+  // want to be able to run it.
+  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp|\/api\/binding-image(\?|$)/;
   win.webContents.session.webRequest.onCompleted({ urls: ["*://*/*"] }, (d) => {
     if (d.statusCode < 400) return;
     if (d.statusCode === 404 && EXPECTED_404.test(d.url)) return;

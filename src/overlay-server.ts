@@ -313,11 +313,16 @@ function loadConfig(): Config {
 }
 // 🔑 Whether this is a genuinely FIRST run, decided BEFORE anything can write a config —
 // the setup wizard takes over the screen, so it must never fire at someone who has been
-// using the app for months. `overlay/config.json` is deliberately never packaged
-// (tools/build-server.mjs filters it out), so in a shipped build an absent user config is
-// the only honest fresh-install signal. An ABSENT `setupDone` cannot serve here: every
-// existing user's config predates the field and would read as fresh.
-const freshInstall = !existsSync(configPath) && !existsSync(seedConfigPath);
+// using the app for months. An ABSENT `setupDone` cannot serve here: every existing user's
+// config predates the field and would read as fresh.
+//
+// Judged on the USER's config alone. `seedConfigPath` (overlay/config.json) is deliberately
+// excluded: it is a bundled DEFAULT, not evidence that this user has configured anything, and
+// it never ships (tools/build-server.mjs filters it out) so packaged behaviour is unchanged
+// either way. Including it meant the wizard could never fire on a machine that happened to have
+// a dev seed lying around — which is every developer's, and which made `npm run dev:fresh`
+// (the only way to walk first-run setup once you have already done it) silently useless.
+const freshInstall = !existsSync(configPath);
 let config: Config = loadConfig();
 
 /** Scan common Star Citizen install locations for per-channel game.log files, newest
