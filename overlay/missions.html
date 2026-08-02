@@ -3298,6 +3298,9 @@
       showEl(w, true); // fires onShow
       applyFrame(w);
       if (g) refreshGroupDisplay(g);
+      // Turned on while arrange is ALREADY active? Then it joins arrange too. After the group
+      // refresh, because that is what decides whether this member is the displayed one.
+      syncArrange(w);
     } else {
       showEl(w, false); // fires onHide
       unloadFrame(w);
@@ -3572,6 +3575,23 @@
     try { frameWin(w)?.["__" + w.key + "Preview"]?.(on); } catch { /* iframe not ready */ }
   }
 
+  /** Put ONE widget into (or out of) arrange decoration — the drag banner and, for a notifier,
+   *  its sample card. Reads the single source of truth, `body.arranging`, rather than taking a
+   *  flag, so no caller can disagree with the mode the canvas is actually in.
+   *
+   *  🔑 Called by the arrange TOGGLE for every widget AND by the show path for one. That second
+   *  call is the whole point: arrange used to decorate only the widgets that existed at the
+   *  moment it was entered, so a widget switched on afterwards opened undecorated — Sub: "it's
+   *  just not in the move mode like every other app is" — and the only cure was leaving and
+   *  re-entering arrange, which re-ran the sweep. Same shape as syncScanBox: one rule, applied
+   *  from every path that can change the answer. */
+  function syncArrange(w) {
+    const el = wEl(w); if (!el) return;
+    const on = document.body.classList.contains("arranging") && el.style.display !== "none";
+    el.classList.toggle("moving", on);
+    if (w.notifier) notifierPreview(w, on);
+  }
+
   if (CANVAS) {
     $("panel").classList.add("canvas");
     document.body.classList.add("canvas");
@@ -3588,11 +3608,7 @@
       if (WBY.blueprint.s.visible === false) document.body.classList.add("bp-hidden");
       if (q.has("arrange")) { // headless-test the arrange chrome (incl. any widget also shown via its own flag)
         $("panel").classList.add("moving"); document.body.classList.add("arranging");
-        for (const w of WIDGETS) {
-          const el = wEl(w); if (el && el.style.display !== "none") el.classList.add("moving");
-        }
-        for (const w of WIDGETS)
-          if (w.notifier && wEl(w)?.classList.contains("moving")) notifierPreview(w, true);
+        for (const w of WIDGETS) syncArrange(w);
       }
       if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
       if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><ul><li>Newest note one</li><li>Newest note two</li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li>Older note</li></ul></div>'; $("whatsnew").classList.add("show"); } // headless-test the patch-notes modal
@@ -3758,12 +3774,7 @@
       document.body.classList.toggle("arranging", on);
       // Every shown widget joins arrange mode. SC Feed is invisible unless it has news, so it
       // also gets a sample card held up — otherwise there'd be nothing to aim its drop zone at.
-      for (const w of WIDGETS) {
-        const el = wEl(w); if (!el) continue;
-        const shown = on && el.style.display !== "none";
-        el.classList.toggle("moving", shown);
-        if (w.notifier) notifierPreview(w, shown);
-      }
+      for (const w of WIDGETS) syncArrange(w);
     });
     // Close the Blueprint panel from the panel itself (setBlueprintVisible persists it, and the
     // hub checkbox reads that flag when it opens, so the two stay in step).

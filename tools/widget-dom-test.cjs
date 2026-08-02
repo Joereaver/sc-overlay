@@ -114,6 +114,23 @@ const GROUPING = `(async () => {
   ok("groups persisted under __groups", !!gs && Array.isArray(gs[1].list), gs ? JSON.stringify(gs[1]).slice(0, 110) : "none");
   setWidgetVisible(WBY.party, false);
   ok("closing a tab leaves the stack", GROUPS.length === 0, GROUPS.length);
+
+  // Regression: a widget switched on while arrange is ALREADY active used to open undecorated —
+  // no drag banner, "not in move mode like every other app" — because arrange only ever swept the
+  // widgets that existed when it was entered. Leaving and re-entering arrange was the only cure.
+  document.body.classList.add("arranging");
+  setWidgetVisible(WBY.notepad, false);
+  await sleep(60);
+  setWidgetVisible(WBY.notepad, true);
+  await sleep(80);
+  ok("a widget turned on DURING arrange joins arrange", el(WBY.notepad).classList.contains("moving"));
+  // ...and the sweep still agrees with it, so the two paths cannot drift apart.
+  for (const w of WIDGETS) syncArrange(w);
+  ok("...and the arrange sweep agrees", el(WBY.notepad).classList.contains("moving"));
+  document.body.classList.remove("arranging");
+  for (const w of WIDGETS) syncArrange(w);
+  ok("leaving arrange clears it again", !el(WBY.notepad).classList.contains("moving"));
+  setWidgetVisible(WBY.notepad, false);
   return out;
 })()`;
 

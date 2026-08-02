@@ -55,7 +55,13 @@
   html.embedded .wrap {
     max-width: none; margin: 0; height: 100%; overflow-y: auto; padding: 12px 14px;
     border: 1px solid var(--border); border-radius: 10px;
-    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+    /* 🔑 Two layers, not a hand-picked colour: the skin's translucent gradient sits ON TOP of
+       the skin's own near-opaque panel colour. The other widgets are glanceable readouts where
+       seeing the game through them is the point; Settings is dense body text and long labels,
+       and at the shared ~0.75 alpha it was hard to read against a bright planet. Layering keeps
+       it correct across all 16 manufacturer skins — no literal colour is written here, so
+       nothing has to be maintained per skin. */
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)), var(--panel-solid);
   }
   html.amd-lite.embedded .wrap { background: var(--panel-solid); }
   /* The window's big hero header is dead weight in a widget — the widget's own bar names it. */
