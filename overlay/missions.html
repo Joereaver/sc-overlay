@@ -635,6 +635,12 @@
     cursor: pointer; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px;
     background: rgba(8, 17, 26, 0.85); }
   #scanBox .sb-hide:hover { color: var(--cyan-bright); }
+  /* User-set visibility for the whole box (Mining Scanner cog → Box opacity). 🔑 Hover always
+     returns it to full: at a low setting the Hide/Reset controls and the drag grip would
+     otherwise be as faint as the outline, i.e. a box you cannot see well enough to get rid of.
+     The transition is on opacity only, so it never animates position during a drag. */
+  #scanBox { opacity: var(--sb-op, 1); transition: opacity 0.12s ease; }
+  body.scanbox.sb-dragging #scanBox, body.scanbox #scanBox:hover { opacity: 1; }
   body.scanbox.sb-dragging #scanBox { border-style: solid; background: rgba(var(--accent-rgb), 0.10); }
   /* The last number the OCR read — just the number, centered, JUST BELOW the box (Sub, 2026-07-29:
      outside it, centered, and without the labels the first version carried). Below rather than
@@ -2957,7 +2963,19 @@
   function syncScanBox() {
     let hidden = false;
     try { hidden = localStorage.getItem("miningScanBoxHidden") === "1"; } catch { /* no storage */ }
+    applyScanBoxOpacity();
     setScanBox(!hidden && wShown(WBY.mining));
+  }
+  /** The box's user-set opacity, applied as a CSS variable. Clamped to a 10% FLOOR: 0 would not
+   *  be subtle, it would be invisible, and an invisible box cannot be dragged, reset or hidden.
+   *  Read here rather than passed in, so every caller of syncScanBox() gets it for free. */
+  function applyScanBoxOpacity() {
+    let pct = 100;
+    try {
+      const v = parseInt(localStorage.getItem("miningScanBoxOpacity") || "100", 10);
+      if (Number.isFinite(v)) pct = Math.min(100, Math.max(10, v));
+    } catch { /* no storage */ }
+    document.documentElement.style.setProperty("--sb-op", String(pct / 100));
   }
   // ── The number the OCR read, under the box ──────────────────────────────────────────────────
   // The point is comparison: the player reads the real signature and this one, and a discrepancy

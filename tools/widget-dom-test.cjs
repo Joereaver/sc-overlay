@@ -913,6 +913,31 @@ const SCANBOX = `(async () => {
   ok("the pref still wins on its own", getComputedStyle(box).display === "none");
   if (userPref === null) localStorage.removeItem("miningScanBoxHidden"); else localStorage.setItem("miningScanBoxHidden", userPref);
 
+  // ── user-set opacity ─────────────────────────────────────────────────────────
+  // Turning the box right down must never make it unreachable, so the floor is enforced in the
+  // canvas rather than trusted from storage, and hover always returns it to full.
+  const userOp = localStorage.getItem("miningScanBoxOpacity");
+  const opNow = () => getComputedStyle(document.documentElement).getPropertyValue("--sb-op").trim();
+  localStorage.setItem("miningScanBoxOpacity", "40");
+  syncScanBox();
+  await sleep(40);
+  ok("the box takes the opacity you set", opNow() === "0.4", opNow());
+  // A value below the floor (or a junk one) must be clamped, not obeyed: an invisible box cannot
+  // be dragged, reset or hidden.
+  localStorage.setItem("miningScanBoxOpacity", "0");
+  syncScanBox();
+  await sleep(40);
+  ok("...but zero is clamped to the 10% floor", opNow() === "0.1", opNow());
+  localStorage.setItem("miningScanBoxOpacity", "banana");
+  syncScanBox();
+  await sleep(40);
+  ok("...and junk falls back to full", opNow() === "1", opNow());
+  ok("hovering always restores it to full",
+     [...document.styleSheets].some(sh => { try { return [...sh.cssRules].some(r => r.selectorText && r.selectorText.includes("#scanBox:hover")); } catch (e) { return false; } }));
+  if (userOp === null) localStorage.removeItem("miningScanBoxOpacity"); else localStorage.setItem("miningScanBoxOpacity", userOp);
+  syncScanBox();
+  await sleep(40);
+
   // ── the number the OCR read, centered under the box ──────────────────────────
   // Just the number: Sub asked for it outside the box, centered, without the labels the first
   // version carried. A REFUSED read still has to show — a number the app threw away is exactly
