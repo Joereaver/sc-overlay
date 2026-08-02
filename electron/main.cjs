@@ -102,7 +102,6 @@ let overlay = null;
 let configWin = null;
 let setupWin = null;
 let overlayLoaded = false; // canvas page has finished loading (its IPC listeners exist)
-let overlayFocused = false; // the overlay WINDOW holds focus (user Alt-Tabbed to it)
 let tray = null;
 let hovering = false; // pointer is over the HUD (reported by the page)
 let holdInteract = false; // true only while the interact-hold hotkey (default F) is held down
@@ -480,8 +479,6 @@ function createOverlay() {
   // as that lasts instead of fading it after 10s: having just switched to the thing, hunting for
   // its controls is exactly the wrong experience.
   const sendFocus = (on) => {
-    overlayFocused = on;
-    applyMouse(); // focused = interactive everywhere, which is what restores the real cursor
     if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:window-focus", on);
   };
   overlay.on("focus", () => sendFocus(true));
@@ -570,7 +567,17 @@ function applyMouse() {
   // playing, and Alt-Tabbing back hands clicks straight back to the game.
   const holdActive = holdMode && (!foreground.ready() || foreground.gameInFront());
   const canHover = holdActive ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
-  const interactive = dragging || overlayFocused || (hovering && canHover);
+  // 🔑 `overlayFocused` deliberately does NOT appear here, and must not be added back without
+  // solving the problem below. It was, briefly, to restore the real mouse cursor over the game
+  // (cursor SHAPE belongs to the window under the pointer, and while click-through that window is
+  // Star Citizen, which sets none). But this window spans the WHOLE VIRTUAL DESKTOP — that span is
+  // what lets a widget be dragged onto a second monitor — so "interactive while focused" means an
+  // interactive, always-on-top surface covering EVERY display. Two things followed, both reported:
+  // no click on any other monitor reached the app under it, and windows beneath appeared FROZEN
+  // (they were repainting fine; the stale composited overlay was what you could see).
+  // If the cursor is worth another attempt, it has to be scoped to where the game actually is —
+  // the game window's bounds, not the canvas — so every other display stays click-through.
+  const interactive = dragging || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }
 
