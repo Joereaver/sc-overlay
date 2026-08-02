@@ -99,6 +99,7 @@ let overlay = null;
 let configWin = null;
 let setupWin = null;
 let overlayLoaded = false; // canvas page has finished loading (its IPC listeners exist)
+let overlayFocused = false; // the overlay WINDOW holds focus (user Alt-Tabbed to it)
 let tray = null;
 let hovering = false; // pointer is over the HUD (reported by the page)
 let holdInteract = false; // true only while the interact-hold hotkey (default F) is held down
@@ -423,6 +424,8 @@ function createOverlay() {
   // as that lasts instead of fading it after 10s: having just switched to the thing, hunting for
   // its controls is exactly the wrong experience.
   const sendFocus = (on) => {
+    overlayFocused = on;
+    applyMouse(); // focused = interactive everywhere, which is what restores the real cursor
     if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:window-focus", on);
   };
   overlay.on("focus", () => sendFocus(true));
@@ -502,9 +505,16 @@ function applyMouse() {
   // hook is deliberately passive/non-consuming (EAC-safe), so the fix is to not need it. Falls
   // back to the old always-hold behaviour until the foreground watcher has answered once, so a
   // failed helper can't silently make the overlay click-grabby mid-game.
+  // 🔑 A FOCUSED overlay is interactive everywhere, and that is what makes the real mouse cursor
+  // visible over it. Cursor SHAPE belongs to the window under the pointer: while click-through,
+  // the pointer is really over Star Citizen's window, which sets no cursor — so it vanishes even
+  // though the overlay has focus. Taking the whole window interactive puts the pointer genuinely
+  // over ours, and Windows draws the normal arrow again. Safe because focusing the overlay is a
+  // deliberate act (Alt-Tab / taskbar): while it holds focus you are using the overlay, not
+  // playing, and Alt-Tabbing back hands clicks straight back to the game.
   const holdActive = holdMode && (!foreground.ready() || foreground.gameInFront());
   const canHover = holdActive ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
-  const interactive = dragging || (hovering && canHover);
+  const interactive = dragging || overlayFocused || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }
 

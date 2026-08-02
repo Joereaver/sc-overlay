@@ -3065,6 +3065,9 @@
       e.stopPropagation();
       try { localStorage.setItem("miningScanBoxHidden", "1"); } catch { /* no storage */ }
       syncScanBox();
+      // Tell the Mining Scanner's settings sheet its checkbox just changed. Without this it keeps
+      // the value it rendered at init, and re-showing the box needs a redundant off-then-on.
+      try { frameWin(WBY.mining)?.__miningSyncSettings?.(); } catch { /* iframe not ready */ }
     });
     document.getElementById("sbReset")?.addEventListener("click", (e) => {
       e.stopPropagation();
