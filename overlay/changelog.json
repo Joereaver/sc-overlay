@@ -1,4 +1,19 @@
 {
+  "0.1.38": {
+    "date": "2026-08-03T15:02:24Z",
+    "notes": [
+      "The app tells you when its background service stops. That service does all the actual work — reading your game log, tracking missions and blueprints, syncing — while the overlay is only the display, so until now it could die and leave a HUD that looked perfectly normal and tracked nothing. You now get a banner that says it is reconnecting, and if it gives up, a button to try again.",
+      "An opacity slider for the mining scan read area, in the Mining Scanner's cog beside the toggle that shows the box. Turn it most of the way down if you would rather not see the outline over the game. Hovering the box brings it back to full, so its Hide, Reset and drag controls are always reachable.",
+      "Settings has been reorganised. Diagnostics now sits with the performance and fixes tools instead of in a catch-all More section, promos have their own place so they stop reading as settings, and the theme list is in an order. The browser-sources list went from 2 widgets to 9 — every widget except the Web Page and Settings panels could always be used as an OBS source, but only two of them said so.",
+      "Fixed: a newly updated app could keep serving the previous version. If an old copy of the background service was still holding the port when the new one started, the new app silently attached to it and showed you the old version's data and patch notes, with nothing anywhere saying so. Each launch now checks that the service answering is genuinely its own.",
+      "Fixed: with the overlay focused, clicks on your other monitors did nothing and windows underneath looked frozen. The overlay canvas spans every display — that is what lets you drag a widget onto a second monitor — so making it interactive while focused made it interactive everywhere. Clicks pass through again outside of widgets.",
+      "Fixed: the settings cog on the Web Page widget appeared to do nothing. It was opening behind the website, which is painted above everything else on the canvas. The site now stands aside while the cog is open.",
+      "Fixed: the check on your subliminal.gg token verified nothing. It asked an endpoint that answers everyone, so any token came back Connected, including a mistyped or expired one. Both the setup wizard and the diagnostics report were built on that answer.",
+      "Fixed: the setup wizard came up a different size depending on which monitor your mouse was on, and could be zoomed and cramped at the same time. It now opens on your primary display, at the same scale as the rest of the app.",
+      "Fixed: a game log path typed by hand was lost if you closed Settings without touching anything else. Every other setting on the page saves itself; that one did not — and it is the setting the app cannot work without.",
+      "Also: the patch notes card is wider and no longer sized against the whole multi-monitor canvas, and the setup wizard's links to the website now land you on the step they are describing rather than on the blueprint catalogue."
+    ]
+  },
   "0.1.37": {
     "date": "2026-08-02T03:37:33Z",
     "notes": [

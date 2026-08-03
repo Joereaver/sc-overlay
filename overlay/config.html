@@ -356,7 +356,7 @@
     <div class="hint" id="syncStatus"></div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="shareLogs" /> Share anonymized logs to improve the tracker</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Sends your Star Citizen <code>Game.log</code> to SubliminalsTV so we can fix missions/drops the tracker gets wrong. Your handle, account ID, IP address and login session are stripped out and chat is removed before it leaves your PC — only mission and blueprint events remain. Needs a sync token. Off by default.</span></span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Sends your Star Citizen <code>Game.log</code> so mission and blueprint parsing can be fixed against real logs. Your handle, account ID, IP and session are stripped and chat is dropped before it leaves your PC. Needs a sync token.</span></span>
     </div>
   </div>
 
@@ -428,22 +428,22 @@
     <label class="opt" style="margin-top:2px;">Theme
       <select id="theme" onchange="onThemePicked()" style="margin-left:auto;">
         <option value="mobiglas">Mobiglas (default)</option>
-        <option value="drake">Drake Interplanetary</option>
-        <option value="anvil">Anvil Aerospace</option>
-        <option value="greys">Grey's</option>
-        <option value="esperia">Esperia</option>
-        <option value="misc">MISC</option>
-        <option value="banu">Banu</option>
-        <option value="gatac">Gatac</option>
-        <option value="mirai">Mirai</option>
-        <option value="origin">Origin</option>
-        <option value="aegis">Aegis Dynamics</option>
-        <option value="crusader">Crusader Industries</option>
-        <option value="rsi">RSI</option>
-        <option value="kruger">Kruger Intergalactic</option>
-        <option value="argo">Argo Astronautics</option>
-        <option value="cnou">Consolidated Outland</option>
         <option value="auto">Auto — match my ship</option>
+        <option value="aegis">Aegis Dynamics</option>
+        <option value="anvil">Anvil Aerospace</option>
+        <option value="argo">Argo Astronautics</option>
+        <option value="banu">Banu</option>
+        <option value="cnou">Consolidated Outland</option>
+        <option value="crusader">Crusader Industries</option>
+        <option value="drake">Drake Interplanetary</option>
+        <option value="esperia">Esperia</option>
+        <option value="gatac">Gatac</option>
+        <option value="greys">Grey's</option>
+        <option value="kruger">Kruger Intergalactic</option>
+        <option value="mirai">Mirai</option>
+        <option value="misc">MISC</option>
+        <option value="origin">Origin</option>
+        <option value="rsi">RSI</option>
       </select>
     </label>
     <div id="themeLock" style="display:none; margin-top:8px; padding:9px 11px; border-radius:8px;
@@ -459,17 +459,7 @@
     <div class="hint" style="margin-top:2px;">Applies to <strong>Auto</strong> theme and the stream ship-signal (<code>/api/ship</code>). Off = keep the last ship's manufacturer skin until you board another.</div>
   </div>
 
-  <div class="card">
-    <div class="cardhead">
-      <div class="label">Your files</div>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Saved party splits live in your Windows app-data folder (the app can't write next to its own program files — Windows makes that read-only). Each save also writes <code>index.html</code>: double-click it and every split opens in your browser with a proper table.</span></span>
-    </div>
-    <div class="hkrow">
-      <span class="hklabel">Saved party splits</span>
-      <button type="button" id="openPartyFolder" class="hkbtn">↗ Open folder</button>
-      <div class="hint">Holds a <code>.json</code>, a plain-text <code>.txt</code>, and an <code>index.html</code> you can open in any browser.</div>
-    </div>
-  </div>
+  
 
   <div class="card">
     <div class="cardhead">
@@ -530,7 +520,7 @@
   <div class="card">
     <div class="label">Performance &amp; fixes</div>
     <label class="opt" id="overlayShowRow" style="display:none"><input type="checkbox" id="overlayShow" /> Show the in-game overlay</label>
-    <div class="hint" id="overlayShowHint" style="display:none">Turn off if the overlay crashes your game — tracking + sync keep running without it.</div>
+    <div class="hint" id="overlayShowHint" style="display:none">Hides the on-screen overlay while mission tracking and sync keep running &mdash; handy if you just want it out of the way. <strong>If you are turning this off because the overlay is crashing your game, please report it</strong> &mdash; that is a bug worth fixing, not something to work around.</div>
     <div class="hkrow">
       <span class="hklabel">Performance</span>
       <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
@@ -558,42 +548,14 @@
     </div>
   </div>
 
-  <!-- ══════════ TIER 3 ══════════ -->
-  <div class="tier">
-    <div class="tier-h">More</div>
-  </div>
-
-  <div class="card">
-    <div class="label">Browser sources &amp; extra monitors</div>
-    <div class="hint">Want a widget on a <strong>second monitor</strong>, or as an <strong>OBS browser source</strong>? Open one of these URLs in any browser window — it renders that widget on its own, live and transparent. This is the way to put a widget off your main screen; the in-game overlay itself stays on your primary display.</div>
-    <label class="opt" style="margin-top:6px;">Mission &amp; BP Tracker
-      <input type="text" id="srcBlueprint" readonly onclick="this.select()" style="margin-left:auto; width:230px; font-family:monospace; font-size:12px;" />
-      <button type="button" class="hkbtn" style="margin-left:8px;" onclick="copySrc('srcBlueprint', this)">Copy</button>
-    </label>
-    <label class="opt">Mining Scanner
-      <input type="text" id="srcMining" readonly onclick="this.select()" style="margin-left:auto; width:230px; font-family:monospace; font-size:12px;" />
-      <button type="button" class="hkbtn" style="margin-left:8px;" onclick="copySrc('srcMining', this)">Copy</button>
-    </label>
-    <div class="hint">In OBS: add a <strong>Browser</strong> source and paste the URL — the background is transparent, so it composites straight over your scene.</div>
-    <div class="hint" id="lanHint" style="display:none">📱 <strong>On a phone or another device</strong> on the same Wi-Fi, <code>localhost</code> won't work — swap in this PC's address instead: e.g. <code id="lanExample"></code><span class="lnk" id="lanCopy" style="margin-left:8px; cursor:pointer; text-decoration:underline dotted;">copy</span></div>
-  </div>
-
-  <div class="card" id="partnersCard" style="display:none">
-    <div class="label">Partner promos</div>
-    <div class="hint" style="margin-top:0; margin-bottom:12px">Deals from SubliminalsTV's partners — support development at no extra cost to you.</div>
-    <div class="partner-grid" id="partnerGrid"></div>
-  </div>
-
-  <!-- Diagnostics. "It stopped working" is otherwise a guessing game across a dozen messages —
-       a dead sidecar, a moved game.log, an expired token and a read-only data folder all present
-       identically to the player. One button, one paste. Deliberately carries no secrets. -->
-  <div class="card">
+<div class="card">
     <div class="label">Diagnostics</div>
+    <!-- Shortened: the old copy listed everything the report contains, which the report itself
+         then shows you the moment you press the button. What is worth saying up front is only
+         what you cannot see by looking — that it carries no secrets. -->
     <div class="hint" style="margin-top:0">
-      Something not working? Copy a short report — app version, whether the background service is
-      answering, whether your <code>game.log</code> is being read, which dataset is loaded, and which
-      opt-ins are on — and paste it into your bug report or Discord. It contains no passwords or
-      tokens.
+      Something not working? Copy a short health report and paste it into your bug report or
+      Discord. No passwords or tokens.
     </div>
     <div class="hkrow">
       <span class="hklabel">Report</span>
@@ -604,8 +566,43 @@
       white-space:pre-wrap; font-size:11px; line-height:1.5; background:rgba(0,0,0,0.28);
       border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--muted)"></pre>
   </div>
+  <!-- ══════════ TIER 3 ══════════
+       "More" used to be a junk drawer: browser sources, promos, diagnostics and About all in one
+       heap. Diagnostics moved up to Performance & fixes where it belongs, promos got their own
+       tier so they read as promos rather than a setting, and this one now names what it holds.
+       "Your files" sits here rather than up in Setup because almost nobody opens it. -->
+  <div class="tier">
+    <div class="tier-h">Browser sources &amp; your files</div>
+  </div>
+<div class="card">
+    <div class="label">Browser sources &amp; extra monitors</div>
+    <div class="hint">Want a widget on a <strong>second monitor</strong>, or as an <strong>OBS browser source</strong>? Open one of these URLs in any browser window — it renders that widget on its own, live and transparent. This is the way to put a widget off your main screen; the in-game overlay itself stays on your primary display.</div>
+    <div id="srcRows"></div>
+    <div class="hint">In OBS: add a <strong>Browser</strong> source and paste the URL — the background is transparent, so it composites straight over your scene.</div>
+    <div class="hint" id="lanHint" style="display:none">📱 <strong>On a phone or another device</strong> on the same Wi-Fi, <code>localhost</code> won't work — swap in this PC's address instead: e.g. <code id="lanExample"></code><span class="lnk" id="lanCopy" style="margin-left:8px; cursor:pointer; text-decoration:underline dotted;">copy</span></div>
+  </div>
+<div class="card">
+    <div class="cardhead">
+      <div class="label">Your files</div>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Saved party splits live in your Windows app-data folder (the app can't write next to its own program files — Windows makes that read-only). Each save also writes <code>index.html</code>: double-click it and every split opens in your browser with a proper table.</span></span>
+    </div>
+    <div class="hkrow">
+      <span class="hklabel">Saved party splits</span>
+      <button type="button" id="openPartyFolder" class="hkbtn">↗ Open folder</button>
+      <div class="hint">Holds a <code>.json</code>, a plain-text <code>.txt</code>, and an <code>index.html</code> you can open in any browser.</div>
+    </div>
+  </div>
+  <!-- ══════════ TIER 4 ══════════ -->
+  <div class="tier">
+    <div class="tier-h">Partners</div>
+  </div>
+  <div class="card" id="partnersCard" style="display:none">
+    <div class="label">Partner promos</div>
+    <div class="hint" style="margin-top:0; margin-bottom:12px">Deals from SubliminalsTV's partners — support development at no extra cost to you.</div>
+    <div class="partner-grid" id="partnerGrid"></div>
+  </div>
 
-  <div class="card">
+<div class="card">
     <div class="label">About</div>
     <div class="hint" style="margin-top:0">
       <strong>SC Overlay</strong> is a lightweight, transparent in-game HUD for Star Citizen. It reads your
@@ -642,6 +639,15 @@
     </div>
     <div class="hint" style="text-align:center; margin-top:12px; opacity:0.75">Thank you — every bit helps. o7</div>
   </div>
+  
+
+
+  <!-- Diagnostics. "It stopped working" is otherwise a guessing game across a dozen messages —
+       a dead sidecar, a moved game.log, an expired token and a read-only data folder all present
+       identically to the player. One button, one paste. Deliberately carries no secrets. -->
+  
+
+  
 
   <div class="card loadout-only">
     <div class="label">Erkul Loadout URLs</div>
@@ -705,8 +711,37 @@
     cfg = await (await fetch("/api/config")).json();
     // Browser-source URLs (for a second monitor / OBS) — built from wherever this config page is
     // served, so the port is always right.
-    document.getElementById("srcBlueprint").value = location.origin + "/missions.html";
-    document.getElementById("srcMining").value = location.origin + "/mining.html";
+    // Every widget that renders standalone gets a source. Only two were listed before, which
+    // meant the rest silently looked like they could not be used this way — they always could.
+    // 🔑 Web Page and Settings are deliberately absent: the Web Page widget's content is a native
+    // view owned by the app (a browser tab would just show its URL form), and Settings is a
+    // control panel, not something to composite into a scene.
+    var SOURCES = [
+      ["Mission & BP Tracker", "missions.html"],
+      ["Mining Scanner", "mining.html"],
+      ["Event Tracker", "battaglia.html"],
+      ["Infographic Viewer", "bindingwidget.html"],
+      ["Journal", "notepad.html"],
+      ["Loot Split", "party.html"],
+      ["SC Feed", "scfeed.html"],
+      ["Twitch Chat", "twitchchat.html"],
+      ["Unlock Alerts", "unlockalert.html"],
+    ];
+    var srcRows = document.getElementById("srcRows");
+    srcRows.innerHTML = SOURCES.map(function (w, i) {
+      var id = "src" + i;
+      return '<label class="opt"' + (i === 0 ? ' style="margin-top:6px;"' : "") + ">" + w[0] +
+        '<input type="text" id="' + id + '" readonly onclick="this.select()" value="' +
+        location.origin + "/" + w[1] + '" style="margin-left:auto; width:230px; font-family:monospace; font-size:12px;" />' +
+        '<button type="button" class="hkbtn" data-src="' + id + '">Copy</button>' +
+        "</label>";
+    }).join("");
+    // Delegated rather than an inline onclick per row: the ids are generated, and building a
+    // handler string around a generated id is how you end up with quoting bugs in markup.
+    srcRows.addEventListener("click", function (e) {
+      var btn = e.target.closest ? e.target.closest("[data-src]") : null;
+      if (btn) copySrc(btn.getAttribute("data-src"), btn);
+    });
     // Same widgets on a phone / second device: swap localhost for this PC's LAN address (the
     // server reports it — a browser can't see it). Hidden if there's no LAN address to offer.
     if (cfg.lanHost) {
@@ -1067,6 +1102,12 @@
   });
 
   document.getElementById("logPath").addEventListener("input", checkLogPath);
+  // ...and PERSIST it. `input` only validates as you type. Everything else on this page either
+  // auto-saves or is deliberately manual (the sync token), which left a typed-by-hand game.log
+  // path as the one setting you could lose by closing the panel — and it is the setting the app
+  // cannot work without. `change` fires on blur/Enter, so this saves a finished path, not every
+  // keystroke.
+  document.getElementById("logPath").addEventListener("change", save);
   // Auto-save the plain checkboxes the instant they're toggled, so a change can never be lost by
   // closing/scrolling away without clicking Save. (Theme, hotkeys, hold-to-interact and the file
   // pickers already save on change; the sync token stays manual so a half-typed token isn't sent.)

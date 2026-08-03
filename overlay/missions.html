@@ -635,6 +635,12 @@
     cursor: pointer; padding: 1px 6px; border: 1px solid var(--border); border-radius: 5px;
     background: rgba(8, 17, 26, 0.85); }
   #scanBox .sb-hide:hover { color: var(--cyan-bright); }
+  /* User-set visibility for the whole box (Mining Scanner cog → Box opacity). 🔑 Hover always
+     returns it to full: at a low setting the Hide/Reset controls and the drag grip would
+     otherwise be as faint as the outline, i.e. a box you cannot see well enough to get rid of.
+     The transition is on opacity only, so it never animates position during a drag. */
+  #scanBox { opacity: var(--sb-op, 1); transition: opacity 0.12s ease; }
+  body.scanbox.sb-dragging #scanBox, body.scanbox #scanBox:hover { opacity: 1; }
   body.scanbox.sb-dragging #scanBox { border-style: solid; background: rgba(var(--accent-rgb), 0.10); }
   /* The last number the OCR read — just the number, centered, JUST BELOW the box (Sub, 2026-07-29:
      outside it, centered, and without the labels the first version carried). Below rather than
@@ -966,7 +972,13 @@
      AND bottom and took the ✕ and "Got it" with it. That is the same trap as the live 0.1.31 bug,
      reopened by using the wrong unit. 720px is the absolute cap: a size that leaves room on a
      1080p monitor, which is the smallest thing worth designing for. */
-  #whatsnew .wn-card { width: 400px; max-width: 88vw; display: flex; flex-direction: column;
+  /* 🔑 Width is capped against the PRIMARY MONITOR (--prim-w), never `vw` — same trap the height
+     already hit: `vw` is this window, and this window is the whole multi-monitor CANVAS, so on a
+     multi-display rig `88vw` is wider than the screen the card is centred on. It was inert while
+     the card was 400px (400 < 88vw either way), but it was wrong, and widening is exactly the
+     change that would have made it bite. 560px because these notes are prose, and 400 was forcing
+     long sentences into a column narrow enough to be a chore to read. */
+  #whatsnew .wn-card { width: min(560px, calc(var(--prim-w, 100vw) - 64px)); display: flex; flex-direction: column;
     max-height: min(720px, calc(var(--prim-h, 100vh) - 96px));
     border: 1px solid var(--cyan); border-radius: 10px; padding: 16px 18px 18px;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
@@ -1031,6 +1043,30 @@
   #setupNudge .sn-x { flex: none; width: 21px; height: 21px; display: grid; place-items: center; cursor: pointer;
     border: 1px solid var(--divider); border-radius: 4px; color: var(--cyan-dim); font-size: 12px; background: rgba(var(--accent-rgb), 0.06); }
   #setupNudge .sn-x:hover { color: var(--cyan); border-color: var(--cyan); }
+
+  /* ── background service down ────────────────────────────────────────────────────────────
+     The sidecar does all the work; this window is only the display. A dead one is therefore
+     INVISIBLE — the HUD looks fine and tracks nothing — so it gets a banner that does not
+     auto-dismiss, unlike the setup nudge. Amber/red rather than cyan: this is not chrome, it is
+     the app telling you it has stopped working. Positioned off --prim-* (never vw/vh) for the
+     same reason as everything else here: this window spans every monitor. */
+  #svcDown { display: none; position: fixed; z-index: 96;
+    left: calc(var(--prim-left, 0px) + var(--prim-w, 100%) / 2); transform: translateX(-50%);
+    top: calc(var(--prim-top, 0px) + 16px);
+    width: min(460px, calc(var(--prim-w, 100%) - 60px));
+    align-items: center; gap: 12px; padding: 11px 14px;
+    border: 1px solid var(--red); border-radius: 9px;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)), var(--panel-solid);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
+  #svcDown.show { display: flex; }
+  #svcDown .sd-txt { flex: 1; min-width: 0; }
+  #svcDown .sd-title { font-family: var(--sans); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--red); }
+  #svcDown .sd-body { font-size: 11.5px; line-height: 1.45; color: var(--cyan-text); margin-top: 3px; }
+  #svcDown .sd-go { flex: none; font-family: var(--sans); font-size: 11px; font-weight: 600;
+    padding: 6px 13px; cursor: pointer; border: 1px solid var(--red); border-radius: 5px;
+    color: #1a0d0b; background: var(--red); }
+  #svcDown .sd-go[disabled] { opacity: 0.5; cursor: default; }
 
   /* ── Mission report ─────────────────────────────────────────────────────────────────────
      The after-mission card TAKES OVER the Mission & BP Tracker widget: it covers #panel edge to
@@ -1422,6 +1458,13 @@
     </div>
   </div>
 
+  <div id="svcDown">
+    <div class="sd-txt">
+      <div class="sd-title">Background service stopped</div>
+      <div class="sd-body" id="sdBody"></div>
+    </div>
+    <button class="sd-go" id="sdRetry">Try again</button>
+  </div>
   <div id="setupNudge">
     <div class="sn-txt">
       <div class="sn-title">Finish setting up</div>
@@ -2957,7 +3000,19 @@
   function syncScanBox() {
     let hidden = false;
     try { hidden = localStorage.getItem("miningScanBoxHidden") === "1"; } catch { /* no storage */ }
+    applyScanBoxOpacity();
     setScanBox(!hidden && wShown(WBY.mining));
+  }
+  /** The box's user-set opacity, applied as a CSS variable. Clamped to a 10% FLOOR: 0 would not
+   *  be subtle, it would be invisible, and an invisible box cannot be dragged, reset or hidden.
+   *  Read here rather than passed in, so every caller of syncScanBox() gets it for free. */
+  function applyScanBoxOpacity() {
+    let pct = 100;
+    try {
+      const v = parseInt(localStorage.getItem("miningScanBoxOpacity") || "100", 10);
+      if (Number.isFinite(v)) pct = Math.min(100, Math.max(10, v));
+    } catch { /* no storage */ }
+    document.documentElement.style.setProperty("--sb-op", String(pct / 100));
   }
   // ── The number the OCR read, under the box ──────────────────────────────────────────────────
   // The point is comparison: the player reads the real signature and this one, and a discrepancy
@@ -3070,6 +3125,21 @@
   // to get canvas coordinates, which is what the shell wants.
   //
   // Everything that moves a widget has to re-report: dragging, resizing, tab switches, show/hide.
+  /** The Web Page widget's content is a NATIVE view painted above ALL page content, so any canvas
+   *  chrome landing on the same rectangle is drawn BEHIND it — present in the DOM, correct size,
+   *  simply invisible and unclickable. That is how the Web Page widget's own ⚙ ended up
+   *  unreachable: it opened behind the website.
+   *  🔑 Reported as ONE boolean from ONE place. Each caller toggling the mask itself is how the
+   *  three existing reasons (arrange, modal, chrome) would start disagreeing — close the hub while
+   *  a settings popover is still open and a per-caller mask would un-cover the view underneath it.
+   *  Only the Web Page widget is a native view; every other widget is a DOM iframe and stacks
+   *  normally by z-index, so none of them can have this problem. */
+  function syncViewMask() {
+    const chromeOpen = !!document.querySelector(".widget.cfgopen")
+      || !!document.querySelector("#hub.open");
+    window.overlayApi?.maskWebView?.(chromeOpen);
+  }
+
   let webViewHole = null;   // last rect the page told us, in page coordinates
   function reportWebViewHole(w, r) {
     if (r) webViewHole = r;
@@ -3182,6 +3252,7 @@
     const t = e.target;
     if (t instanceof Element && t.closest(".wcfg, .wh-cog")) return;
     document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+    syncViewMask();
   });
 
   // Put ONE widget back to its default SIZE, in the MIDDLE of the primary monitor. The tray's
@@ -3545,11 +3616,13 @@
         // into it); everything else opens the local popover, which carries Text size itself.
         if (el.classList.contains("has-settings")) {
           try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); } catch { /* iframe gone */ }
+          syncViewMask();
           return;
         }
         el.classList.add("cfgopen");
         showTextScale(w);
         showAngle(w);
+        syncViewMask();
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
       el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
@@ -3659,6 +3732,8 @@
       hubOpen = open;
       hub.classList.toggle("open", open);
       gc.classList.toggle("open", open);
+      syncViewMask(); // the hub can land on top of the native view too
+
       if (!open) { window.overlayApi.setModal?.(false); window.overlayApi.hover?.(false); rescheduleCogHide(); return; }
       clearTimeout(cogHideT); // keep the cog shown while the hub is open
       // Read the RAW config for appearance (theme may be "auto" — PREFS carries the resolved
@@ -3818,7 +3893,7 @@
       // twice for no gain.
       // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
     // it would swallow game clicks along a blank strip above the taskbar for the whole session.
-    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
@@ -3920,6 +3995,39 @@
     $("snGo").addEventListener("click", () => { window.overlayApi.openSetupWizard?.(); closeNudge(); });
     nudge.addEventListener("mouseenter", () => window.overlayApi.hover(true));
     nudge.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+    // ── background service down ───────────────────────────────────────────────────────────
+    // Pure display: the shell decides the state and pushes every transition, including a re-push
+    // once this page loads, so the banner cannot be stranded on after recovery or missed because
+    // the page was not up when the sidecar died.
+    {
+      const svc = $("svcDown");
+      const retry = $("sdRetry");
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        retry.textContent = "Starting…";
+        window.overlayApi.retrySidecar?.();
+      });
+      svc.addEventListener("mouseenter", () => window.overlayApi.hover(true));
+      svc.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+      window.overlayApi.onSidecarState?.((st) => {
+        if (!st || !st.down) {
+          svc.classList.remove("show");
+          window.overlayApi.hover(false);
+          retry.disabled = false;
+          retry.textContent = "Try again";
+          return;
+        }
+        // Two very different situations, and saying "stopped" during an automatic retry would be
+        // a lie that invites a pointless click.
+        $("sdBody").textContent = st.retrying
+          ? "SC Overlay isn't tracking anything right now. Reconnecting…"
+          : "SC Overlay isn't tracking missions, blueprints or mining until this restarts.";
+        retry.style.display = st.retrying ? "none" : "";
+        if (!st.retrying) { retry.disabled = false; retry.textContent = "Try again"; }
+        svc.classList.add("show");
+      });
+    }
+
     window.overlayApi.onSetupNudge?.((s) => {
       const n = Number(s && s.steps) || 0;
       $("snBody").textContent = n === 1

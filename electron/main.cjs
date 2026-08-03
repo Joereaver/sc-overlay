@@ -93,13 +93,15 @@ const PORT = 8778;
 const HUD_URL = `http://localhost:${PORT}/missions.html`;
 const CONFIG_URL = `http://localhost:${PORT}/config.html`;
 const SETUP_URL = `http://localhost:${PORT}/setup.html`;
+// A fresh id per launch, injected into the sidecar we spawn. Anything answering on our port that
+// cannot echo it is not ours — see waitForServer.
+const INSTANCE_ID = require("node:crypto").randomUUID();
 
 let server = null;
 let overlay = null;
 let configWin = null;
 let setupWin = null;
 let overlayLoaded = false; // canvas page has finished loading (its IPC listeners exist)
-let overlayFocused = false; // the overlay WINDOW holds focus (user Alt-Tabbed to it)
 let tray = null;
 let hovering = false; // pointer is over the HUD (reported by the page)
 let holdInteract = false; // true only while the interact-hold hotkey (default F) is held down
@@ -222,9 +224,20 @@ function destroyWebView() {
   webView = null;
 }
 
-/** Arrange mode, a modal, or the overlay being switched off must all cover the view. */
-function maskWebView(on) {
-  webViewMasked = !!on;
+/** The view is a NATIVE surface painted above ALL page content, so anything the canvas draws in
+ *  the same place loses to it — silently, since the DOM element is present and healthy, just
+ *  invisible. Every reason to cover it is tracked separately and OR-ed, because they overlap:
+ *  leaving arrange while a widget's settings are still open must not un-mask it.
+ *    arrange  — you are positioning widgets, not reading a web page
+ *    modal    — the what's-new card and friends must be readable and closeable
+ *    chrome   — a widget's settings popover, the cog hub: canvas DOM over the view's rectangle.
+ *               This is the one that was missing: the Web Page widget's own ⚙ opened BEHIND the
+ *               site, so there was no way to reach it. */
+let maskArrange = false, maskModal = false, maskChrome = false;
+function recomputeWebViewMask() {
+  const next = maskArrange || maskModal || maskChrome;
+  if (next === webViewMasked) return;
+  webViewMasked = next;
   applyWebViewBounds();
 }
 
@@ -278,7 +291,7 @@ function startServer() {
     // missed, and it only became visible when the sidecar stopped being spawned stdio:"ignore".
     // Inject the authoritative app version — the bun sidecar can't read package.json.
     server = spawn(exe, {
-      cwd: path.dirname(exe), env: { ...process.env, APP_VERSION }, stdio, windowsHide: true,
+      cwd: path.dirname(exe), env: { ...process.env, APP_VERSION, SC_INSTANCE: INSTANCE_ID }, stdio, windowsHide: true,
     });
   } else {
     // Dev: run the TS server via tsx. Same flag, same reason — `shell:true` means cmd.exe, which is
@@ -289,7 +302,7 @@ function startServer() {
     server = spawn("npx tsx src/overlay-server.ts", {
       cwd: ROOT,
       shell: true,
-      env: { ...process.env, APP_VERSION, SC_DEV: "1" },
+      env: { ...process.env, APP_VERSION, SC_DEV: "1", SC_INSTANCE: INSTANCE_ID },
       stdio,
       windowsHide: true,
     });
@@ -301,28 +314,102 @@ function startServer() {
     if (serverRestarts >= 5) {
       noteInSidecarLog(`server exited (code ${code}, signal ${signal}) — 5 crashes, not restarting again`);
       console.error("[electron] server has crashed 5 times — not restarting it again");
+      announceSidecar({ down: true, retrying: false });
       return;
     }
     const wait = Math.min(30000, 1000 * 2 ** serverRestarts);
     serverRestarts += 1;
     noteInSidecarLog(`server exited (code ${code}, signal ${signal}) — restarting in ${wait}ms (attempt ${serverRestarts})`);
     console.error(`[electron] server exited (code ${code}) — restarting in ${wait}ms, see ${SIDECAR_LOG}`);
-    serverRestartTimer = setTimeout(startServer, wait);
+    announceSidecar({ down: true, retrying: true });
+    serverRestartTimer = setTimeout(() => { void respawnAndConfirm(); }, wait);
   });
 }
 
+/** Everything the app does happens in the sidecar; the overlay is only the display. So a dead
+ *  sidecar is INVISIBLE — the HUD sits there looking perfectly normal and silently tracks
+ *  nothing, and the natural read is "this app doesn't work" rather than "a background process
+ *  needs restarting". Sub hit exactly that: after a squatter was cleared his app had already
+ *  burned its five retries, and nothing on screen said so.
+ *  🔑 State is PUSHED on every transition rather than polled, and re-pushed on canvas load, so a
+ *  banner can never be left showing after recovery (or missed because the page wasn't up yet). */
+let sidecarState = { down: false, retrying: false };
+function announceSidecar(state) {
+  sidecarState = state;
+  try {
+    if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:sidecar-state", state);
+  } catch { /* window went away mid-send */ }
+}
+async function respawnAndConfirm() {
+  startServer();
+  if (await waitForServer(60)) announceSidecar({ down: false, retrying: false });
+}
+
+/** Free the port BEFORE spawning, if a sidecar of ours is squatting on it.
+ *
+ *  Runs before startServer() on purpose. Killing from inside waitForServer would race the
+ *  exit-handler's own respawn — our just-spawned child fails to bind, exits, and schedules a
+ *  restart at the same moment we spawn another — and two sidecars fighting over one port is a
+ *  worse bug than the one being fixed.
+ *
+ *  Nothing has been spawned yet when this runs, so ANY sidecar answering here is by definition
+ *  not ours. Anything that doesn't look like our sidecar is left strictly alone: another program
+ *  owning the port is the user's business, and killing it would be far worse than failing to start.
+ */
+function reclaimStalePort() {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    const req = http.get(`http://localhost:${PORT}/api/instance`, (r) => {
+      let body = "";
+      r.on("data", (c) => { body += c; });
+      r.on("end", () => {
+        let who = null;
+        try { who = JSON.parse(body); } catch { /* not our shape — leave it alone */ }
+        if (!who || typeof who.pid !== "number") return done();
+        noteInSidecarLog(
+          `port ${PORT} was already held by a sidecar (pid ${who.pid}, version ${who.version || "?"}) ` +
+          `before this launch spawned one — reclaiming it. Adopting it instead would have served ` +
+          `that process's data: its changelog, its version, its datasets.`);
+        console.error(`[electron] stale sidecar on :${PORT} (pid ${who.pid}) — reclaiming`);
+        try { process.kill(who.pid); } catch { /* already gone, or not ours to kill */ }
+        setTimeout(done, 400); // let the OS release the listener before we bind
+      });
+    });
+    req.on("error", done);           // nothing there — the normal case
+    req.setTimeout(1500, () => { req.destroy(); done(); });
+  });
+}
+
+/** Wait for OUR sidecar — not merely for something to answer on the port.
+ *
+ *  🔑 This used to ping /api/missions and treat any reply as success, which meant a leftover
+ *  sidecar owning :8778 was silently ADOPTED. It is not hypothetical: a freshly installed 0.1.37
+ *  served 0.1.36 patch notes for an hour because an orphan from an earlier run still held the
+ *  port, and nothing anywhere said so — it presents as "the update didn't take".
+ *
+ *  A squatter that echoes a DIFFERENT instance id is one of ours gone stray (its parent died, or
+ *  it belongs to another build), so we end it and let our own bind. Anything that does NOT look
+ *  like our sidecar is left strictly alone — some other program owning the port is the user's
+ *  business, and killing it would be far worse than failing to start. */
 function waitForServer(tries = 60) {
   return new Promise((resolve) => {
+    const retry = () => {
+      if (--tries <= 0) return resolve(false);
+      setTimeout(ping, 250);
+    };
     const ping = () => {
       http
-        .get(`http://localhost:${PORT}/api/missions`, (r) => {
-          r.resume();
-          resolve(true);
+        .get(`http://localhost:${PORT}/api/instance`, (r) => {
+          let body = "";
+          r.on("data", (c) => { body += c; });
+          r.on("end", () => {
+            let who = null;
+            try { who = JSON.parse(body); } catch { /* not our shape */ }
+            if (who && who.instance === INSTANCE_ID) return resolve(true); // ours
+            retry(); // someone else's — keep waiting for ours rather than trusting theirs
+          });
         })
-        .on("error", () => {
-          if (--tries <= 0) return resolve(false);
-          setTimeout(ping, 250);
-        });
+        .on("error", retry);
     };
     ping();
   });
@@ -415,6 +502,9 @@ function createOverlay() {
     sendBindingChartVisible({ on: bindingChartVisible, initial: true });
     pushWidgetStates();
     overlayLoaded = true;
+    // Re-push, because a sidecar that died BEFORE this page existed would otherwise have shouted
+    // into a window with no listener — and the banner would never appear at all.
+    if (sidecarState.down) announceSidecar(sidecarState);
     flushSetupNudge();
   });
   applyMouse();
@@ -424,8 +514,6 @@ function createOverlay() {
   // as that lasts instead of fading it after 10s: having just switched to the thing, hunting for
   // its controls is exactly the wrong experience.
   const sendFocus = (on) => {
-    overlayFocused = on;
-    applyMouse(); // focused = interactive everywhere, which is what restores the real cursor
     if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:window-focus", on);
   };
   overlay.on("focus", () => sendFocus(true));
@@ -514,7 +602,17 @@ function applyMouse() {
   // playing, and Alt-Tabbing back hands clicks straight back to the game.
   const holdActive = holdMode && (!foreground.ready() || foreground.gameInFront());
   const canHover = holdActive ? (holdInteract || notepadEditing || modalOpen || moveMode) : true;
-  const interactive = dragging || overlayFocused || (hovering && canHover);
+  // 🔑 `overlayFocused` deliberately does NOT appear here, and must not be added back without
+  // solving the problem below. It was, briefly, to restore the real mouse cursor over the game
+  // (cursor SHAPE belongs to the window under the pointer, and while click-through that window is
+  // Star Citizen, which sets none). But this window spans the WHOLE VIRTUAL DESKTOP — that span is
+  // what lets a widget be dragged onto a second monitor — so "interactive while focused" means an
+  // interactive, always-on-top surface covering EVERY display. Two things followed, both reported:
+  // no click on any other monitor reached the app under it, and windows beneath appeared FROZEN
+  // (they were repainting fine; the stale composited overlay was what you could see).
+  // If the cursor is worth another attempt, it has to be scoped to where the game actually is —
+  // the game window's bounds, not the canvas — so every other display stays click-through.
+  const interactive = dragging || (hovering && canHover);
   overlay.setIgnoreMouseEvents(!interactive);
 }
 
@@ -942,9 +1040,11 @@ function toggleShow() {
 function openConfig() {
   if (configWin) { configWin.show(); configWin.focus(); return; }
   // Size the window to the display so it (and its auto-scaled content — config.html applies the
-  // same screen.height/1080 zoom) is readable on a 4K TV instead of a tiny 780px box. Clamp to the
-  // work area, and center on whichever display the cursor is on.
-  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  // same screen.height/1080 zoom) is readable on a 4K TV instead of a tiny 780px box. Clamp to
+  // the work area, and centre on the PRIMARY display for the same reasons as the wizard above —
+  // not least that the wizard deep-links here, and the two arriving on different monitors would
+  // be its own small bug.
+  const disp = screen.getPrimaryDisplay();
   const scale = Math.max(1, Math.min(2.25, disp.size.height / 1080));
   const width = Math.min(disp.workArea.width - 40, Math.round(780 * scale));
   const height = Math.min(disp.workArea.height - 40, Math.round(860 * scale));
@@ -973,8 +1073,18 @@ function openConfig() {
 // be buried under the HUD. Slightly wider than Settings because it's a rail + pane layout.
 function openSetup() {
   if (setupWin) { setupWin.show(); setupWin.focus(); return; }
-  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const scale = Math.max(1, Math.min(2.25, disp.size.height / 1080));
+  // 🔑 The PRIMARY display, not the cursor's. Following the cursor is the usual desktop default,
+  // but it assumes a window that belongs anywhere — and this one does not. Everything this app
+  // does is primary-anchored: the overlay canvas, widget positions (stored primary-relative), the
+  // game itself, and the Settings WIDGET the wizard's step 3 opens. A wizard that appears on the
+  // second monitor and then sends you to the first is worse than one that starts where the app
+  // lives. It also makes the size DETERMINISTIC — cursor-following is why the wizard came up at
+  // 1.33x or 1.78x depending on where the mouse happened to be.
+  const disp = screen.getPrimaryDisplay();
+  // Same basis as the page's own zoom (see setup.html): the SHORTER edge, against 1440. Using
+  // height alone asked for a 1602px-wide window on a 1080-wide portrait monitor, which then got
+  // clamped to the work area — so the content was zoomed AND cramped at the same time.
+  const scale = Math.max(1, Math.min(2, Math.min(disp.size.width, disp.size.height) / 1440));
   const width = Math.min(disp.workArea.width - 40, Math.round(900 * scale));
   const height = Math.min(disp.workArea.height - 40, Math.round(640 * scale));
   const x = Math.round(disp.workArea.x + (disp.workArea.width - width) / 2);
@@ -1321,9 +1431,21 @@ if (!app.requestSingleInstanceLock()) {
         }
       } catch { /* window gone */ }
     });
+    await reclaimStalePort();
     startServer();
     const up = await waitForServer();
-    if (!up) console.error("[electron] server did not come up on :" + PORT);
+    if (!up) {
+      console.error("[electron] server did not come up on :" + PORT);
+      // Nothing else can report this: the HUD page is SERVED BY the sidecar, so with it dead the
+      // canvas never loads and there is no surface to draw a banner on. A native box is the only
+      // thing left that the user will actually see.
+      announceSidecar({ down: true, retrying: false });
+      dialog.showErrorBox("SC Overlay — background service didn't start",
+        "The part of SC Overlay that reads your game log and tracks blueprints could not start, " +
+        "so nothing will be tracked.\n\nThis is usually another copy still running, or port " +
+        PORT + " being in use.\n\nQuit SC Overlay from the tray and start it again. If it keeps " +
+        "happening, Settings → Copy diagnostics says why, and the detail is in:\n" + SIDECAR_LOG);
+    }
     overlayEnabled = readOverlayEnabled();
     if (overlayEnabled) createOverlay();
     createTray();
@@ -1468,6 +1590,19 @@ if (!app.requestSingleInstanceLock()) {
   // The nudge banner's "set it up" button, and its dismiss. Both come from the canvas.
   ipcMain.on("setup:open-wizard", () => openSetup());
 
+  // "Try again" on the sidecar-down banner. Resets the strike count: those five attempts were
+  // spent on whatever was wrong at the time, and the user pressing this is new information —
+  // usually that they have just fixed it.
+  ipcMain.on("app:retry-sidecar", () => {
+    clearTimeout(serverRestartTimer);
+    serverRestarts = 0;
+    announceSidecar({ down: true, retrying: true });
+    void (async () => {
+      await reclaimStalePort(); // the usual reason a respawn fails: something else took the port
+      await respawnAndConfirm();
+    })();
+  });
+
   // Live-apply a captured hotkey (config window), no restart. Persistence is handled
   // separately by the config save; these just (re)register the global shortcut.
   ipcMain.handle("set-overlay-hotkey", (_e, accel) =>
@@ -1515,7 +1650,8 @@ if (!app.requestSingleInstanceLock()) {
     modalOpen = !!on;
     // A modal (what's-new card, the hub) renders in the canvas and would be painted UNDER a
     // native view, so the view stands down while one is up.
-    maskWebView(modalOpen);
+    maskModal = modalOpen;
+    recomputeWebViewMask();
     applyMouse();
   });
   // Notepad "typing mode" on/off. ON: bring the overlay foreground so the note field gets the
@@ -1558,8 +1694,11 @@ if (!app.requestSingleInstanceLock()) {
   // all visible widgets become movable; either "Done" exits for all.
   // Arrange draws drag banners and handles OVER the widgets; a native view would sit on top of
   // all of it, so it steps aside for the duration.
-  ipcMain.on("overlay:begin-move", () => { maskWebView(true); setArrangeAll(true); });
-  ipcMain.on("overlay:end-move", () => { maskWebView(false); setArrangeAll(false); });
+  ipcMain.on("overlay:begin-move", () => { maskArrange = true; recomputeWebViewMask(); setArrangeAll(true); });
+  ipcMain.on("overlay:end-move", () => { maskArrange = false; recomputeWebViewMask(); setArrangeAll(false); });
+  // Canvas chrome that has to be readable is open over the view (a widget's settings popover, the
+  // cog hub). The renderer is the only thing that knows this — main cannot see the DOM.
+  ipcMain.on("overlay:mask-view", (_e, on) => { maskChrome = !!on; recomputeWebViewMask(); });
 
   // ── the Web Page widget's view ──────────────────────────────────────────────
   // The renderer owns the widget's chrome and geometry and leaves a hole; these carry the hole's

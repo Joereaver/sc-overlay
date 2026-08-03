@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // Cursor entered/left the view. The canvas can't see this itself — the view is a native
   // surface, not an iframe — and without it the Web Page widget's bar never comes out.
   onWebViewCursor: (cb) => ipcRenderer.on("webview:cursor", (_e, on) => cb(!!on)),
+  // Canvas chrome is open over the native view and would otherwise be painted behind it.
+  maskWebView: (on) => ipcRenderer.send("overlay:mask-view", !!on),
   // Per-widget canvas layout: read saved positions/sizes on load, and persist them as the
   // user drags/resizes a widget in arrange mode. Layout = { [id]: {x, y, scale, visible} }.
   getWidgets: () => ipcRenderer.invoke("overlay:get-widgets"),
@@ -91,6 +93,11 @@ contextBridge.exposeInMainWorld("overlayApi", {
   openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
   // First-run setup: existing users with unfinished setup get one dismissible banner here
   // rather than the wizard taking over their screen. `openSetupWizard` is what its button calls.
+  // The background service (sidecar) going down and coming back. It does ALL the work — the
+  // overlay is only the display — so without this a dead sidecar looks like a perfectly normal
+  // HUD that silently tracks nothing.
+  onSidecarState: (cb) => ipcRenderer.on("overlay:sidecar-state", (_e, s) => cb(s)),
+  retrySidecar: () => ipcRenderer.send("app:retry-sidecar"),
   onSetupNudge: (cb) => ipcRenderer.on("overlay:setup-nudge", (_e, s) => cb(s)),
   openSetupWizard: () => ipcRenderer.send("setup:open-wizard"),
   // Web Page widget + the Binding Chart WIDGET (the full-screen binding overlay is separate).

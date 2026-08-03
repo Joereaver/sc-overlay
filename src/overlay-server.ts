@@ -313,11 +313,16 @@ function loadConfig(): Config {
 }
 // 🔑 Whether this is a genuinely FIRST run, decided BEFORE anything can write a config —
 // the setup wizard takes over the screen, so it must never fire at someone who has been
-// using the app for months. `overlay/config.json` is deliberately never packaged
-// (tools/build-server.mjs filters it out), so in a shipped build an absent user config is
-// the only honest fresh-install signal. An ABSENT `setupDone` cannot serve here: every
-// existing user's config predates the field and would read as fresh.
-const freshInstall = !existsSync(configPath) && !existsSync(seedConfigPath);
+// using the app for months. An ABSENT `setupDone` cannot serve here: every existing user's
+// config predates the field and would read as fresh.
+//
+// Judged on the USER's config alone. `seedConfigPath` (overlay/config.json) is deliberately
+// excluded: it is a bundled DEFAULT, not evidence that this user has configured anything, and
+// it never ships (tools/build-server.mjs filters it out) so packaged behaviour is unchanged
+// either way. Including it meant the wizard could never fire on a machine that happened to have
+// a dev seed lying around — which is every developer's, and which made `npm run dev:fresh`
+// (the only way to walk first-run setup once you have already done it) silently useless.
+const freshInstall = !existsSync(configPath);
 let config: Config = loadConfig();
 
 /** Scan common Star Citizen install locations for per-channel game.log files, newest
@@ -413,11 +418,20 @@ async function verifySyncToken(): Promise<TokenVerdict> {
     return tokenMemo.verdict;
   let verdict: TokenVerdict;
   try {
-    const r = await fetch("https://subliminal.gg/api/sc/fab-needed", {
+    // 🔑 MUST be an endpoint that actually authenticates. This asked `/api/sc/fab-needed`, which
+    // answers 200 to anyone — no bearer at all included — so every token verified as good. The
+    // setup wizard's connect step is built on this, and it was telling users with a mistyped
+    // token "Connected — your collection will sync". `/api/sc/entitlement` is read-only and 401s
+    // without a valid bearer, so it can actually tell them apart.
+    const r = await fetch("https://subliminal.gg/api/sc/entitlement", {
       headers: { Authorization: `Bearer ${config.syncToken}` },
       signal: AbortSignal.timeout(6000),
     });
-    verdict = r.ok ? "ok" : r.status === 401 ? "rejected" : "unreachable";
+    // 401 is the ONLY "your token is bad". A definite non-401 answer means the server recognised
+    // the caller — including 403, which is a VALID token that simply isn't entitled to something
+    // (skins are subscriber-gated). Reading 403 as rejected would tell a perfectly connected
+    // non-subscriber their token was refused.
+    verdict = r.status === 401 ? "rejected" : r.status < 500 ? "ok" : "unreachable";
   } catch { verdict = "unreachable"; }
   tokenMemo = { at: Date.now(), forToken: config.syncToken, verdict };
   return verdict;
@@ -1895,6 +1909,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
+  // Who is answering on this port. Deliberately the cheapest route here — no disk, no network —
+  // because the shell polls it on every launch before it will trust this process.
+  // 🔑 `instance` is a nonce the shell mints per launch and injects, so a match proves this is the
+  // sidecar THAT shell spawned. Version alone is not enough: two builds of the same version (a dev
+  // run and an installed one) are exactly the case that bit us — an orphaned sidecar kept the port
+  // and the new app silently served its stale data.
+  if (url === "/api/instance" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      instance: process.env.SC_INSTANCE || null,
+      version: APP_VERSION || null,
+      pid: process.pid,
+    }));
+    return;
+  }
+
   // The first-run setup wizard's view of the world: which of its steps are ALREADY satisfied,
   // so it can auto-complete them instead of making a user redo work the app can see is done.
   // 🔑 Carries no secret — the token is a verdict, never the string (same rule as diagnostics).
@@ -1994,7 +2024,10 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
           ? { ok: false, at: lastSaveError.at, error: lastSaveError.error }
           : { ok: true, lastSavedAt: lastSaveOk ?? "(not saved this session)" },
       },
-      sync: { enabled: config.syncEnabled === true, token: syncToken },
+      // `enabled` is the user's setting; `active` is whether sync can actually push. They differ
+      // when SC_NO_SYNC is set (the throwaway first-run profile), and reporting only the setting
+      // made diagnostics say sync was on while every push was being refused.
+      sync: { enabled: config.syncEnabled === true, active: sync.active, token: syncToken },
       screenReading: {
         fabCapture: config.fabCapture === true,
         missionOcr: config.missionOcr === true,

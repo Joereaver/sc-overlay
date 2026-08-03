@@ -142,15 +142,27 @@
 <script>
 (function () {
   "use strict";
-  // Same screen-relative zoom as config.html — this window is sized to the display by the shell,
-  // so its fixed-px layout has to scale with it or it renders as a postage stamp on a 4K TV.
+  // Scale up only for displays that genuinely need it (a 4K TV left at 100% OS scaling renders
+  // this as a postage stamp otherwise).
+  // 🔑 Measured on the SHORTER edge, not the height. Height alone assumes "taller = physically
+  // bigger", which is true of a TV and false of a PORTRAIT monitor: Sub's 1080x1920 is ordinary
+  // density but 1920 tall, so the old rule zoomed it 1.78x — and since this window opens on
+  // whichever display the cursor is on, the wizard was a different SIZE run to run.
+  // 🔑 Divisor is 1440, not 1080, so a 1440p display sits at design size instead of 1.33x. The
+  // point of reference is the widgets: this should not feel like a different app.
   try {
-    var h = (window.screen && window.screen.height) || 1080;
-    document.documentElement.style.zoom = Math.max(1, Math.min(2.25, h / 1080));
+    var sc = window.screen || {};
+    var edge = Math.min(sc.width || 1920, sc.height || 1080);
+    document.documentElement.style.zoom = Math.max(1, Math.min(2, edge / 1440));
   } catch (e) { /* zoom is a nicety, never a blocker */ }
 
   var API = window.overlaySetup || {};
-  var TOKEN_URL = "https://subliminal.gg/blueprints";
+  // 🔑 ?tab=setup, not bare /blueprints. The token UI and the RSI-handle step live on the site's
+  // Setup TAB, which is not rendered until it is selected — verified: the plain page contains
+  // none of that markup. Linking to /blueprints dropped people on the blueprint catalogue and
+  // then told them to "choose Connect the desktop tracker", which was nowhere on screen.
+  // The site keeps its active tab in the URL, so this is its own supported deep link.
+  var TOKEN_URL = "https://subliminal.gg/blueprints?tab=setup";
 
   // Every step is one of these three. 🔑 "pending" is NOT a pass — the Continue button stays
   // disabled on it, which is the whole "no silently bypassing" requirement. A step leaves
@@ -267,13 +279,13 @@
         '<div class="card"><div class="label" style="font-family:var(--font-head);font-size:11px;letter-spacing:.12em;' +
         'text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:10px">How to get your token</div>' +
         '<ol class="steps">' +
-        "<li>Open <b>subliminal.gg/blueprints</b> and sign in (Google, Twitch or Discord).</li>" +
-        '<li>Choose <b>&ldquo;Connect the desktop tracker&rdquo;</b>.</li>' +
+        "<li>Open the button below and sign in (Google, Twitch or Discord).</li>" +
+        '<li>Under <b>&ldquo;Connect the desktop tracker&rdquo;</b>, create a token.</li>' +
         "<li>Copy the token it gives you and paste it below.</li>" +
         "</ol>" +
         '<div class="btnrow"><button id="openSite">Open subliminal.gg</button></div>' +
         "</div>" +
-        '<div class="card"><input type="text" id="tok" placeholder="scbp…  paste your token here" ' +
+        '<div class="card"><input type="text" id="tok" placeholder="scbp_…  paste your token here" ' +
         'autocomplete="off" spellcheck="false" />' +
         '<div class="btnrow"><button class="amber" id="saveTok">Save token</button>' +
         '<button id="checkTok">Check again</button></div>' +
@@ -320,19 +332,23 @@
   function renderSettings() {
     return {
       title: "Review your settings",
-      lede: "Worth two minutes now: the overlay's hotkeys, which widgets appear, the manufacturer skin, " +
-            "and the opt-in screen-reading features are all off or at defaults until you say otherwise.",
+      // 🔑 Says nothing about picking a MANUFACTURER. Pinning a specific manufacturer skin is
+      // subscriber-gated; everyone gets Mobiglas or "match my ship". Promising it here would send
+      // a new user to Settings to find a control they cannot use — the worst possible first
+      // impression, and worse than never mentioning it (Sub, 2026-08-02).
+      lede: "Worth two minutes now: the overlay's hotkeys, which widgets appear, how it looks, and " +
+            "the opt-in screen-reading features are all off or at defaults until you say otherwise.",
       html:
-        '<div class="card"><div class="kv">Settings opens in its own window. The things most people change first:</div>' +
+        '<div class="card"><div class="kv">Settings opens as a panel on the overlay, which you can move and resize like anything else. The things most people change first:</div>' +
         '<ol class="steps">' +
         "<li><b>Hotkeys</b> &mdash; show/hide the overlay, arrange mode, the mining scanner.</li>" +
         "<li><b>Run as administrator</b> &mdash; needed for hotkeys to work while the game has focus.</li>" +
         "<li><b>Screen reading</b> &mdash; fabricator capture and the mining scanner are opt-in, and off by default.</li>" +
-        "<li><b>Skin</b> &mdash; match the manufacturer of the ship you fly, or pick one.</li>" +
+        "<li><b>Appearance</b> &mdash; keep the Mobiglas look, or have the overlay match the ship you're flying.</li>" +
         "</ol>" +
         '<div class="btnrow"><button class="amber" id="openCfg">Open Settings</button>' +
         '<button id="reviewed">I\'ve reviewed them</button></div>' +
-        '<div class="hint">You can reopen Settings any time from the tray icon.</div></div>',
+        '<div class="hint">You can reopen Settings any time &mdash; the overlay&rsquo;s cog, or the tray icon.</div></div>',
       skipNote: "You can always change these later — nothing here is permanent.",
       wire: function () {
         var open = el("openCfg");
@@ -362,7 +378,7 @@
         (connected ? "" : '<div class="kv" style="color:var(--error)"><b>This needs a connected account.</b> ' +
           "Go back a step if you want to set that up first.</div>") +
         '<ol class="steps">' +
-        "<li>Open your blueprints page on subliminal.gg.</li>" +
+        "<li>Open the button below &mdash; it lands on the same setup page.</li>" +
         "<li>Verify your RSI handle (it puts a short code in your RSI bio).</li>" +
         "<li>Switch your profile to public.</li>" +
         "</ol>" +
@@ -413,10 +429,22 @@
 
   function finish() {
     var skipped = STEPS.filter(function (s) { return state[s.key] === "skipped"; });
-    el("doneLede").textContent = skipped.length
+    var base = skipped.length
       ? "The overlay is ready. You skipped " + skipped.length + (skipped.length === 1 ? " step" : " steps") +
         " — you can pick them up any time from Settings."
-      : "The overlay is ready and everything is connected. Press your overlay hotkey in-game to show it.";
+      : "The overlay is ready and everything is connected.";
+    el("doneLede").textContent = base;
+    // 🔑 NAME the key. "Press your overlay hotkey" means nothing to someone who has never used the
+    // app, and this is the last thing setup says to them — the one fact they need to actually see
+    // the overlay. Said on BOTH paths: the skipped-steps wording omitted it entirely, so anyone
+    // who skipped a step finished setup never being told how to open the thing.
+    // Read from config rather than hardcoded, so a cleared or rebound key is reported honestly.
+    getJson("/api/config").then(function (c) {
+      var key = c && typeof c.overlayHotkey === "string" ? c.overlayHotkey.trim() : "F3";
+      el("doneLede").textContent = base + (key
+        ? " Press " + key + " in-game to show and hide it."
+        : " No overlay hotkey is set — add one under Settings → Hotkeys to show and hide it in-game.");
+    });
     el("doneSummary").innerHTML = STEPS.map(function (s) {
       var v = state[s.key];
       var mark = v === "done" ? '<span style="color:var(--ok)">&#10003;</span>' : '<span style="color:var(--outline)">&ndash;</span>';

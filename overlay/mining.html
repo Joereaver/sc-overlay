@@ -433,6 +433,7 @@
       <label class="cog-opt" title="Draws a box on screen showing the area the app reads for a scan signature. Nothing outside it is looked at.">
         <input type="checkbox" id="scanBoxChk" /> Show the scan read area
       </label>
+      <div class="cog-slider" title="How visible the read-area box is. Turn it right down to keep it out of your way — it still works, and it comes back to full while your cursor is over it."><span>Box opacity</span><input type="range" id="scanBoxOpacity" min="10" max="100" step="5" /></div>
       <button type="button" id="testBtn" class="cog-btn">🔊 Test sound</button>
       <button type="button" id="openSettings" class="cog-btn">⚙ Open full settings…</button>
     </div>
@@ -712,10 +713,15 @@
   }, 1000);
 
   // ---- settings (all in the cog) ----
+  const scanBoxOpacityPct = () => {
+    const v = parseInt(localStorage.getItem("miningScanBoxOpacity") || "100", 10);
+    return Number.isFinite(v) ? Math.min(100, Math.max(10, v)) : 100;
+  };
   const renderVoice = () => {
     $("voiceChk").checked = voiceOn();
     // Inverted pref: absent = shown. Default is ON now, so the checkbox reads !hidden.
     $("scanBoxChk").checked = localStorage.getItem("miningScanBoxHidden") !== "1";
+    $("scanBoxOpacity").value = String(scanBoxOpacityPct());
     $("debrisChk").checked = debrisOn();
   };
   $("debrisChk").addEventListener("change", () => {
@@ -732,6 +738,16 @@
     // same key the canvas reads, and the only place either writes it.
     localStorage.setItem("miningScanBoxHidden", on ? "0" : "1");
     try { host()?.scanBox?.(on); } catch { /* standalone: no canvas to draw on */ }
+  });
+  // Scan-box opacity. Floor is 10% rather than 0: at zero it is not "subtle", it is gone, and a
+  // box you cannot see is one you cannot drag, reset or hide — the trapped-user shape again.
+  // Hovering it restores full opacity (see #scanBox:hover), so the controls are always reachable.
+  $("scanBoxOpacity").value = String(scanBoxOpacityPct());
+  $("scanBoxOpacity").addEventListener("input", () => {
+    localStorage.setItem("miningScanBoxOpacity", $("scanBoxOpacity").value);
+    // Same host call as the checkbox: syncScanBox() is the ONE rule and applies opacity too, so
+    // there is no second path that could disagree about what the box should look like.
+    try { host()?.scanBox?.(localStorage.getItem("miningScanBoxHidden") !== "1"); } catch { /* standalone */ }
   });
   $("volSlider").value = Math.round(getVol() * 100);
   $("volSlider").addEventListener("input", () => { localStorage.setItem("miningVol", ($("volSlider").value / 100).toString()); if (master) master.gain.value = getVol(); });

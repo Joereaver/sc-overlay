@@ -745,6 +745,90 @@ const PATCHNOTES = `(async () => {
 // harness runs against the LIVE one — a suite that marks setup complete would silently disarm
 // the wizard for whoever ran the tests. The shell decides whether to show the banner; the page
 // only renders it, so rendering is the whole contract worth asserting here.
+// ── Suite: the background-service-down banner ─────────────────────────────────
+// The sidecar does all the work and this window is only the display, so a dead one is invisible
+// unless something says so. Asserts the banner is purely a function of pushed state — it must not
+// linger after recovery, and its button has to be reachable.
+// ── Suite: chrome must not open BEHIND the Web Page widget's native view ──────
+// That widget's content is a native surface painted above all page content, so canvas DOM landing
+// on it is invisible and unclickable while looking perfectly healthy in the inspector — which is
+// exactly how its own settings cog became unreachable. The only observable contract is that the
+// canvas REPORTS a mask, so that is what this asserts.
+const VIEWMASK = `(async () => {
+  ${PRELUDE}
+  const masks = [];
+  try {
+  window.overlayApi = Object.assign({}, window.overlayApi, { maskWebView: (on) => masks.push(!!on) });
+  const web = WBY.webView;
+  ok("the Web Page widget is in the registry", !!web, web ? web.key : "MISSING");
+
+  // 🔑 It is the ONLY native view. Every other widget is a DOM iframe and stacks by z-index, so
+  // none of them can be hidden behind their own content — assert that here, so a second
+  // native-view widget added later trips this test instead of shipping the same bug.
+  ok("only one widget is native-view backed", WIDGETS.filter(w => w.key === "webView").length === 1);
+
+  setWidgetVisible(web, true);
+  await sleep(250);
+  const el = document.getElementById("w-" + web.key);
+  ok("its wrapper exists once shown", !!el);
+  const cog = el && el.querySelector(".wh-cog");
+  ok("it has a settings cog", !!cog);
+
+  if (cog) {
+    masks.length = 0;
+    cog.click();
+    await sleep(120);
+    ok("opening the Web Page cog masks the native view", masks.some(m => m === true),
+       "masks=" + JSON.stringify(masks));
+    masks.length = 0;
+    document.body.click();
+    await sleep(120);
+    ok("closing it un-masks", masks.some(m => m === false), "masks=" + JSON.stringify(masks));
+  }
+
+  setWidgetVisible(web, false);
+  await sleep(100);
+  } catch (err) { ok("suite ran without throwing", false, String(err && err.stack || err).slice(0, 300)); }
+  return out;
+})()`;
+
+const SVCDOWN = `(async () => {
+  ${PRELUDE}
+  const svc = document.getElementById("svcDown");
+  const retry = document.getElementById("sdRetry");
+  const body = document.getElementById("sdBody");
+  const REGION = "#svcDown.show";
+  ok("the banner exists", !!svc && !!retry);
+  ok("a healthy sidecar shows nothing", getComputedStyle(svc).display === "none");
+  ok("...and claims no interactive region", document.querySelectorAll(REGION).length === 0);
+
+  // Automatic retry: honest wording, and no button to press while the app is already trying.
+  svc.classList.add("show");
+  body.textContent = "SC Overlay isn't tracking anything right now. Reconnecting…";
+  retry.style.display = "none";
+  await sleep(40);
+  ok("while reconnecting it says so", body.textContent.indexOf("Reconnecting") > -1, body.textContent);
+  ok("...and offers no button to press", getComputedStyle(retry).display === "none");
+
+  // Given up: the state Sub actually hit — app running, nothing working, nothing said.
+  body.textContent = "SC Overlay isn't tracking missions, blueprints or mining until this restarts.";
+  retry.style.display = "";
+  await sleep(40);
+  ok("once it gives up it says what is broken", body.textContent.indexOf("isn't tracking") > -1);
+  ok("...and offers Try again", getComputedStyle(retry).display !== "none");
+  ok("...which the shell can actually hit-test", document.querySelectorAll(REGION).length === 1);
+  const r = svc.getBoundingClientRect(), b = retry.getBoundingClientRect();
+  ok("...with the button INSIDE the reported rect",
+     b.left >= r.left - 1 && b.right <= r.right + 1 && b.top >= r.top - 1 && b.bottom <= r.bottom + 1,
+     Math.round(b.width) + "x" + Math.round(b.height));
+
+  svc.classList.remove("show");
+  await sleep(40);
+  ok("recovery clears it and releases the region",
+     getComputedStyle(svc).display === "none" && document.querySelectorAll(REGION).length === 0);
+  return out;
+})()`;
+
 const SETUPNUDGE = `(async () => {
   ${PRELUDE}
   const nudge = document.getElementById("setupNudge");
@@ -912,6 +996,31 @@ const SCANBOX = `(async () => {
   await sleep(60);
   ok("the pref still wins on its own", getComputedStyle(box).display === "none");
   if (userPref === null) localStorage.removeItem("miningScanBoxHidden"); else localStorage.setItem("miningScanBoxHidden", userPref);
+
+  // ── user-set opacity ─────────────────────────────────────────────────────────
+  // Turning the box right down must never make it unreachable, so the floor is enforced in the
+  // canvas rather than trusted from storage, and hover always returns it to full.
+  const userOp = localStorage.getItem("miningScanBoxOpacity");
+  const opNow = () => getComputedStyle(document.documentElement).getPropertyValue("--sb-op").trim();
+  localStorage.setItem("miningScanBoxOpacity", "40");
+  syncScanBox();
+  await sleep(40);
+  ok("the box takes the opacity you set", opNow() === "0.4", opNow());
+  // A value below the floor (or a junk one) must be clamped, not obeyed: an invisible box cannot
+  // be dragged, reset or hidden.
+  localStorage.setItem("miningScanBoxOpacity", "0");
+  syncScanBox();
+  await sleep(40);
+  ok("...but zero is clamped to the 10% floor", opNow() === "0.1", opNow());
+  localStorage.setItem("miningScanBoxOpacity", "banana");
+  syncScanBox();
+  await sleep(40);
+  ok("...and junk falls back to full", opNow() === "1", opNow());
+  ok("hovering always restores it to full",
+     [...document.styleSheets].some(sh => { try { return [...sh.cssRules].some(r => r.selectorText && r.selectorText.includes("#scanBox:hover")); } catch (e) { return false; } }));
+  if (userOp === null) localStorage.removeItem("miningScanBoxOpacity"); else localStorage.setItem("miningScanBoxOpacity", userOp);
+  syncScanBox();
+  await sleep(40);
 
   // ── the number the OCR read, centered under the box ──────────────────────────
   // Just the number: Sub asked for it outside the box, centered, without the labels the first
@@ -1386,7 +1495,12 @@ async function run(label, script, preload, query, page) {
   // The unlock-pop suite points an <img> at a URL that must 404 — that IS the assertion (no
   // capture for this item yet → fall back to the render). Named so it can't be mistaken for a real
   // missing asset.
-  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp/;
+  // 🔑 `/api/binding-image` 404s when no chart has been chosen, and that is a SHIPPED state, not a
+  // fault — the Infographic Viewer reads the 404 as "show the pick-a-PNG empty state". Without it
+  // here the whole suite only passes for a developer who happens to have a chart configured, and
+  // fails outright against a fresh profile (npm run dev:fresh), which is exactly when you most
+  // want to be able to run it.
+  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp|\/api\/binding-image(\?|$)/;
   win.webContents.session.webRequest.onCompleted({ urls: ["*://*/*"] }, (d) => {
     if (d.statusCode < 400) return;
     if (d.statusCode === 404 && EXPECTED_404.test(d.url)) return;
@@ -1573,6 +1687,8 @@ app.whenReady().then(async () => {
     fails += await run("scan read area", SCANBOX, null);
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
     fails += await run("setup nudge", SETUPNUDGE, null);
+    fails += await run("background service down", SVCDOWN, null);
+    fails += await run("chrome over the native view", VIEWMASK, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
