@@ -218,7 +218,14 @@ export class MiningTracker extends EventEmitter {
         ? `ignored (below the ${MIN_SIGNATURE.toLocaleString()} floor)`
         : `ignored (above ${this.maxSignature().toLocaleString()}, the largest signature the game can show — misread)` });
     }
-    if (!matches.length && !confirmed) {
+    // 🔑 AN EXACT DEBRIS VALUE IS ITS OWN EVIDENCE, the same way a rock-table hit is (Sub,
+    // 2026-08-03). Debris is a whole number of 2,000-unit salvage panels inside the signature
+    // range — only 13 values in the whole band — so a read landing exactly on one is already a
+    // far tighter filter than the glyph was ever asked to be. Requiring the glyph on top of that
+    // meant a HUD the glyph check couldn't handle made debris permanently un-announceable, which
+    // is exactly what happened. `unknown` still needs the glyph: it is, by definition, a number we
+    // cannot vouch for, so a stray HUD figure must not become a call-out.
+    if (!matches.length && !confirmed && verdict !== "debris") {
       return out({ verdict, announced: false, used: false, why: `${verdict}, not announced (no scan glyph beside the number)` });
     }
     // Ignore a repeat read of the same signature (the loop polls the same rock every ~3s);
