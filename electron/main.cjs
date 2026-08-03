@@ -438,13 +438,30 @@ function virtualDesktopBounds() {
 // User nudge for the canvas, in physical px. Read from config at startup and updated live by the
 // arrange-mode nudge; 0,0 for everyone whose canvas already lines up.
 let canvasOffset = { x: 0, y: 0 };
-/** The canvas's window rect, INCLUDING the user's nudge.
+// The other half of the calibration: a uniform scale for the canvas coordinate space, applied by
+// the page as CSS `zoom` on <html>. Changing the PRIMARY monitor's Windows scaling leaves the
+// canvas both mis-placed AND mis-sized, and an offset alone can only fix the placement.
+// 🔑 Measured, not assumed (Electron 43): CSS `zoom` on the root scales iframe CONTENT as well as
+// the frame box — 100×40 inside a widget iframe renders 200×80 at zoom 2 — and
+// getBoundingClientRect() returns zoom-ADJUSTED px, so the regions the page reports for cursor
+// hit-testing are already in window coordinates and need no correction here. That is what rules
+// out webContents.setZoomFactor(), whose zoom is per-ORIGIN and would drag the Settings window
+// (same localhost origin) along with the canvas.
+let canvasScale = 1;
+/** The canvas's window rect: the UNION of the un-nudged virtual desktop and the nudged canvas.
  *
  *  🔑 The nudge moves the WINDOW, never the widget coordinates. Widget positions live in
  *  widgets.json in canvas space; if the nudge changed what that space MEANS, every existing
  *  layout would silently relocate. Translating the window leaves saved layouts untouched, and
  *  keeps the canvas spanning the whole virtual desktop — so dragging a widget onto another
  *  monitor still works, which is the thing a mixed-DPI user is most likely to want.
+ *
+ *  🔑 GROW, don't just translate. The first version moved the window without resizing it, so a
+ *  nudge of -408,-199 walked the canvas OFF the right/bottom of the desktop and CLIPPED the edge
+ *  it was pushed toward — a widget parked on the far monitor became unreachable. The window now
+ *  spans everything the canvas could need: it starts at whichever is further left/up of the
+ *  desktop origin and the nudged origin, and is wide/tall enough to still reach the desktop's far
+ *  edge. The canvas content then sits at canvasContentShift() INSIDE that window.
  *
  *  Why a manual nudge at all: on a mixed-DPI desktop (Jman — 4K @225% primary beside two 1080p
  *  @100%) the canvas comes out the right SIZE but in the wrong PLACE. Sub reproduced it by
@@ -453,11 +470,42 @@ let canvasOffset = { x: 0, y: 0 };
  *  user drags it into place against the dotted primary outline, like a console safe-area screen. */
 function fullDisplayBounds() {
   const v = virtualDesktopBounds();
-  return { x: v.x + canvasOffset.x, y: v.y + canvasOffset.y, width: v.width, height: v.height };
+  const o = canvasOffset, z = canvasScale;
+  // The window has to cover BOTH the whole desktop (so a widget can still be dragged to any
+  // monitor) and wherever the scaled, nudged canvas content now reaches — hence the max/min pair
+  // rather than a plain translate. At o=0,z=1 this is exactly virtualDesktopBounds().
+  return {
+    x: v.x + Math.min(0, o.x),
+    y: v.y + Math.min(0, o.y),
+    width: Math.round(Math.max(v.width, o.x + v.width * z) - Math.min(0, o.x)),
+    height: Math.round(Math.max(v.height, o.y + v.height * z) - Math.min(0, o.y)),
+  };
 }
-// Re-fit every canvas window when the monitor layout changes (plugged/unplugged/rearranged).
+/** Where canvas coordinate 0,0 sits INSIDE the window, in client px.
+ *  A negative nudge extends the window left/up and the content stays at 0; a positive nudge keeps
+ *  the window origin and pushes the content in. Either way `windowOrigin + shift` lands on
+ *  `virtualDesktopOrigin + offset`, which is the whole point. */
+function canvasContentShift() {
+  return { x: Math.max(0, canvasOffset.x), y: Math.max(0, canvasOffset.y) };
+}
+// Mirrors the sidecar's clamp (see canvasZoom in overlay-server.ts) — a hand-edited 0 would
+// collapse the canvas to a dot with no visible control left to undo it.
+function clampCanvasScale(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.max(0.5, Math.min(3, Math.round(v * 100) / 100)) : 1;
+}
+// Re-fit every canvas window when the monitor layout changes (plugged/unplugged/rearranged) or
+// the user nudges. 🔑 The PAGE has to be told as well: --prim-* and every widget's on-screen
+// position are derived from overlay:canvas-info, which it fetches ONCE at load. Without this the
+// window resized and the canvas inside it stayed laid out for the old monitor arrangement — which
+// is what a Windows display-scaling change looks like from the user's side.
 function refitCanvasWindows() {
-  try { if (overlay && !overlay.isDestroyed()) overlay.setBounds(fullDisplayBounds()); } catch { /* ignore */ }
+  try {
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.setBounds(fullDisplayBounds());
+      overlay.webContents.send("overlay:canvas-changed");
+    }
+  } catch { /* ignore */ }
 }
 
 // The overlay is a FULL-SCREEN transparent canvas that hosts free-floating widgets (the Blueprint
@@ -1547,6 +1595,7 @@ if (!app.requestSingleInstanceLock()) {
       if (Number.isFinite(c.canvasOffsetX) || Number.isFinite(c.canvasOffsetY)) {
         canvasOffset = { x: Number(c.canvasOffsetX) || 0, y: Number(c.canvasOffsetY) || 0 };
       }
+      if (Number.isFinite(c.canvasScale)) canvasScale = clampCanvasScale(c.canvasScale);
       if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
@@ -1695,10 +1744,28 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.handle("overlay:reset-layout", () => { resetWidgetLayout(); return true; });
   // Primary display's offset + size within the full-desktop canvas, so the page can default a
   // new/reset widget onto the PRIMARY monitor (not a corner of a left/top secondary display).
+  // 🔑 px/py carry the nudge's content shift, so ONE number moves everything: widget frames render
+  // at `x + px` and every screen-anchored bit of chrome pins to --prim-*, which is also px/py. The
+  // canvas coordinate space moves as a unit and the dotted outline stays a usable alignment target.
+  // vw/vh are the WINDOW's size (grown by the nudge), not the desktop's — --prim-right measures in
+  // from the window's right edge.
+  // 🔑 Everything here is in CANVAS px — what the page writes into a CSS length — which the page's
+  // `zoom: scale` then multiplies on the way to the screen. So pw/ph stay the primary's raw size
+  // (it RENDERS scale× bigger, which is the point: the user grows it until the dotted outline sits
+  // on their real monitor edges), while the window-relative shift and the window's own span are
+  // real pixels and have to be divided by the scale to survive the multiply.
   ipcMain.handle("overlay:canvas-info", () => {
-    const v = fullDisplayBounds();
+    const v = virtualDesktopBounds();
+    const w = fullDisplayBounds();
+    const s = canvasContentShift();
+    const z = canvasScale;
     const p = screen.getPrimaryDisplay().bounds;
-    return { px: p.x - v.x, py: p.y - v.y, pw: p.width, ph: p.height, vw: v.width, vh: v.height };
+    return {
+      px: p.x - v.x + s.x / z, py: p.y - v.y + s.y / z,
+      pw: p.width, ph: p.height,
+      vw: w.width / z, vh: w.height / z,
+      scale: z,
+    };
   });
   // Hold-to-interact opt-in: when off (default), the overlay is clickable whenever the cursor is
   // over a widget; when on, it's passive unless the interact key is held.
@@ -1810,16 +1877,20 @@ if (!app.requestSingleInstanceLock()) {
   // Binding chart is hotkey-only (never kept on). Both widgets now live in the one overlay
   // renderer, so mining is a shell-owned visibility flag (setMiningVisible) rather than a window.
   // (sendMiningVisible / pushWidgetStates / setMiningVisible are defined at module scope above.)
-  // Live canvas nudge. Applies immediately (refit) so the user sees the dotted outline move as
-  // they press, then persists via the sidecar — which is the only writer of config.json.
-  ipcMain.handle("app:canvas-offset", (_e, off) => {
-    if (off && Number.isFinite(off.x) && Number.isFinite(off.y)) {
+  // Live canvas calibration — the nudge and the scale together, since both re-fit the same window
+  // and either one alone leaves a mixed-DPI canvas wrong. Applies immediately (refit) so the user
+  // sees the dotted outline move and resize as they press, then persists via the sidecar — which
+  // is the only writer of config.json. Called with no argument it just reports the current value,
+  // which is how both surfaces (arrange mode and the Settings window) open showing the truth.
+  ipcMain.handle("app:canvas-calibration", (_e, cal) => {
+    if (cal && Number.isFinite(cal.x) && Number.isFinite(cal.y)) {
       const clamp = (n) => Math.max(-4000, Math.min(4000, Math.round(n)));
-      canvasOffset = { x: clamp(off.x), y: clamp(off.y) };
+      canvasOffset = { x: clamp(cal.x), y: clamp(cal.y) };
+      if (Number.isFinite(cal.scale)) canvasScale = clampCanvasScale(cal.scale);
       refitCanvasWindows();
-      postConfig({ canvasOffsetX: canvasOffset.x, canvasOffsetY: canvasOffset.y });
+      postConfig({ canvasOffsetX: canvasOffset.x, canvasOffsetY: canvasOffset.y, canvasScale });
     }
-    return canvasOffset;
+    return { x: canvasOffset.x, y: canvasOffset.y, scale: canvasScale };
   });
   ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {

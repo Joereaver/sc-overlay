@@ -265,6 +265,7 @@
       setInteractHotkey: call("setInteractHotkey"), setMoveHotkey: call("setMoveHotkey"),
       setFabClaimHotkey: call("setFabClaimHotkey"),
       setHoldMode: call("setHoldMode"), resetLayout: call("resetLayout"),
+      canvasCalibration: call("canvasCalibration"),
       metrics: call("metrics"), openDataFolder: call("openDataFolder"),
       isElevated: call("isElevated"), restartAsAdmin: call("restartAsAdmin"),
       getOverlayEnabled: call("getOverlayEnabled"), setOverlayEnabled: call("setOverlayEnabled"),
@@ -549,6 +550,26 @@
     <div class="hint" id="adminOk" style="display:none; color:#63d6a0">✓ Running as administrator — hotkeys work while the game is focused.</div>
     <button type="button" id="adminBtn" class="amber" style="display:none" onclick="restartAsAdmin()">Restart as administrator</button>
     <div class="hint" id="adminHint" style="display:none">Relaunches elevated (a Windows UAC prompt — click Yes). Only affects hotkeys while the game is focused. Tip: shortcut → Properties → Compatibility → Run as administrator to skip this each launch.</div>
+    <!-- Canvas calibration. The same two controls arrange mode offers, mirrored here because this
+         is a normal OS window that the calibration cannot move: if the canvas is far enough out of
+         place, or scaled far enough down, the on-canvas copy can itself be off-screen. Hidden
+         unless the shell exposes the bridge (an older app, or a browser source). -->
+    <div class="hkrow" id="canvasCalRow" style="display:none">
+      <span class="hklabel">Canvas alignment</span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">For mixed-DPI desktops. If your monitors run at different Windows scaling levels, the overlay canvas can land in the wrong place and at the wrong size. Turn on arrange mode (the dashed outline shows where the canvas thinks your main monitor is), then size and move it until the outline matches your real monitor edges. Leave at 0, 0 / 100% if it already lines up.</span></span>
+      <div class="hkbtn" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
+        <button type="button" data-cal-nx="-10">←</button>
+        <button type="button" data-cal-nx="10">→</button>
+        <button type="button" data-cal-ny="-10">↑</button>
+        <button type="button" data-cal-ny="10">↓</button>
+        <span id="canvasCalOff" style="font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); min-width:64px; text-align:center">0, 0</span>
+        <button type="button" data-cal-nz="-5">−</button>
+        <button type="button" data-cal-nz="5">+</button>
+        <span id="canvasCalScale" style="font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); min-width:46px; text-align:center">100%</span>
+        <button type="button" id="canvasCalReset">Reset</button>
+      </div>
+      <div class="hint">Hold Shift for finer steps. Applies immediately — open arrange mode on the overlay to see the dashed outline you are aiming at.</div>
+    </div>
     <div class="setrow">
       <button type="button" class="danger" style="width:100%" onclick="onResetLayout()">Reset overlay layout (recover lost widgets)</button>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">If a widget ends up off-screen (e.g. dragged onto another monitor), this returns every widget to its default on-screen spot.</span></span>
@@ -966,6 +987,49 @@
   async function onResetLayout() {
     if (window.overlayConfig && window.overlayConfig.resetLayout) await window.overlayConfig.resetLayout();
   }
+
+  // ── canvas calibration (mixed-DPI) ───────────────────────────────────────
+  // The shell owns this, not the form: it re-fits the overlay window and persists through the
+  // sidecar, so it must NOT go through save() — that would round-trip a stale copy of the value.
+  // Mirrors arrange mode's control exactly; whichever surface you use, the other reads the same
+  // numbers back the next time it opens.
+  (function () {
+    const row = document.getElementById("canvasCalRow");
+    const api = () => (window.overlayConfig && window.overlayConfig.canvasCalibration) || null;
+    if (!row || !api()) return; // older shell / browser source → leave the row hidden
+    let cal = { x: 0, y: 0, scale: 1 };
+    const show = () => {
+      document.getElementById("canvasCalOff").textContent = cal.x + ", " + cal.y;
+      document.getElementById("canvasCalScale").textContent = Math.round(cal.scale * 100) + "%";
+    };
+    const push = async () => {
+      try { cal = (await api()(cal)) || cal; } catch { /* shell gone */ }
+      show();
+    };
+    (async () => {
+      let cur = null;
+      try { cur = await api()(); } catch { /* shell gone */ }
+      if (!cur) return; // no answer → this build can't calibrate; don't offer a control that lies
+      cal = cur; row.style.display = ""; show();
+    })();
+    row.addEventListener("click", (e) => {
+      const b = e.target instanceof Element ? e.target.closest("button") : null;
+      if (!b || !row.contains(b)) return;
+      if (b.id === "canvasCalReset") { cal = { x: 0, y: 0, scale: 1 }; void push(); return; }
+      const nz = Number(b.dataset.calNz || 0);
+      if (nz) {
+        const pct = Math.round(cal.scale * 100) + Math.sign(nz) * (e.shiftKey ? 1 : 5);
+        cal = { x: cal.x, y: cal.y, scale: Math.max(0.5, Math.min(3, pct / 100)) };
+        void push();
+        return;
+      }
+      const step = e.shiftKey ? 1 : 10;
+      const nx = Number(b.dataset.calNx || 0), ny = Number(b.dataset.calNy || 0);
+      if (!nx && !ny) return;
+      cal = { x: cal.x + Math.sign(nx) * step, y: cal.y + Math.sign(ny) * step, scale: cal.scale };
+      void push();
+    });
+  })();
 
   // ── configurable hotkeys: click-to-capture, live-applied ─────────────────
   // Two hotkeys share one capture flow: the overlay show/hide toggle and the

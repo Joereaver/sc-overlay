@@ -701,10 +701,16 @@
     left: var(--prim-cx, 50%); transform: translateX(-50%); display: flex; flex-direction: column;
     align-items: center; gap: 6px; padding: 10px 14px; border-radius: 10px;
     background: var(--panel-solid, rgba(4,20,27,0.92)); border: 1px solid var(--border);
-    font-family: var(--sans); color: var(--cyan-text); }
+    font-family: var(--sans); color: var(--cyan-text);
+    /* 🔑 Capped against the PRIMARY monitor (--prim-w), never vw — the canvas spans every display,
+       so vw is the whole virtual desktop and would let this run off the monitor it centres on. */
+    max-width: calc(var(--prim-w, 100%) - 60px); }
   #arrangeScrim .nudge .nl { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--cyan); }
-  #arrangeScrim .nudge .nh { font-size: 10px; color: var(--cyan-dim); }
-  #arrangeScrim .nrow { display: flex; align-items: center; gap: 6px; }
+  #arrangeScrim .nudge .nh { font-size: 10px; color: var(--cyan-dim); text-align: center; }
+  /* Wraps because it carries two control groups now (move, then size) and a narrow primary would
+     otherwise push the Reset button off the edge — the same unreachable-control trap as the scan
+     box's Reset. */
+  #arrangeScrim .nrow { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; }
   #arrangeScrim .nrow button { cursor: pointer; min-width: 30px; height: 26px; padding: 0 8px;
     font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--cyan);
     background: rgba(var(--accent-rgb), 0.10); border: 1px solid var(--cyan-dim); border-radius: 7px; }
@@ -1461,13 +1467,14 @@
 
   <!-- Full-screen arrange-mode indicator (shell only). Click-through except its banner. -->
   <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div>
-    <!-- Canvas nudge. Only meaningful on a mixed-DPI desktop, where the canvas comes out the right
-         SIZE but in the wrong PLACE, so the dotted outline above doesn't sit on the real monitor
-         edges. Lives INSIDE the arrange scrim so it appears exactly when the dotted outline it
-         aligns against does, and is anchored on --prim-* like the banner so it stays on the
-         primary. 🔑 Also mirrored in the Settings WINDOW, because if the canvas is far enough out
-         this control can itself be off-screen — and that window is a normal OS window the offset
-         cannot touch. -->
+    <!-- Canvas calibration. Only meaningful on a mixed-DPI desktop, where the canvas lands in the
+         wrong PLACE and — once the PRIMARY monitor's Windows scaling is what changed — at the
+         wrong SIZE too, so the dotted outline above doesn't sit on the real monitor edges. Both
+         controls aim at that one outline: move it, then size it. Lives INSIDE the arrange scrim so
+         it appears exactly when the outline does, and is anchored on --prim-* like the banner so it
+         stays on the primary. 🔑 Also mirrored in the Settings WINDOW, because if the canvas is far
+         enough out this control can itself be off-screen — and that window is a normal OS window
+         the calibration cannot touch. -->
     <div class="nudge" id="canvasNudge">
       <span class="nl">Canvas not lining up with your monitor?</span>
       <div class="nrow">
@@ -1476,9 +1483,12 @@
         <button type="button" data-nx="0" data-ny="-10" title="Nudge up">↑</button>
         <button type="button" data-nx="0" data-ny="10" title="Nudge down">↓</button>
         <span class="nv" id="nudgeVal">0, 0</span>
-        <button type="button" id="nudgeReset" title="Back to no offset">Reset</button>
+        <button type="button" data-nz="-5" title="Shrink the canvas">−</button>
+        <button type="button" data-nz="5" title="Grow the canvas">+</button>
+        <span class="nv" id="nudgeScale">100%</span>
+        <button type="button" id="nudgeReset" title="Back to no offset and 100%">Reset</button>
       </div>
-      <span class="nh">Hold Shift for 1px steps. Nudge until the dashed outline sits on your monitor's edges.</span>
+      <span class="nh">Hold Shift for finer steps. Size it with − / + until the dashed outline matches your monitor, then move it into place.</span>
     </div>
   </div>
 
@@ -2539,12 +2549,29 @@
   function applyCanvasVars() {
     const ci = canvasInfo; if (!ci) return;
     const s = document.documentElement.style, vw = ci.vw != null ? ci.vw : (ci.px + ci.pw);
+    // The user's canvas scale (mixed-DPI calibration; 1 for everyone who doesn't need it). CSS
+    // `zoom` on the ROOT scales the whole canvas as one — the dotted primary outline, every
+    // widget's position and, measured in Electron 43, the content INSIDE each widget's iframe.
+    // 🔑 It also makes getBoundingClientRect() report zoom-adjusted px, so the regions we hand the
+    // shell for cursor hit-testing stay in window coordinates with no correction at either end.
+    s.zoom = ci.scale && ci.scale !== 1 ? String(ci.scale) : "";
     s.setProperty("--prim-top", ci.py + "px");
     s.setProperty("--prim-left", ci.px + "px");
     s.setProperty("--prim-cx", (ci.px + ci.pw / 2) + "px");
     s.setProperty("--prim-right", (vw - (ci.px + ci.pw)) + "px");
     s.setProperty("--prim-w", ci.pw + "px");
     s.setProperty("--prim-h", ci.ph + "px");
+  }
+  // Re-read the geometry and re-lay-out everything that hangs off it. The shell fires
+  // overlay:canvas-changed whenever the window is re-fitted — a monitor plugged/unplugged, a
+  // WINDOWS DISPLAY-SCALING CHANGE, or the user nudging the canvas. Without this the window
+  // resized underneath a page still laid out for the old arrangement, and the nudge appeared to
+  // do nothing at all (the window moved; --prim-* and every widget's position did not).
+  async function refreshCanvasGeometry() {
+    try { canvasInfo = await window.overlayApi?.getCanvasInfo?.() || canvasInfo; } catch { /* keep what we had */ }
+    applyCanvasVars();
+    applyAllFrames();
+    drawScanBox();
   }
   // ══ Canvas widgets ═══════════════════════════════════════════════════════════════════════
   // Every embedded widget is the same object: an iframe on THIS canvas whose geometry this shell
@@ -3778,6 +3805,7 @@
       try { canvasInfo = await window.overlayApi?.getCanvasInfo?.() || null; } catch { /* single-monitor fallback */ }
       applyCanvasVars(); // pin screen-anchored chrome to the primary monitor (multi-monitor void-safe)
       drawScanBox();     // now that the real display geometry is known, not the window's guess
+      window.overlayApi?.onCanvasChanged?.(() => { void refreshCanvasGeometry(); });
       let saved = null;
       // (the panel's own layout is loaded by the registry loader, keyed "blueprint")
       const q = new URLSearchParams(location.search); // test overrides
@@ -4027,28 +4055,42 @@
     ab.addEventListener("mouseleave", () => { abLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); });
     $("arrangeDone").addEventListener("click", () => window.overlayApi.endMove());
 
-    // ── canvas nudge ────────────────────────────────────────────────────────────────────────
-    // Moves the whole canvas WINDOW. Widget coordinates are untouched, so nobody's saved layout
+    // ── canvas calibration (nudge + scale) ──────────────────────────────────────────────────
+    // Moves and sizes the whole canvas. Widget coordinates are untouched, so nobody's saved layout
     // shifts, and the canvas keeps spanning every monitor — dragging a widget to another screen
-    // still works, which is the first thing a multi-monitor user does.
+    // still works, which is the first thing a multi-monitor user does. Every change round-trips
+    // through the shell, which re-fits the window and pushes overlay:canvas-changed back, so the
+    // dotted outline the user is aiming at redraws from the same numbers that were just saved.
     {
-      let off = { x: 0, y: 0 };
-      const show = () => { const v = $("nudgeVal"); if (v) v.textContent = off.x + ", " + off.y; };
+      let cal = { x: 0, y: 0, scale: 1 };
+      const show = () => {
+        const v = $("nudgeVal"); if (v) v.textContent = cal.x + ", " + cal.y;
+        const s = $("nudgeScale"); if (s) s.textContent = Math.round(cal.scale * 100) + "%";
+      };
       const push = async () => {
-        try { off = (await window.overlayApi?.canvasOffset?.(off)) || off; } catch { /* no shell */ }
+        try { cal = (await window.overlayApi?.canvasCalibration?.(cal)) || cal; } catch { /* no shell */ }
         show();
       };
       // Read the stored value so the display is honest the moment arrange mode opens.
-      (async () => { try { off = (await window.overlayApi?.canvasOffset?.()) || off; } catch { /* none */ } show(); })();
+      (async () => { try { cal = (await window.overlayApi?.canvasCalibration?.()) || cal; } catch { /* none */ } show(); })();
       $("canvasNudge")?.addEventListener("click", (e) => {
         const b = e.target instanceof Element ? e.target.closest("button") : null; if (!b) return;
         e.stopPropagation();
-        if (b.id === "nudgeReset") { off = { x: 0, y: 0 }; void push(); return; }
+        if (b.id === "nudgeReset") { cal = { x: 0, y: 0, scale: 1 }; void push(); return; }
+        const nz = Number(b.dataset.nz || 0);
+        if (nz) {
+          // Shift = 1%, for the last bit of sizing once the dashed edge is nearly right.
+          const stepPct = e.shiftKey ? 1 : 5;
+          const pct = Math.round(cal.scale * 100) + Math.sign(nz) * stepPct;
+          cal = { ...cal, scale: Math.max(0.5, Math.min(3, pct / 100)) };
+          void push();
+          return;
+        }
         // Shift = 1px, for the last bit of alignment once the dashed edge is nearly right.
         const step = e.shiftKey ? 1 : 10;
         const nx = Number(b.dataset.nx || 0), ny = Number(b.dataset.ny || 0);
         if (!nx && !ny) return;
-        off = { x: off.x + Math.sign(nx) * step, y: off.y + Math.sign(ny) * step };
+        cal = { ...cal, x: cal.x + Math.sign(nx) * step, y: cal.y + Math.sign(ny) * step };
         void push();
       });
     }

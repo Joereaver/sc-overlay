@@ -58,6 +58,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   saveWidget: (id, layout) => ipcRenderer.send("overlay:save-widget", id, layout),
   // Primary-display offset/size within the full-desktop canvas (for default widget placement).
   getCanvasInfo: () => ipcRenderer.invoke("overlay:canvas-info"),
+  // The window was re-fitted (monitor added/removed/rearranged, a Windows display-scaling change,
+  // or the user nudging the canvas) — every number getCanvasInfo returned is now stale.
+  onCanvasChanged: (cb) => ipcRenderer.on("overlay:canvas-changed", () => cb()),
   // Global overlay-app chrome (the in-overlay hub): toggle the other widgets on/off, read
   // their current visibility, enter/leave global arrange, and open the full settings window.
   setMining: (on) => ipcRenderer.send("app:set-mining", !!on),
@@ -108,7 +111,8 @@ contextBridge.exposeInMainWorld("overlayApi", {
   onBindingChartReload: (cb) => ipcRenderer.on("overlay:bindingchart-reload", () => cb()),
   widgetStates: () => ipcRenderer.invoke("app:widget-states"),
   // Nudge the whole canvas (physical px). Pass {x,y} to set, or nothing to read the current value.
-  canvasOffset: (off) => ipcRenderer.invoke("app:canvas-offset", off),
+  // Canvas calibration for mixed-DPI desktops: { x, y, scale }. Pass nothing to just read it.
+  canvasCalibration: (cal) => ipcRenderer.invoke("app:canvas-calibration", cal),
   onWidgetStates: (cb) => ipcRenderer.on("overlay:widget-states", (_e, s) => cb(s)),
   arrange: (on) => ipcRenderer.send(on ? "overlay:begin-move" : "overlay:end-move"),
   // The Mining window's cog was clicked → summon this shell's global cog too.
@@ -144,6 +148,7 @@ contextBridge.exposeInMainWorld("overlayApi", {
     setFabClaimHotkey: (a) => ipcRenderer.invoke("set-fabclaim-hotkey", a),
     setHoldMode: (on) => ipcRenderer.invoke("app:set-hold-mode", !!on),
     resetLayout: () => ipcRenderer.invoke("overlay:reset-layout"),
+    canvasCalibration: (cal) => ipcRenderer.invoke("app:canvas-calibration", cal),
     metrics: () => ipcRenderer.invoke("app:metrics"),
     openDataFolder: (which) => ipcRenderer.send("app:open-data-folder", String(which)),
     isElevated: () => ipcRenderer.invoke("app:is-elevated"),

@@ -198,11 +198,18 @@ interface Config {
    *  syntax). Read by main.cjs at startup. */
   /** Manual nudge for the overlay canvas, in PHYSICAL pixels, applied to the window's position.
    *  Mixed-DPI desktops (a 225% 4K primary beside 100% 1080p monitors) leave the canvas offset
-   *  from the real monitors — the canvas is the right SIZE, just in the wrong PLACE. Rather than
-   *  guess the DPI maths, the user drags it into place like a console game's safe-area screen.
+   *  from the real monitors. Rather than guess the DPI maths, the user drags it into place like a
+   *  console game's safe-area screen.
    *  🔑 Defaults to 0,0, so a correct setup is bit-for-bit unaffected. */
   canvasOffsetX: number;
   canvasOffsetY: number;
+  /** The other half of that calibration: a uniform scale for the canvas coordinate space. Changing
+   *  the PRIMARY monitor's Windows scaling leaves the canvas both mis-placed AND mis-sized (Sub,
+   *  2026-08-03), and an offset can only fix the placement. Applied as CSS `zoom` on the canvas
+   *  document, so the dotted primary outline, every widget's position and every widget's contents
+   *  scale as one — the user grows it until the outline sits on their real monitor edges.
+   *  🔑 Defaults to 1. */
+  canvasScale: number;
   /** Seconds an SC Feed story stays on screen before fading (Argante's ask). Clamped 3–60:
    *  under 3 nothing is readable, and a notifier that never leaves is a panel, not a pop-up. */
   scFeedShowSeconds: number;
@@ -318,6 +325,7 @@ const DEFAULTS: Config = {
   overlayHotkey: "F3",
   canvasOffsetX: 0,
   canvasOffsetY: 0,
+  canvasScale: 1,
   scFeedShowSeconds: 12,
   unlockAlertShowSeconds: 8,
   miningHotkey: "Shift+F3",
@@ -1777,6 +1785,13 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       typeof v === "number" && Number.isFinite(v) ? Math.max(-4000, Math.min(4000, Math.round(v))) : fallback;
     if (body.canvasOffsetX !== undefined) config.canvasOffsetX = nudge(body.canvasOffsetX, config.canvasOffsetX);
     if (body.canvasOffsetY !== undefined) config.canvasOffsetY = nudge(body.canvasOffsetY, config.canvasOffsetY);
+    // Canvas scale, same reasoning as the nudge: clamped here as well as in the UI, because 0 (or
+    // a string, or a hand-edited 40) collapses the whole canvas to a dot with no visible control
+    // left to undo it. 0.5–3 covers every real Windows scaling ratio (a 225% primary beside 100%
+    // side monitors is the worst case seen) with room either side.
+    const canvasZoom = (v: unknown, fallback: number): number =>
+      typeof v === "number" && Number.isFinite(v) ? Math.max(0.5, Math.min(3, Math.round(v * 100) / 100)) : fallback;
+    if (body.canvasScale !== undefined) config.canvasScale = canvasZoom(body.canvasScale, config.canvasScale);
     if (body.scFeedShowSeconds !== undefined) config.scFeedShowSeconds = showSecs(body.scFeedShowSeconds, config.scFeedShowSeconds);
     if (body.unlockAlertShowSeconds !== undefined) config.unlockAlertShowSeconds = showSecs(body.unlockAlertShowSeconds, config.unlockAlertShowSeconds);
     if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();

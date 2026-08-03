@@ -1564,6 +1564,103 @@ const ANGLE = `(async () => {
   return out;
 })()`;
 
+// Canvas calibration for mixed-DPI desktops — the nudge (move) and the scale (size), both aimed at
+// the dotted primary outline in arrange mode.
+//
+// The property that matters is that the outline stays a USABLE ALIGNMENT TARGET: the outline and
+// the widgets have to move and scale as ONE coordinate space, or the user lines the outline up
+// with their monitor and the widgets land somewhere else. Both derive from canvas-info's px/py,
+// which is exactly what is asserted here.
+//
+// The shell is absent in this harness, so canvasInfo is driven directly — the same shape
+// overlay:canvas-info returns.
+const CALIBRATE = `(async () => {
+  ${PRELUDE}
+  const root = document.documentElement;
+  const primLeft = () => getComputedStyle(root).getPropertyValue("--prim-left").trim();
+  const w = WBY.notepad;
+  setWidgetVisible(w, true);
+  await sleep(200);
+  w.s.x = 300; w.s.y = 120;
+
+  // Baseline: no calibration at all, which is what every correctly-aligned user has.
+  canvasInfo = { px: 40, py: 20, pw: 1000, ph: 800, vw: 3000, vh: 1200, scale: 1 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("no scale set means no zoom on the document", root.style.zoom === "", JSON.stringify(root.style.zoom));
+  ok("the outline pins to px", primLeft() === "40px", primLeft());
+  ok("a widget sits at its saved x PLUS px", cs(w, "--wx") === "340px", cs(w, "--wx"));
+  // 🔑 Measure a FIXED-SIZE control, not the panel: the panel wraps, so at 2x it re-flows to fit
+  // the narrower CSS viewport and comes out well under double — a real behaviour that would make
+  // this assertion look like a broken zoom. A button's height cannot wrap.
+  const btnH = () => document.querySelector("#canvasNudge .nrow button").getBoundingClientRect().height;
+  const btnH0 = btnH();
+
+  // A nudge: canvas-info carries the shift in px/py, so BOTH the outline and the widget move by it
+  // and the gap between them is untouched. That gap is what makes the outline an alignment target.
+  canvasInfo = { px: 40 + 150, py: 20 + 60, pw: 1000, ph: 800, vw: 3000, vh: 1200, scale: 1 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("nudging moves the outline", primLeft() === "190px", primLeft());
+  ok("...and moves the widget by exactly the same amount", cs(w, "--wx") === "490px", cs(w, "--wx"));
+  ok("...so the widget's offset FROM the outline is unchanged", 490 - 190 === 300);
+
+  // A scale: applied as CSS zoom on the root, so the whole canvas renders bigger — the outline,
+  // the widgets and (measured in Electron 43) the content inside each widget's iframe.
+  // 🔑 px/pw stay RAW canvas px; the zoom is what multiplies them on the way to the screen. If
+  // canvas-info pre-divided by the scale, the outline would never change size and there would be
+  // nothing to calibrate against.
+  canvasInfo = { px: 40, py: 20, pw: 1000, ph: 800, vw: 1500, vh: 600, scale: 2 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("the scale becomes a document zoom", root.style.zoom === "2", root.style.zoom);
+  ok("the outline's CSS position is NOT pre-divided", primLeft() === "40px", primLeft());
+  ok("a widget keeps its canvas coordinates too", cs(w, "--wx") === "340px", cs(w, "--wx"));
+  // Ground truth that the zoom really scales rendering: a fixed-size control measures double.
+  // getBoundingClientRect reports zoom-ADJUSTED px, which is also why the regions this page hands
+  // the shell for cursor hit-testing need no correction at either end.
+  ok("chrome really renders at 2x", Math.abs(btnH() - btnH0 * 2) < 2, btnH0 + " -> " + btnH());
+
+  canvasInfo = { px: 40, py: 20, pw: 1000, ph: 800, vw: 3000, vh: 1200, scale: 1 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("going back to 100% clears the zoom", root.style.zoom === "", JSON.stringify(root.style.zoom));
+
+  // The control itself. Every button must sit INSIDE the panel's own rect — the shell only makes
+  // the window clickable over the rects this page reports, and the scan box's Reset button was
+  // unreachable for exactly this reason (it hung 19px above the box it belonged to).
+  const nudge = document.getElementById("canvasNudge");
+  const nr = nudge.getBoundingClientRect();
+  const btns = [...nudge.querySelectorAll("button")];
+  ok("the calibration panel carries move AND size controls", btns.length === 7, btns.length + " buttons");
+  ok("every control is inside the rect the shell hit-tests", btns.every((b) => {
+    const r = b.getBoundingClientRect();
+    return r.left >= nr.left - 1 && r.right <= nr.right + 1 && r.top >= nr.top - 1 && r.bottom <= nr.bottom + 1;
+  }));
+
+  // Readouts. With no shell the round-trip resolves to nothing and the page keeps its own value,
+  // so this exercises the stepping and clamping rather than persistence.
+  const readScale = () => document.getElementById("nudgeScale").textContent;
+  const readOff = () => document.getElementById("nudgeVal").textContent;
+  ok("it opens at no calibration", readOff() === "0, 0" && readScale() === "100%", readOff() + " / " + readScale());
+  nudge.querySelector('[data-nz="5"]').click();
+  await sleep(30);
+  ok("+ grows the canvas 5% at a time", readScale() === "105%", readScale());
+  nudge.querySelector('[data-nx="10"]').click();
+  await sleep(30);
+  ok("an arrow nudges 10px", readOff() === "10, 0", readOff());
+  for (let i = 0; i < 45; i++) nudge.querySelector('[data-nz="5"]').click();
+  await sleep(60);
+  ok("scale clamps at 300%", readScale() === "300%", readScale());
+  for (let i = 0; i < 60; i++) nudge.querySelector('[data-nz="-5"]').click();
+  await sleep(60);
+  ok("...and at 50%", readScale() === "50%", readScale());
+  document.getElementById("nudgeReset").click();
+  await sleep(30);
+  ok("Reset returns both to neutral", readOff() === "0, 0" && readScale() === "100%", readOff() + " / " + readScale());
+  return out;
+})()`;
+
 // `page` targets a widget's OWN page instead of the canvas — a notifier is easiest to drive
 // standalone, without the whole canvas around it.
 async function run(label, script, preload, query, page) {
@@ -1771,6 +1868,12 @@ app.whenReady().then(async () => {
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
+    // ?arrange: the calibration panel lives INSIDE the arrange scrim, so a suite that doesn't open
+    // arrange mode measures a display:none control — every size assertion then passes on 0 == 0.
+    // The stub preload is needed as well: the whole arrange-chrome block is behind
+    // `if (window.overlayApi)`, so with no shell the control renders but nothing is wired to it.
+    fails += await run("canvas calibration (mixed-DPI)", CALIBRATE,
+      path.join(__dirname, "widget-dom-stub-preload.cjs"), "arrange");
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
     fails += await run("patch notes are grouped and labelled", PATCHGROUPS, null);
     fails += await run("setup nudge", SETUPNUDGE, null);
