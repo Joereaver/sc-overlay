@@ -194,6 +194,9 @@ interface Config {
    *  syntax). Read by main.cjs at startup. */
   miningHotkey: string;
   webViewHotkey: string;
+  /** Global hotkey that shows/hides the Journal widget (Electron accelerator syntax).
+   *  Read by electron/main.cjs at startup. */
+  notepadHotkey: string;
   /** Hold-to-interact hotkey (Electron accelerator, default "F"): when hold-to-interact mode is
    *  on, the overlay is passive (click-through) unless this key is HELD. */
   interactHotkey: string;
@@ -299,6 +302,7 @@ const DEFAULTS: Config = {
   overlayHotkey: "F3",
   miningHotkey: "Shift+F3",
   webViewHotkey: "Ctrl+Shift+F3",
+  notepadHotkey: "Alt+F3",
   interactHotkey: "F",
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
@@ -1742,6 +1746,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.overlayHotkey === "string") config.overlayHotkey = body.overlayHotkey.trim();
     if (typeof body.miningHotkey === "string") config.miningHotkey = body.miningHotkey.trim();
     if (typeof body.webViewHotkey === "string") config.webViewHotkey = body.webViewHotkey.trim();
+    if (typeof body.notepadHotkey === "string") config.notepadHotkey = body.notepadHotkey.trim();
     if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();

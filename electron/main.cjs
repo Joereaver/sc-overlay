@@ -925,6 +925,19 @@ function registerWebViewHotkey(accel) {
   return r;
 }
 
+// Live-rebindable hotkey for the Journal widget. It was the one placeable widget with no way to
+// reach it without the tray or the hub — Argante asked for this, and a scratchpad you have to
+// alt-tab to open is a scratchpad you don't use mid-flight.
+let notepadAccel = null;
+function registerNotepadHotkey(accel) {
+  if (notepadAccel) hotkeys.unregister(notepadAccel);
+  notepadAccel = null;
+  if (!accel || typeof accel !== "string") return { ok: true };
+  const r = hotkeys.register(accel, toggleNotepad);
+  if (r.ok) notepadAccel = accel;
+  return r;
+}
+
 // Live-rebindable hotkey for showing/hiding the Mining Assistant widget. Same shape as the
 // overlay/binding registrations so the config window can warn on an invalid / in-use combo.
 let miningAccel = null;
@@ -1464,6 +1477,7 @@ if (!app.requestSingleInstanceLock()) {
     let overlayKey = "F3";
     let bindKey = "Ctrl+F3";
     let miningKey = "Shift+F3";
+    let notepadKey = "Alt+F3";
     let interactKey = "F";
     let moveKey = "Ctrl+Alt+M";
     let fabClaimKey = "F4";
@@ -1477,6 +1491,7 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof c.overlayHotkey === "string") overlayKey = c.overlayHotkey;
       if (typeof c.bindingHotkey === "string") bindKey = c.bindingHotkey;
       if (typeof c.webViewHotkey === "string") registerWebViewHotkey(c.webViewHotkey);
+      if (typeof c.notepadHotkey === "string") notepadKey = c.notepadHotkey;
       if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
@@ -1487,6 +1502,7 @@ if (!app.requestSingleInstanceLock()) {
     registerOverlayHotkey(overlayKey);
     registerBindingHotkey(bindKey);
     registerMiningHotkey(miningKey);
+    registerNotepadHotkey(notepadKey);
     registerInteractHotkey(interactKey);
     registerMoveHotkey(moveKey);
     registerFabClaimHotkey(fabClaimKey);
@@ -1613,6 +1629,8 @@ if (!app.requestSingleInstanceLock()) {
     registerMiningHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-webview-hotkey", (_e, accel) =>
     registerWebViewHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("set-notepad-hotkey", (_e, accel) =>
+    registerNotepadHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-interact-hotkey", (_e, accel) =>
     registerInteractHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-move-hotkey", (_e, accel) =>

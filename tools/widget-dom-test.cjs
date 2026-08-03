@@ -112,8 +112,33 @@ const GROUPING = `(async () => {
   groupWidgets(party, mining);
   const gs = saved.filter(s => s[0] === "__groups").pop();
   ok("groups persisted under __groups", !!gs && Array.isArray(gs[1].list), gs ? JSON.stringify(gs[1]).slice(0, 110) : "none");
+  // HIDING IS NOT CLOSING. A hotkey / tray / hub toggle routes through setWidgetVisible, and it
+  // used to detach — so hiding the Mining Scanner by hotkey orphaned it, and it came back as a
+  // lone window sitting behind the stack it used to belong to (Argante, 0.1.35). Only the ✕ means
+  // close. These two assertions are the whole contract, so they are written as a pair.
   setWidgetVisible(WBY.party, false);
-  ok("closing a tab leaves the stack", GROUPS.length === 0, GROUPS.length);
+  ok("hiding a member KEEPS it in the stack", GROUPS.length === 1 && GROUPS[0].members.length === 2,
+     GROUPS[0] ? GROUPS[0].members.join(",") : "no group");
+  // The active tab still points at the hidden member — deliberately, so the tab the user chose is what
+  // returns. That makes the next three assertions load-bearing: a stack that displays a hidden
+  // member paints nothing AND draws no tab strip (tabs live in the displayed member's own bar),
+  // which would leave the whole group invisible and unclickable with no way back.
+  ok("...and the active tab is still remembered", GROUPS[0] && GROUPS[0].active === "party",
+     GROUPS[0] && GROUPS[0].active);
+  ok("...but the stack still shows a member", shown(mining));
+  const hidStrip = el(mining).querySelector(".wh-tabs");
+  ok("...with its tab strip", !!(hidStrip && hidStrip.innerHTML.trim()));
+  ok("...listing only members you can actually see",
+     hidStrip ? hidStrip.querySelectorAll(".gtab:not(.gdetach)").length === 1 : false,
+     hidStrip ? hidStrip.querySelectorAll(".gtab:not(.gdetach)").length + " tab(s)" : "no strip");
+  setWidgetVisible(WBY.party, true);
+  await sleep(30);
+  ok("unhiding rejoins the stack, fronted", GROUPS.length === 1 && GROUPS[0].active === "party" && shown(party),
+     GROUPS[0] && GROUPS[0].active);
+  // The ✕ is the ONE control that means "close", so it is the one that leaves the stack.
+  el(party).querySelector(".wh-close").click();
+  await sleep(30);
+  ok("the ✕ closes OUT of the stack", GROUPS.length === 0, GROUPS.length);
 
   // Regression: a widget switched on while arrange is ALREADY active used to open undecorated —
   // no drag banner, "not in move mode like every other app" — because arrange only ever swept the

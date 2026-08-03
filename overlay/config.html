@@ -481,6 +481,13 @@
       <div class="hint" id="webViewHotkeyHint"></div>
     </div>
     <div class="hkrow">
+      <span class="hklabel">Journal</span>
+      <button type="button" id="notepadHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('notepad')">Alt + F3</button>
+      <button type="button" class="hkclear" id="notepadHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('notepad')">✕</button>
+      <input type="hidden" id="notepadHotkey" />
+      <div class="hint" id="notepadHotkeyHint"></div>
+    </div>
+    <div class="hkrow">
       <span class="hklabel">Mining Scanner</span>
       <button type="button" id="miningHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('mining')">Shift + F3</button>
       <button type="button" class="hkclear" id="miningHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('mining')">✕</button>
@@ -940,6 +947,8 @@
                apply: (a) => window.overlayConfig && window.overlayConfig.setMiningHotkey && window.overlayConfig.setMiningHotkey(a) },
     webView: { input: "webViewHotkey", btn: "webViewHotkeyBtn", hint: "webViewHotkeyHint", def: "Ctrl+Shift+F3",
                apply: (a) => window.overlayConfig && window.overlayConfig.setWebViewHotkey && window.overlayConfig.setWebViewHotkey(a) },
+    notepad: { input: "notepadHotkey", btn: "notepadHotkeyBtn", hint: "notepadHotkeyHint", def: "Alt+F3",
+               apply: (a) => window.overlayConfig && window.overlayConfig.setNotepadHotkey && window.overlayConfig.setNotepadHotkey(a) },
     interact: { input: "interactHotkey", btn: "interactHotkeyBtn", hint: "interactHotkeyHint", def: "F", bare: true,
                apply: (a) => window.overlayConfig && window.overlayConfig.setInteractHotkey && window.overlayConfig.setInteractHotkey(a) },
     move: { input: "moveHotkey", btn: "moveHotkeyBtn", hint: "moveHotkeyHint", def: "Ctrl+Alt+M",

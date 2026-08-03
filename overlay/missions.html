@@ -2869,10 +2869,23 @@
   function applyGroup(g) { for (const k of g.members) { const w = WBY[k]; if (w) applyFrame(w); } renderGroupTabs(); }
 
   // Only the active member of a group is displayed; the rest stay mounted but hidden.
+  /** Which member a stack actually DISPLAYS — not always `active`.
+   *
+   *  `active` is the tab the user last fronted and it is deliberately STICKY: hiding a member
+   *  (hotkey, tray, hub) no longer drops it from the stack, so `active` can point at something
+   *  currently hidden. Displaying that member would paint nothing AND draw no tab strip —
+   *  renderGroupTabs puts the tabs in the displayed member's own bar — so the whole stack would
+   *  become invisible and unclickable with no way back. Falling back to any visible member keeps
+   *  the stack reachable while leaving `active` untouched, so the user's chosen tab returns the
+   *  moment they unhide it. */
+  const groupShown = (g) => (WBY[g.active]?.s.visible ? g.active : null)
+    || g.members.find((k) => WBY[k]?.s.visible) || g.active;
+
   function refreshGroupDisplay(g) {
+    const shown = groupShown(g);
     for (const k of g.members) {
       const w = WBY[k], el = wEl(w); if (!w || !el) continue;
-      showEl(w, w.s.visible && g.active === k);
+      showEl(w, w.s.visible && shown === k);
     }
     renderGroupTabs();
   }
@@ -2885,10 +2898,15 @@
       const el = wEl(w); if (!el) continue;
       const slot = el.querySelector(".wh-tabs"); if (!slot) continue;
       const g = groupOf(w);
-      if (!g || g.active !== w.key) { if (slot.innerHTML) slot.innerHTML = ""; continue; }
-      slot.innerHTML = g.members.map((k) => {
+      // Tabs belong to the member actually on screen, which is not always `active` — see groupShown.
+      const shown = g ? groupShown(g) : null;
+      if (!g || shown !== w.key) { if (slot.innerHTML) slot.innerHTML = ""; continue; }
+      // Only members that are actually SHOWN get a tab. A hidden one is still in the stack (it
+      // rejoins the moment its hotkey/tray toggle brings it back) but listing it would be a dead
+      // control: clicking a tab fronts a member, and fronting something hidden displays nothing.
+      slot.innerHTML = g.members.filter((k) => WBY[k]?.s.visible).map((k) => {
         const m = WBY[k]; if (!m) return "";
-        return '<button type="button" class="gtab' + (g.active === k ? " on" : "") + '"'
+        return '<button type="button" class="gtab' + (shown === k ? " on" : "") + '"'
           + ' data-g="' + g.id + '" data-k="' + k + '">' + escapeHtml(m.title) + '</button>';
       }).join("")
         + '<button type="button" class="gtab gdetach" data-g="' + g.id + '" title="Pop this tab out of the group">⧉</button>';
@@ -3392,8 +3410,13 @@
       showEl(w, false); // fires onHide
       unloadFrame(w);
       el.classList.remove("moving");
-      // Closing a tab leaves the stack, the way closing a browser tab does.
-      if (g) detachFromGroup(w);
+      // 🔑 Hiding does NOT leave the stack. Closing a tab does — but the ✕ is the only control
+      // that means "close", and it detaches on its own (see the .wh-close handler). Everything
+      // else routed here is a visibility TOGGLE: a hotkey, the tray, the hub checkbox. Detaching
+      // on those orphaned the widget — Argante: hide the Mining Scanner by hotkey and it was
+      // kicked out of its group, then came back as a lone window sitting behind the stack it used
+      // to belong to. `active` is left alone so the tab he chose is still fronted when it returns.
+      if (g) refreshGroupDisplay(g);
     }
     renderGroupTabs();
   }
@@ -3471,7 +3494,9 @@
     e.stopPropagation();
     const g = GROUPS.find((x) => x.id === btn.dataset.g); if (!g) return;
     if (btn.classList.contains("gdetach")) {
-      const active = WBY[g.active]; if (active) detachFromGroup(active);
+      // Pop out the member you can SEE, which is not always `active` — the ⧉ sits in the displayed
+      // member's own tab strip, so targeting `active` could pop a hidden widget instead.
+      const active = WBY[groupShown(g)]; if (active) detachFromGroup(active);
       return;
     }
     const w = WBY[btn.dataset.k]; if (!w) return;
@@ -3617,6 +3642,11 @@
       const setter = "set" + w.key.charAt(0).toUpperCase() + w.key.slice(1);
       el.querySelector(".wh-close")?.addEventListener("click", (e) => {
         e.stopPropagation();
+        // Closing a tab leaves the stack, the way closing a browser tab does. This is the ONLY
+        // control that means "close" — a hotkey or tray toggle just hides — so the detach lives
+        // here rather than in setWidgetVisible, which cannot tell the two apart (both arrive back
+        // from the shell on the same visibility channel).
+        detachFromGroup(w);
         if (window.overlayApi?.[setter]) window.overlayApi[setter](false);
         else setWidgetVisible(w, false); // no shell (OBS/browser) — hide locally
       });

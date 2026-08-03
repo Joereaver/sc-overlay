@@ -25,6 +25,16 @@ function check(name: string, got: unknown, want: unknown): void {
 const dataDir = join(import.meta.dirname, "..", "data");
 const REAL_BLUEPRINT = "Morozov-SH Arms"; // a real pool name, so it resolves like the live path
 
+/** How many blueprints this tracker holds because it SAW A RECEIPT IN THE LOG.
+ *
+ *  🔑 Not collectedTotal. That counts every ownership source — starter-gear defaults, manual
+ *  ticks, fabricator confirmations — so it reads 8 on a brand-new profile before a single log
+ *  line has been parsed, and "collectedTotal > 0" would call every gate below satisfied no
+ *  matter what the parser did. These tests are about ONE question: did a receipt from this
+ *  environment get recorded? So ask exactly that. */
+const inGameCount = (t: MissionTracker): number =>
+  t.collectedItemsWithDates().filter((x) => x.source === "in-game").length;
+
 /** A tracker fed one header line then one blueprint receipt. Returns whether it counted. */
 function collectsUnder(header: string | null): boolean {
   const stateDir = mkdtempSync(join(tmpdir(), "logenv-"));
@@ -33,7 +43,7 @@ function collectsUnder(header: string | null): boolean {
     t.detectPatch("<2026-08-01T00:00:00.000Z> ProductVersion: 4.9.188.23497");
     if (header) t.detectPatch(header);
     t.apply({ kind: "blueprintReceived", ts: new Date().toISOString(), name: REAL_BLUEPRINT, missionId: null } as never);
-    return t.view().collectedTotal > 0;
+    return inGameCount(t) > 0;
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
@@ -60,10 +70,10 @@ check("TECH-PREVIEW is DROPPED", collectsUnder(TECH), false);
     t.detectPatch("<2026-08-01T00:00:00.000Z> ProductVersion: 4.9.188.23497");
     t.detectPatch(PTU);
     t.apply({ kind: "blueprintReceived", ts: new Date().toISOString(), name: REAL_BLUEPRINT, missionId: null } as never);
-    check("still nothing after the PTU session", t.view().collectedTotal, 0);
+    check("still nothing after the PTU session", inGameCount(t), 0);
     t.detectPatch(PUB);
     t.apply({ kind: "blueprintReceived", ts: new Date().toISOString(), name: REAL_BLUEPRINT, missionId: null } as never);
-    check("a later PUB session counts again", t.view().collectedTotal > 0, true);
+    check("a later PUB session counts again", inGameCount(t) > 0, true);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

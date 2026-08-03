@@ -2094,7 +2094,14 @@ export class MissionTracker extends EventEmitter {
       completed: holdActive || (effectiveId ? this.completedMissionIds.has(effectiveId) : false),
       pools,
       totals: { owned, total },
-      collectedTotal: this.observed.size + [...this.overrides.values()].filter(Boolean).length,
+      // 🔑 The SAME set the site sync uploads, so the widget and subliminal.gg can never disagree.
+      // This used to be `observed.size + overrides(true).length`, which counted only two of the
+      // FOUR ownership sources — it silently dropped starter-gear defaults (8 items) and every
+      // fabricator-confirmed tick. Sub read 169 in the widget against 178 on the site and the
+      // natural conclusion was that sync was broken. Counting NAMES against the site's UUIDs was
+      // the second half of the same mismatch (harmless today — no name maps to two UUIDs — but
+      // it was one dataset change away from drifting again).
+      collectedTotal: this.collectedItemsWithDates().length,
       recentMissions: this.recentMissions(),
       recentBlueprints: this.recentBlueprints(),
       earnings: this.earningRates(),

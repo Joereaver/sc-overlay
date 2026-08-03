@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld("overlayApi", {
     setBindingHotkey: (a) => ipcRenderer.invoke("set-binding-hotkey", a),
     setMiningHotkey: (a) => ipcRenderer.invoke("set-mining-hotkey", a),
     setWebViewHotkey: (a) => ipcRenderer.invoke("set-webview-hotkey", a),
+    setNotepadHotkey: (a) => ipcRenderer.invoke("set-notepad-hotkey", a),
     setInteractHotkey: (a) => ipcRenderer.invoke("set-interact-hotkey", a),
     setMoveHotkey: (a) => ipcRenderer.invoke("set-move-hotkey", a),
     setFabClaimHotkey: (a) => ipcRenderer.invoke("set-fabclaim-hotkey", a),
