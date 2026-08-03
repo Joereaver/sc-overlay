@@ -88,10 +88,15 @@ function saveDone(statePath: string, done: Set<string>): void {
   }
 }
 
-/** POST one scrubbed body. Returns true when the site accepted it. */
-async function upload(text: string, token: string, appVersion: string, label: string): Promise<boolean> {
+/** POST one scrubbed body. Returns true when the site accepted it.
+ *
+ *  🔑 `kind` is not cosmetic — the site keeps a separate retention quota per kind. Under one
+ *  shared quota the live log, which re-uploads on every content change, evicted rotated sessions
+ *  within hours of them arriving. Sending "backup" is what keeps a finished session around long
+ *  enough to be read. */
+async function upload(text: string, token: string, appVersion: string, label: string, kind: "live" | "backup"): Promise<boolean> {
   const bytes = Buffer.byteLength(text, "utf8");
-  const res = await fetch(`${SITE}/api/bp-tracker/logs?v=${encodeURIComponent(appVersion)}`, {
+  const res = await fetch(`${SITE}/api/bp-tracker/logs?v=${encodeURIComponent(appVersion)}&kind=${kind}`, {
     method: "POST",
     headers: { "Content-Type": "text/plain", Authorization: `Bearer ${token}` },
     body: text,
@@ -143,7 +148,7 @@ async function shareBackups(cfg: LogShareConfig, appVersion: string, statePath: 
 
     const text = tail(scrubGameLog(raw).text, MAX_BYTES);
     if (!Buffer.byteLength(text, "utf8")) { done.add(b.n); continue; }
-    if (await upload(text, cfg.syncToken, appVersion, `rotated session ${b.n}`)) {
+    if (await upload(text, cfg.syncToken, appVersion, `rotated session ${b.n}`, "backup")) {
       done.add(b.n);
       sent++;
     } else {
@@ -170,7 +175,7 @@ export async function maybeShareLog(cfg: LogShareConfig, appVersion = "", stateP
       const hash = createHash("sha1").update(text).digest("hex");
       if (hash !== lastHash) {
         const trimmed = bytes < Buffer.byteLength(scrubbed, "utf8") ? ", tail only" : "";
-        if (await upload(text, cfg.syncToken, appVersion, `the live Game.log${trimmed}`)) lastHash = hash;
+        if (await upload(text, cfg.syncToken, appVersion, `the live Game.log${trimmed}`, "live")) lastHash = hash;
       }
     }
     // Rotated sessions are gated on knowing the current patch: without it every backup would
