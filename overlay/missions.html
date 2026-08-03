@@ -3563,6 +3563,32 @@
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
       renderGroupTabs();
+      // 🔑 PULL the shell's visibility state, now that the widgets actually EXIST.
+      //
+      // This is the fix for "the app starts and none of my widgets are anywhere to be found"
+      // (Sub, 2026-08-03). The shell PUSHES visibility from did-finish-load, but this loader is
+      // async — it awaits getWidgets() — so those messages routinely arrive BEFORE any widget
+      // element has been built. setWidgetVisible opens with `const el = wEl(w); if (!el) return;`
+      // so every one of them was SILENTLY DROPPED and the canvas stayed empty. The only escape
+      // was the overlay hotkey, which destroys and recreates the window (setOverlayEnabled) and
+      // re-runs the whole race — hence "hit F3, sometimes twice".
+      //
+      // A push cannot fix this, because the shell has no way to know when the renderer is ready;
+      // every attempt to time it is another guess. So the renderer ASKS, at the one moment it
+      // knows it is ready. `app:widget-states` and preload's widgetStates() already existed for
+      // exactly this — nothing had ever called them.
+      //
+      // bringToFront:false — this is a REPLAY of saved state, not a click, so it must not
+      // re-front a stack's tab (same reason did-finish-load sends `initial: true`).
+      try {
+        const states = await window.overlayApi?.widgetStates?.();
+        if (states) {
+          for (const [key, on] of Object.entries(states)) {
+            const w = WBY[key];
+            if (w && !!on !== !!w.s.visible) setWidgetVisible(w, !!on, false);
+          }
+        }
+      } catch { /* no shell — OBS/browser, where the page owns its own visibility */ }
       // 🔑 APPLY the restored `active` — restoring it isn't enough. Two things make this the only
       // place it can happen: the loader is async (it awaits getWidgets), so the shell's per-widget
       // visibility messages can land BEFORE GROUPS exists, at which point groupOf() is null and
