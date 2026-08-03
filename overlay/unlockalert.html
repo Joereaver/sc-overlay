@@ -105,7 +105,13 @@
   // Same-origin bridge to the parent canvas (present only when embedded on the overlay).
   const host = () => (EMBEDDED && window.parent) ? window.parent.__unlockAlertHost : null;
 
-  const SHOW_MS = 8000;      // long enough to read mid-fight, short enough not to nag
+  // Long enough to read mid-fight, short enough not to nag. User-settable (Settings ->
+  // Notifications); the server clamps 3-60s.
+  let SHOW_MS = 8000;
+  fetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((c) => {
+    if (typeof c.unlockAlertShowSeconds === "number" && isFinite(c.unlockAlertShowSeconds))
+      SHOW_MS = Math.max(3, Math.min(60, c.unlockAlertShowSeconds)) * 1000;
+  }).catch(() => { /* default */ });
   const FRESH_MS = 120000;   // an SSE reconnect replays the last view — don't re-pop old receipts
 
   let queue = [];

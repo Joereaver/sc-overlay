@@ -196,6 +196,11 @@ interface Config {
   overlayHotkey: string;
   /** Global hotkey that shows/hides the Mining Assistant window (Electron accelerator
    *  syntax). Read by main.cjs at startup. */
+  /** Seconds an SC Feed story stays on screen before fading (Argante's ask). Clamped 3–60:
+   *  under 3 nothing is readable, and a notifier that never leaves is a panel, not a pop-up. */
+  scFeedShowSeconds: number;
+  /** Seconds an Unlock Alert card stays up. Same clamp, same reasoning. */
+  unlockAlertShowSeconds: number;
   miningHotkey: string;
   webViewHotkey: string;
   /** Global hotkey that shows/hides the Journal widget (Electron accelerator syntax).
@@ -304,6 +309,8 @@ const DEFAULTS: Config = {
   bindingPng: "",
   bindingHotkey: "Ctrl+F3",
   overlayHotkey: "F3",
+  scFeedShowSeconds: 12,
+  unlockAlertShowSeconds: 8,
   miningHotkey: "Shift+F3",
   webViewHotkey: "Ctrl+Shift+F3",
   notepadHotkey: "Alt+F3",
@@ -1751,6 +1758,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.miningHotkey === "string") config.miningHotkey = body.miningHotkey.trim();
     if (typeof body.webViewHotkey === "string") config.webViewHotkey = body.webViewHotkey.trim();
     if (typeof body.notepadHotkey === "string") config.notepadHotkey = body.notepadHotkey.trim();
+    // Clamped SERVER-side as well as in the input: a hand-edited config.json with 0 (or a string)
+    // would otherwise make a notifier vanish instantly or never leave, with no control to undo it.
+    const showSecs = (v: unknown, fallback: number): number =>
+      typeof v === "number" && Number.isFinite(v) ? Math.max(3, Math.min(60, Math.round(v))) : fallback;
+    if (body.scFeedShowSeconds !== undefined) config.scFeedShowSeconds = showSecs(body.scFeedShowSeconds, config.scFeedShowSeconds);
+    if (body.unlockAlertShowSeconds !== undefined) config.unlockAlertShowSeconds = showSecs(body.unlockAlertShowSeconds, config.unlockAlertShowSeconds);
     if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();

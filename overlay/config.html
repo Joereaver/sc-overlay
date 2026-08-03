@@ -573,6 +573,26 @@
       white-space:pre-wrap; font-size:11px; line-height:1.5; background:rgba(0,0,0,0.28);
       border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--muted)"></pre>
   </div>
+  <!-- How long the two pop-up widgets stay up. Argante asked for this: a notifier that fades on
+       a fixed timer is either too quick to read or too slow to get out of the way, and which one
+       depends entirely on whether you're in a fight. Lives in Settings rather than each widget's
+       cog because SC Feed's cog is already the alert-sound panel, and a notifier you're trying to
+       slow down is by definition one that keeps vanishing before you can open its cog. -->
+  <div class="card">
+    <div class="label">Pop-up duration</div>
+    <div class="setrow">
+      <label class="opt" for="scFeedShowSeconds">SC Feed story</label>
+      <input type="number" id="scFeedShowSeconds" min="3" max="60" step="1" style="width:78px" />
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Seconds an SC Feed story stays on screen before it fades. 3–60.</span></span>
+    </div>
+    <div class="setrow">
+      <label class="opt" for="unlockAlertShowSeconds">Unlock Alert card</label>
+      <input type="number" id="unlockAlertShowSeconds" min="3" max="60" step="1" style="width:78px" />
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Seconds a blueprint-unlock card stays on screen before it fades. 3–60.</span></span>
+    </div>
+    <div class="hint">Takes effect the next time each widget loads.</div>
+  </div>
+
   <!-- ══════════ TIER 3 ══════════
        "More" used to be a junk drawer: browser sources, promos, diagnostics and About all in one
        heap. Diagnostics moved up to Performance & fixes where it belongs, promos got their own
@@ -780,6 +800,8 @@
     document.getElementById("fabClaim").checked = !!cfg.fabClaim;
     document.getElementById("missionOcr").checked = !!cfg.missionOcr;
     document.getElementById("miningAutoShow").checked = !!cfg.miningAutoShow;
+    document.getElementById("scFeedShowSeconds").value = String(cfg.scFeedShowSeconds ?? 12);
+    document.getElementById("unlockAlertShowSeconds").value = String(cfg.unlockAlertShowSeconds ?? 8);
     document.getElementById("shareLogs").checked = !!cfg.shareLogs;
     document.getElementById("theme").value = cfg.theme || "mobiglas";
     // Manufacturer skins are a Twitch-sub perk. Entitlement comes from the server (cfg.premium,
@@ -858,6 +880,14 @@
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done).catch(done); else done();
   });
 
+  // A number input can be emptied or spun to 0, and either would make a notifier vanish on
+  // arrival with no obvious way back. Clamped here AND server-side — the server has to hold the
+  // line for a hand-edited config.json, this one keeps the UI from ever showing a bad value.
+  function showSecs(id, fallback) {
+    const v = Math.round(Number(document.getElementById(id).value));
+    return Number.isFinite(v) && v > 0 ? Math.max(3, Math.min(60, v)) : fallback;
+  }
+
   async function save() {
     cfg.logPath = document.getElementById("logPath").value.trim();
     cfg.autoSwitch = document.getElementById("autoSwitch").checked;
@@ -875,6 +905,8 @@
       fabClaim: document.getElementById("fabClaim").checked,
       missionOcr: document.getElementById("missionOcr").checked,
       miningAutoShow: document.getElementById("miningAutoShow").checked,
+      scFeedShowSeconds: showSecs("scFeedShowSeconds", 12),
+      unlockAlertShowSeconds: showSecs("unlockAlertShowSeconds", 8),
       shareLogs: document.getElementById("shareLogs").checked,
       theme: document.getElementById("theme").value,
     };
