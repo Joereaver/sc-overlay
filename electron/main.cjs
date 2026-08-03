@@ -435,7 +435,26 @@ function virtualDesktopBounds() {
 // The widget overlay spans the virtual desktop (multi-monitor). fullDisplayBounds() drives the
 // overlay window + overlay:canvas-info. (The binding-chart PNG stays PRIMARY-only — it's a
 // gameplay reference overlay, not a widget canvas — so it uses primaryBounds() directly.)
-function fullDisplayBounds() { return virtualDesktopBounds(); }
+// User nudge for the canvas, in physical px. Read from config at startup and updated live by the
+// arrange-mode nudge; 0,0 for everyone whose canvas already lines up.
+let canvasOffset = { x: 0, y: 0 };
+/** The canvas's window rect, INCLUDING the user's nudge.
+ *
+ *  🔑 The nudge moves the WINDOW, never the widget coordinates. Widget positions live in
+ *  widgets.json in canvas space; if the nudge changed what that space MEANS, every existing
+ *  layout would silently relocate. Translating the window leaves saved layouts untouched, and
+ *  keeps the canvas spanning the whole virtual desktop — so dragging a widget onto another
+ *  monitor still works, which is the thing a mixed-DPI user is most likely to want.
+ *
+ *  Why a manual nudge at all: on a mixed-DPI desktop (Jman — 4K @225% primary beside two 1080p
+ *  @100%) the canvas comes out the right SIZE but in the wrong PLACE. Sub reproduced it by
+ *  setting one of his own monitors to 175%: "it shifts everything down and to the right". Rather
+ *  than guess the DPI arithmetic and risk moving the canvas for everyone it currently suits, the
+ *  user drags it into place against the dotted primary outline, like a console safe-area screen. */
+function fullDisplayBounds() {
+  const v = virtualDesktopBounds();
+  return { x: v.x + canvasOffset.x, y: v.y + canvasOffset.y, width: v.width, height: v.height };
+}
 // Re-fit every canvas window when the monitor layout changes (plugged/unplugged/rearranged).
 function refitCanvasWindows() {
   try { if (overlay && !overlay.isDestroyed()) overlay.setBounds(fullDisplayBounds()); } catch { /* ignore */ }
@@ -1525,6 +1544,9 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof c.bindingHotkey === "string") bindKey = c.bindingHotkey;
       if (typeof c.webViewHotkey === "string") registerWebViewHotkey(c.webViewHotkey);
       if (typeof c.notepadHotkey === "string") notepadKey = c.notepadHotkey;
+      if (Number.isFinite(c.canvasOffsetX) || Number.isFinite(c.canvasOffsetY)) {
+        canvasOffset = { x: Number(c.canvasOffsetX) || 0, y: Number(c.canvasOffsetY) || 0 };
+      }
       if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
@@ -1788,6 +1810,17 @@ if (!app.requestSingleInstanceLock()) {
   // Binding chart is hotkey-only (never kept on). Both widgets now live in the one overlay
   // renderer, so mining is a shell-owned visibility flag (setMiningVisible) rather than a window.
   // (sendMiningVisible / pushWidgetStates / setMiningVisible are defined at module scope above.)
+  // Live canvas nudge. Applies immediately (refit) so the user sees the dotted outline move as
+  // they press, then persists via the sidecar — which is the only writer of config.json.
+  ipcMain.handle("app:canvas-offset", (_e, off) => {
+    if (off && Number.isFinite(off.x) && Number.isFinite(off.y)) {
+      const clamp = (n) => Math.max(-4000, Math.min(4000, Math.round(n)));
+      canvasOffset = { x: clamp(off.x), y: clamp(off.y) };
+      refitCanvasWindows();
+      postConfig({ canvasOffsetX: canvasOffset.x, canvasOffsetY: canvasOffset.y });
+    }
+    return canvasOffset;
+  });
   ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {
     if (on) { miningAutoSuppress = 0; setMiningVisible(true); }

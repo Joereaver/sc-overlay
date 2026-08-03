@@ -107,6 +107,8 @@ contextBridge.exposeInMainWorld("overlayApi", {
   onBindingChartVisible: (cb) => ipcRenderer.on("overlay:bindingchart-visible", (_e, s) => cb(s)),
   onBindingChartReload: (cb) => ipcRenderer.on("overlay:bindingchart-reload", () => cb()),
   widgetStates: () => ipcRenderer.invoke("app:widget-states"),
+  // Nudge the whole canvas (physical px). Pass {x,y} to set, or nothing to read the current value.
+  canvasOffset: (off) => ipcRenderer.invoke("app:canvas-offset", off),
   onWidgetStates: (cb) => ipcRenderer.on("overlay:widget-states", (_e, s) => cb(s)),
   arrange: (on) => ipcRenderer.send(on ? "overlay:begin-move" : "overlay:end-move"),
   // The Mining window's cog was clicked → summon this shell's global cog too.

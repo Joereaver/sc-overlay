@@ -696,6 +696,20 @@
     text-transform: uppercase; padding: 6px 16px; border-radius: 20px; border: 1px solid var(--cyan);
     background: rgba(var(--accent-rgb), 0.18); color: var(--cyan); }
   #arrangeDone:hover { background: var(--cyan); color: #04141b; }
+  /* Canvas nudge — sits under the arrange banner, anchored on the PRIMARY like it. */
+  #arrangeScrim .nudge { pointer-events: auto; position: absolute; top: calc(var(--prim-top, 0px) + 64px);
+    left: var(--prim-cx, 50%); transform: translateX(-50%); display: flex; flex-direction: column;
+    align-items: center; gap: 6px; padding: 10px 14px; border-radius: 10px;
+    background: var(--panel-solid, rgba(4,20,27,0.92)); border: 1px solid var(--border);
+    font-family: var(--sans); color: var(--cyan-text); }
+  #arrangeScrim .nudge .nl { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--cyan); }
+  #arrangeScrim .nudge .nh { font-size: 10px; color: var(--cyan-dim); }
+  #arrangeScrim .nrow { display: flex; align-items: center; gap: 6px; }
+  #arrangeScrim .nrow button { cursor: pointer; min-width: 30px; height: 26px; padding: 0 8px;
+    font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--cyan);
+    background: rgba(var(--accent-rgb), 0.10); border: 1px solid var(--cyan-dim); border-radius: 7px; }
+  #arrangeScrim .nrow button:hover { background: var(--cyan); color: #04141b; }
+  #arrangeScrim .nrow .nv { font-family: var(--mono); font-size: 11px; color: var(--gold); min-width: 62px; text-align: center; }
 
   /* Move/reposition mode: whole panel becomes a drag surface with a banner. */
   #moveBanner { display: none; position: absolute; inset: 0; z-index: 50; -webkit-app-region: drag; cursor: move;
@@ -1446,7 +1460,27 @@
   <div id="dragShield"></div>
 
   <!-- Full-screen arrange-mode indicator (shell only). Click-through except its banner. -->
-  <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div></div>
+  <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div>
+    <!-- Canvas nudge. Only meaningful on a mixed-DPI desktop, where the canvas comes out the right
+         SIZE but in the wrong PLACE, so the dotted outline above doesn't sit on the real monitor
+         edges. Lives INSIDE the arrange scrim so it appears exactly when the dotted outline it
+         aligns against does, and is anchored on --prim-* like the banner so it stays on the
+         primary. 🔑 Also mirrored in the Settings WINDOW, because if the canvas is far enough out
+         this control can itself be off-screen — and that window is a normal OS window the offset
+         cannot touch. -->
+    <div class="nudge" id="canvasNudge">
+      <span class="nl">Canvas not lining up with your monitor?</span>
+      <div class="nrow">
+        <button type="button" data-nx="-10" data-ny="0" title="Nudge left">←</button>
+        <button type="button" data-nx="10" data-ny="0" title="Nudge right">→</button>
+        <button type="button" data-nx="0" data-ny="-10" title="Nudge up">↑</button>
+        <button type="button" data-nx="0" data-ny="10" title="Nudge down">↓</button>
+        <span class="nv" id="nudgeVal">0, 0</span>
+        <button type="button" id="nudgeReset" title="Back to no offset">Reset</button>
+      </div>
+      <span class="nh">Hold Shift for 1px steps. Nudge until the dashed outline sits on your monitor's edges.</span>
+    </div>
+  </div>
 
   <!-- Every embedded widget lives here, generated from the WIDGETS registry (see buildWidgetEls).
        Each is a same-origin iframe so the embedded page's own audio/SSE/render code stays intact,
@@ -3993,6 +4027,32 @@
     ab.addEventListener("mouseleave", () => { abLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); });
     $("arrangeDone").addEventListener("click", () => window.overlayApi.endMove());
 
+    // ── canvas nudge ────────────────────────────────────────────────────────────────────────
+    // Moves the whole canvas WINDOW. Widget coordinates are untouched, so nobody's saved layout
+    // shifts, and the canvas keeps spanning every monitor — dragging a widget to another screen
+    // still works, which is the first thing a multi-monitor user does.
+    {
+      let off = { x: 0, y: 0 };
+      const show = () => { const v = $("nudgeVal"); if (v) v.textContent = off.x + ", " + off.y; };
+      const push = async () => {
+        try { off = (await window.overlayApi?.canvasOffset?.(off)) || off; } catch { /* no shell */ }
+        show();
+      };
+      // Read the stored value so the display is honest the moment arrange mode opens.
+      (async () => { try { off = (await window.overlayApi?.canvasOffset?.()) || off; } catch { /* none */ } show(); })();
+      $("canvasNudge")?.addEventListener("click", (e) => {
+        const b = e.target instanceof Element ? e.target.closest("button") : null; if (!b) return;
+        e.stopPropagation();
+        if (b.id === "nudgeReset") { off = { x: 0, y: 0 }; void push(); return; }
+        // Shift = 1px, for the last bit of alignment once the dashed edge is nearly right.
+        const step = e.shiftKey ? 1 : 10;
+        const nx = Number(b.dataset.nx || 0), ny = Number(b.dataset.ny || 0);
+        if (!nx && !ny) return;
+        off = { x: off.x + Math.sign(nx) * step, y: off.y + Math.sign(ny) * step };
+        void push();
+      });
+    }
+
     // Report interactive element rects to the shell (~10×/s) so pollCursor() can hit-test the
     // cursor against them — REPLACES forward:true mouse-forwarding (which stuttered the whole
     // cursor when elevated). Inactive elements are display:none → 0-size → filtered out.
@@ -4018,7 +4078,7 @@
       // twice for no gain.
       // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
     // it would swallow game clicks along a blank strip above the taskbar for the whole session.
-    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, #arrangeScrim .nudge, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
