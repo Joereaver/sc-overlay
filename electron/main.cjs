@@ -424,7 +424,51 @@ function primaryBounds() {
 // can be dragged across monitors; the page renders widgets at their PRIMARY-relative position +
 // the primary's offset within the canvas (overlay:canvas-info → px/py), so existing layouts stay
 // put on the primary and only a deliberate drag carries a widget onto another display.
+//
+// 🔴 THE UNION MUST BE TAKEN IN *PHYSICAL* PIXELS, NOT IN THE REPORTED DIP BOUNDS. On Windows each
+// display's `bounds` is expressed in ITS OWN DIP — divided by ITS OWN scaleFactor — so on a
+// mixed-DPI desktop the reported rectangles are in different units and their union is a number
+// that describes no coordinate system at all. Measured on Sub's rig at 200% (2026-08-03): a
+// 3440×1440 primary reports 1720×720 while a 1080×1920 secondary at 100% reports its true size,
+// giving a "desktop" of 2800×1924 against a real one of 4520×2644. setBounds was then handed that
+// nonsense and Windows put the window somewhere else entirely — asked x=-1080, got x=-540 — so the
+// canvas was laid out for a window that did not exist. The dotted outline landed BELOW the bottom
+// of his monitor, which is the "at 175% and up the whole overlay just disappears" report.
+//
+// 🔑 The error scales with the primary's scaleFactor, which is why 100–150% looked fine and 175%+
+// did not: at 100% every display's DIP *is* its physical size and the old union was accidentally
+// correct. Uniform-DPI desktops are unaffected by this change for the same reason — with one scale
+// factor everywhere, unioning-then-converting and converting-then-unioning are the same operation.
+//
+// So: rebuild each display's physical rect (`bounds * its own scaleFactor` — the inverse of the
+// per-display conversion Electron applied), union THOSE, and hand the result to
+// screen.screenToDipRect() to get back the single DIP rect setBounds actually wants.
+function physicalDesktopBounds() {
+  const all = screen.getAllDisplays();
+  const rects = all.map((d) => {
+    const sf = d.scaleFactor || 1;
+    return {
+      x: Math.round(d.bounds.x * sf), y: Math.round(d.bounds.y * sf),
+      right: Math.round((d.bounds.x + d.bounds.width) * sf),
+      bottom: Math.round((d.bounds.y + d.bounds.height) * sf),
+    };
+  });
+  const minX = Math.min(...rects.map((r) => r.x));
+  const minY = Math.min(...rects.map((r) => r.y));
+  const maxX = Math.max(...rects.map((r) => r.right));
+  const maxY = Math.max(...rects.map((r) => r.bottom));
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
 function virtualDesktopBounds() {
+  const phys = physicalDesktopBounds();
+  // screenToDipRect is Windows-only; everywhere else (and on any build without it) the reported
+  // bounds are already the one true coordinate system, so the old union is correct as written.
+  if (typeof screen.screenToDipRect === "function") {
+    try {
+      const r = screen.screenToDipRect(null, phys);
+      if (r && Number.isFinite(r.width) && r.width > 0 && r.height > 0) return r;
+    } catch { /* fall through to the plain union */ }
+  }
   const all = screen.getAllDisplays();
   const minX = Math.min(...all.map((d) => d.bounds.x));
   const minY = Math.min(...all.map((d) => d.bounds.y));
@@ -506,6 +550,40 @@ function refitCanvasWindows() {
       overlay.webContents.send("overlay:canvas-changed");
     }
   } catch { /* ignore */ }
+  reportGeometry();
+}
+// What the shell believes about the displays and where it actually put the window. Posted to the
+// sidecar so it can be read back over HTTP and pasted from Copy diagnostics.
+//
+// 🔑 This exists because mixed-DPI is invisible from a machine whose monitors match, and every
+// report of it ("it's offset", "the whole overlay vanished") is equally consistent with a window
+// in the wrong PLACE and a canvas laid out at the wrong SCALE. `asked` vs `got` is the pair that
+// separates them: if they differ, Windows moved or resized the window out from under us and no
+// amount of canvas arithmetic will explain it.
+// Logging it from here would go nowhere — this is a detached GUI process with no stdout.
+function reportGeometry() {
+  try {
+    const v = virtualDesktopBounds();
+    const asked = fullDisplayBounds();
+    const prim = screen.getPrimaryDisplay();
+    const shell = {
+      displays: screen.getAllDisplays().map((d) => ({
+        id: d.id, primary: d.id === prim.id, scaleFactor: d.scaleFactor, rotation: d.rotation,
+        bounds: d.bounds, workArea: d.workArea, size: d.size,
+      })),
+      physicalDesktop: physicalDesktopBounds(),
+      virtualDesktop: v,
+      primary: prim.bounds,
+      calibration: { x: canvasOffset.x, y: canvasOffset.y, scale: canvasScale, shift: canvasContentShift() },
+      window: {
+        asked,
+        got: overlay && !overlay.isDestroyed() ? overlay.getBounds() : null,
+        visible: overlay && !overlay.isDestroyed() ? overlay.isVisible() : null,
+        enabled: overlayEnabled,
+      },
+    };
+    void postJson("/api/overlay-geometry", { shell });
+  } catch { /* diagnostics must never be the thing that breaks a refit */ }
 }
 
 // The overlay is a FULL-SCREEN transparent canvas that hosts free-floating widgets (the Blueprint
@@ -797,13 +875,14 @@ function startMousePoll() {
 // rendered ON TOP of the widget and blocked it.
 
 // Patch the sidecar config over HTTP (the config lives in the sidecar process).
-async function postConfig(patch) {
+async function postJson(route, body) {
   try {
-    await fetch(`http://localhost:${PORT}/api/config`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+    await fetch(`http://localhost:${PORT}${route}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
   } catch { /* sidecar not up yet — non-fatal */ }
 }
+async function postConfig(patch) { return postJson("/api/config", patch); }
 
 // ── Mining Assistant widget (in-canvas) ───────────────────────────────────────
 // The Mining Assistant is now an iframe widget INSIDE the overlay canvas (see missions.html +
@@ -1561,6 +1640,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     overlayEnabled = readOverlayEnabled();
     if (overlayEnabled) createOverlay();
+    reportGeometry(); // baseline for diagnostics, before any monitor change moves things around
     createTray();
     setupUpdater();
     // First run → wizard; existing user with unfinished setup → one dismissible banner. Runs

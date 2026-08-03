@@ -2572,6 +2572,27 @@
     applyCanvasVars();
     applyAllFrames();
     drawScanBox();
+    reportGeometry();
+  }
+  // The canvas's half of the mixed-DPI diagnostics: what this document actually LAID OUT, which
+  // only it can say. The shell posts the display/window half (see reportGeometry in main.cjs); a
+  // fault can live in either, and the pair is what tells "the window is in the wrong place" apart
+  // from "the window is right and the canvas inside it is the wrong size".
+  function reportGeometry() {
+    if (!CANVAS) return;
+    const s = getComputedStyle(document.documentElement);
+    const v = (n) => s.getPropertyValue(n).trim();
+    const body = { canvas: {
+      canvasInfo,
+      zoom: document.documentElement.style.zoom || "(none)",
+      devicePixelRatio: window.devicePixelRatio,
+      inner: { w: window.innerWidth, h: window.innerHeight },
+      // The dotted primary outline is drawn from these, so they ARE the alignment target.
+      prim: { top: v("--prim-top"), left: v("--prim-left"), w: v("--prim-w"), h: v("--prim-h"), right: v("--prim-right") },
+    } };
+    fetch("/api/overlay-geometry", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).catch(() => { /* diagnostics must never break a re-layout */ });
   }
   // ══ Canvas widgets ═══════════════════════════════════════════════════════════════════════
   // Every embedded widget is the same object: an iframe on THIS canvas whose geometry this shell
@@ -3806,6 +3827,7 @@
       applyCanvasVars(); // pin screen-anchored chrome to the primary monitor (multi-monitor void-safe)
       drawScanBox();     // now that the real display geometry is known, not the window's guess
       window.overlayApi?.onCanvasChanged?.(() => { void refreshCanvasGeometry(); });
+      reportGeometry(); // baseline, so diagnostics has an answer before anything changes
       let saved = null;
       // (the panel's own layout is loaded by the registry loader, keyed "blueprint")
       const q = new URLSearchParams(location.search); // test overrides

@@ -498,6 +498,10 @@ async function verifySyncToken(): Promise<TokenVerdict> {
 // surfaced by /api/diagnostics, and a save that succeeds clears it.
 let lastSaveError: { at: string; error: string } | null = null;
 let lastSaveOk: string | null = null;
+// Live overlay geometry, merged from the shell (`shell` key) and the canvas page (`canvas` key).
+// See the /api/overlay-geometry routes; in memory only, because it describes a window that exists
+// right now and a stale copy would be worse than none.
+let overlayGeometry: Record<string, unknown> | null = null;
 const saveConfig = async (): Promise<void> => {
   try {
     mkdirSync(userDir, { recursive: true });
@@ -2107,7 +2111,32 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       },
       display: { hwAccel: config.hwAccel === true, amdCompat: config.amdCompat === true, theme: config.theme || "mobiglas" },
       twitch: { chatChannel: config.twitchChannel || "(none)", signedInAs: config.twitchUserLogin || "(not signed in)" },
+      // Mixed-DPI is the one class of bug that is INVISIBLE from a machine whose monitors all
+      // match, and the reports that reach us ("it's offset", "it vanished") can't distinguish a
+      // window in the wrong place from a canvas laid out at the wrong scale. These are the numbers
+      // that tell them apart, so they belong in the paste-able report rather than in a log file.
+      geometry: overlayGeometry ?? "(the overlay has not reported yet — is it switched off?)",
     }));
+    return;
+  }
+
+  // Where the overlay window ACTUALLY is, and what the canvas made of it. Reported by the shell
+  // (only it can see `screen` and the window's real bounds) and by the canvas page (only it knows
+  // what it rendered), because a mixed-DPI fault can live in either half.
+  // 🔑 In memory only, and last-write-wins: this is a snapshot of a live window, so persisting it
+  // would just serve a stale answer after a monitor change.
+  if (url === "/api/overlay-geometry" && req.method === "POST") {
+    const body = await readBody(req);
+    if (body && typeof body === "object") {
+      overlayGeometry = { ...(overlayGeometry ?? {}), ...body, at: new Date().toISOString() };
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (url === "/api/overlay-geometry" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(overlayGeometry ?? {}));
     return;
   }
 
