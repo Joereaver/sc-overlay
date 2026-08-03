@@ -38,7 +38,7 @@ if (!APP_VERSION) {
 // Periodically share the current session's scrubbed log (dedup by content hash). The
 // last tick before the app closes captures the fullest session; opt-in + no-op when off.
 const LOG_SHARE_INTERVAL_MS = 20 * 60 * 1000;
-setInterval(() => void maybeShareLog(config, APP_VERSION), LOG_SHARE_INTERVAL_MS);
+setInterval(() => void maybeShareLog(config, APP_VERSION, sharedLogStatePath), LOG_SHARE_INTERVAL_MS);
 
 // "What's new" per version (overlay/changelog.json), cached after first read. Each entry is
 // { date, notes } (date = UTC release time); a bare string[] is accepted for backward-compat.
@@ -88,6 +88,10 @@ const seedConfigPath = join(overlayDir, "config.json");
 // Writable copy of the datasets: bundled pools are seeded in, and any pools the
 // tracker fetches for a not-yet-bundled patch cache here (Program Files is read-only).
 const dataDir = join(userDir, "data");
+// Which rotated sessions (logbackups/) have already been shared. Remembered by FILENAME, and
+// permanently — a backup is immutable, so "sent", "wrong patch" and "no mission signal" are all
+// final answers. Without this every app launch would re-offer the whole folder.
+const sharedLogStatePath = join(userDir, "shared-logs.json");
 
 interface Config {
   urls: string[];
@@ -1782,7 +1786,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // A changed token → re-resolve subscriber entitlement now (don't wait for the 20-min tick).
     void pollEntitlement();
     // If log-sharing was just turned on, upload the current session now.
-    void maybeShareLog(config, APP_VERSION);
+    void maybeShareLog(config, APP_VERSION, sharedLogStatePath);
     // Push prefs (e.g. the time-format toggle) to any open overlay immediately.
     broadcastMissions();
     res.writeHead(200, { "Content-Type": "application/json" });
