@@ -1281,6 +1281,14 @@ const DRAG = `(async () => {
   ok("the reset is flush right in the row",
      Math.abs(mRow.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) < 20,
      Math.round(mRow.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) + "px from the edge");
+  // The column is HEADED, because a bare circular arrow reads as "refresh" and refreshing a widget
+  // is a plausible-sounding action that does not exist. The header only works if it sits over the
+  // buttons it names, so assert the alignment rather than just the text.
+  const hdr = [...document.querySelectorAll("#hub .hub-sec.cols span")].pop();
+  ok("the reset column is headed", hdr && hdr.textContent.trim() === "Reset", hdr && hdr.textContent);
+  ok("...and the header sits over the reset buttons", hdr
+     && Math.abs(hdr.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) < 12,
+     hdr && Math.round(hdr.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) + "px off");
   const wasChecked = mChk.checked;
   mining.s.x = -4000; mining.s.y = 9000; applyFrame(mining);
   mBtn.click();
