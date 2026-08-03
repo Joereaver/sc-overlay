@@ -480,7 +480,40 @@ function createOverlay() {
   overlay.setBounds(bounds);
   // Clear any cached copy + cache-bust the URL so UI changes always show up.
   const hudUrl = `${HUD_URL}?v=${Date.now()}${AMD_COMPAT ? "&lite=1" : ""}`;
-  overlay.webContents.session.clearCache().finally(() => overlay.loadURL(hudUrl));
+  // 🔑 THE CANVAS MUST RETRY ITS OWN LOAD. This page is SERVED BY the sidecar, so any moment the
+  // server isn't answering yet — a slow first start, a respawn, a machine under load — the load
+  // fails and the window sits there transparent and EMPTY, forever. There is no error and nothing
+  // to click: the user simply has no widgets. `waitForServer()` narrows the window but cannot
+  // close it (it proves the server answered ONCE, not that this specific request will land), and
+  // createOverlay also runs when waitForServer TIMED OUT, which is precisely when the load fails.
+  //
+  // The only reason this was survivable is that the overlay hotkey happens to DESTROY and RECREATE
+  // the window, so mashing F3 eventually got a load in — which is exactly how Sub had been
+  // working around it, and is not something a user could be expected to discover (2026-08-03).
+  //
+  // The Web Page widget has had a did-fail-load handler all along; the canvas, which matters far
+  // more, had none and no .catch() on loadURL either.
+  let hudTries = 0;
+  const loadHud = () => {
+    overlay?.loadURL(hudUrl).catch(() => scheduleHudRetry("loadURL rejected"));
+  };
+  const scheduleHudRetry = (why) => {
+    if (!overlay || overlay.isDestroyed() || overlayLoaded) return;
+    if (++hudTries > 20) {
+      console.error(`[electron] canvas failed to load after ${hudTries} tries (${why}) — giving up`);
+      return;
+    }
+    const wait = Math.min(3000, 250 * hudTries); // ramp to 3s; the sidecar's own respawn is slower
+    console.error(`[electron] canvas load failed (${why}) — retry ${hudTries} in ${wait}ms`);
+    setTimeout(loadHud, wait);
+  };
+  overlay.webContents.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
+    // -3 is ERR_ABORTED, which a superseding load fires on the one it replaced — retrying that
+    // would fight the load that is already on its way.
+    if (!isMainFrame || code === -3) return;
+    scheduleHudRetry(`${desc} (${code})`);
+  });
+  overlay.webContents.session.clearCache().finally(loadHud);
   // Once the page is up, tell the renderer the mining widget's initial state: shown if the user
   // left it open last session, else armed-hidden if auto-show is on (so it can self-pop).
   overlay.webContents.on("did-finish-load", () => {
