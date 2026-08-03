@@ -1007,6 +1007,22 @@
   #whatsnew ul { list-style: none; margin: 7px 0 0; padding: 0; }
   #whatsnew li { display: flex; gap: 8px; padding: 4px 0; font-size: 12px; line-height: 1.4; color: var(--cyan-text); }
   #whatsnew li::before { content: "◆"; color: var(--cyan); font-size: 7px; flex: none; transform: translateY(4px); }
+  /* Grouped notes: a NEW / IMPROVED / FIXED heading, then label-on-its-own-line entries. The
+     label is what people scan, so every one starts at the same x — hence the note body is its
+     own column beside the ◆ rather than inline text that wraps under the marker.
+     `min-width: 0` is load-bearing: without it a long unbroken word in a description would
+     refuse to shrink and push the card wider than its own max-width. */
+  #whatsnew .wn-kind { display: flex; align-items: center; gap: 7px; margin: 11px 0 1px;
+    font-family: var(--sans); font-size: 9.5px; font-weight: 700; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--gold); }
+  #whatsnew .wn-kind::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  #whatsnew ul + .wn-kind { margin-top: 13px; }
+  #whatsnew .wn-note { flex: 1; min-width: 0; }
+  #whatsnew .wn-label { font-weight: 700; color: var(--cyan-bright); }
+  #whatsnew .wn-desc { color: var(--cyan-text); opacity: 0.82; }
+  /* A legacy note (0.1.33 and older) has no label — its description carries the whole line, so it
+     must not read as the dimmer half of a pair that isn't there. */
+  #whatsnew .wn-note.nolabel .wn-desc { opacity: 1; }
   #whatsnew .wn-foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); flex: none; }
   #whatsnew .wn-dismiss { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--cyan-dim); cursor: pointer; user-select: none; }
   #whatsnew .wn-dismiss input { width: 15px; height: 15px; accent-color: var(--cyan); }
@@ -3684,7 +3700,11 @@
         for (const w of WIDGETS) syncArrange(w);
       }
       if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
-      if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><ul><li>Newest note one</li><li>Newest note two</li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li>Older note</li></ul></div>'; $("whatsnew").classList.add("show"); } // headless-test the patch-notes modal
+      // headless-test the patch-notes modal. Markup is written out rather than built through
+      // wnListHtml because that lives in a later block and isn't on `window` yet at this point.
+      // It mirrors the builder's shape: a kind heading, then label-over-description notes, plus
+      // one legacy unlabelled note so both paths are on screen at once.
+      if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><div class="wn-kind">New</div><ul><li><div class="wn-note"><div class="wn-label">Newest note one</div><div class="wn-desc">What the first change actually does.</div></div></li></ul><div class="wn-kind">Fixed</div><ul><li><div class="wn-note"><div class="wn-label">Newest note two</div><div class="wn-desc">What the second change actually does.</div></div></li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li><div class="wn-note nolabel"><div class="wn-desc">Older note</div></div></li></ul></div>'; $("whatsnew").classList.add("show"); }
       if (q.has("cog")) $("globalCog").classList.add("show"); // headless-test the summoned cog
       if (q.has("bppop")) maybeBpPop({ name: "MH1 Multi-Tool", image: null, at: new Date().toISOString() }); // headless-test the blueprint-received pop
       if (q.has("rates")) { $("panel").classList.remove("empty"); document.body.classList.remove("empty"); const el = $("pool"); if (el) el.innerHTML = recentActivityHtml({ earnings: { repLastHr: 1240, repPace: 1480, aUECLastHr: null, aUECPace: null, missions: 6 }, recentMissions: [{ title: "Blackbox Retrieval Very Dangerous", aUEC: null, at: new Date().toISOString() }], recentBlueprints: [{ name: "MH1 Multi-Tool", at: new Date().toISOString() }] }); } // headless-test the idle per-hour rates
@@ -3832,6 +3852,55 @@
 
   // Electron overlay: report hover so the shell makes the HUD clickable only while
   // the pointer is over it (clicks pass to the game everywhere else). No-op in OBS.
+  // ── "What's new" card: the markup builder ───────────────────────────────────────────────────
+  // Page scope, OUTSIDE the overlayApi guard below, because building markup from JSON needs no
+  // shell — only showWhatsNew does (it reads the app version through the preload). Keeping it in
+  // there made it unreachable to anything without an Electron shell, the widget suite included,
+  // which is why that suite used to carry its own copy of this markup and could pass against a
+  // shape nobody rendered.
+  const WN_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const wnP2 = (n) => String(n).padStart(2, "0");
+  const wnFmtUTC = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return WN_MON[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear() + " · " + wnP2(d.getUTCHours()) + ":" + wnP2(d.getUTCMinutes()) + " UTC";
+  };
+  // Group order is fixed and deliberate: what you gained, then what got better, then what stopped
+  // being broken. Fixes last because they are the least interesting thing in a release to everyone
+  // except the person who hit the bug.
+  const WN_KINDS = [["new", "New"], ["improved", "Improved"], ["fixed", "Fixed"]];
+  const wnNoteHtml = (n) => {
+    const text = typeof n === "string" ? n : (n && n.text) || "";
+    const label = n && n.label ? '<div class="wn-label">' + escapeHtml(n.label) + "</div>" : "";
+    return '<li><div class="wn-note' + (label ? "" : " nolabel") + '">' + label +
+           '<div class="wn-desc">' + escapeHtml(text) + "</div></div></li>";
+  };
+  // A version renders as New / Improved / Fixed sections. Notes with NO kind — everything written
+  // before 0.1.34, which the sidecar normalises to text-only — fall through to a single unheaded
+  // list at the top, so an old version keeps the shape it shipped with rather than being filed
+  // under a guess. An empty section is omitted entirely, never left as a bare heading: 0.1.36 is
+  // a single fix and would otherwise show two empty ones.
+  const wnBodyHtml = (notes) => {
+    const unkinded = notes.filter((n) => !n || !n.kind);
+    let html = unkinded.length ? "<ul>" + unkinded.map(wnNoteHtml).join("") + "</ul>" : "";
+    for (const [kind, heading] of WN_KINDS) {
+      const group = notes.filter((n) => n && n.kind === kind);
+      if (group.length) html += '<div class="wn-kind">' + heading + "</div><ul>" + group.map(wnNoteHtml).join("") + "</ul>";
+    }
+    return html;
+  };
+  // Newest version is expanded; older ones (2..5) are collapsed <details> — click to expand.
+  const wnListHtml = (entries) => entries.map((e, i) => {
+    const body = wnBodyHtml(Array.isArray(e.notes) ? e.notes : []);
+    const dt = wnFmtUTC(e.date);
+    const head = "v" + escapeHtml(e.version) + (dt ? ' <span class="wn-date">' + dt + "</span>" : "");
+    return i === 0
+      ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + body + "</div>"
+      : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + body + "</details>";
+  }).join("");
+  window.__wnListHtml = wnListHtml; // the widget suite renders through this, never its own copy
+
   if (window.overlayApi) {
     const panel = $("panel");
     panel.classList.add("electron"); // reveals the grab handle (OBS mode has no window to move)
@@ -3917,14 +3986,6 @@
     // from the hub's "Patch notes" button (force=true ignores the per-version seen flag).
     // Hover-interactive + flagged as a modal so it stays clickable to close even when locked.
     let wnVersion = null;
-    const WN_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const wnP2 = (n) => String(n).padStart(2, "0");
-    const wnFmtUTC = (iso) => {
-      if (!iso) return "";
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return "";
-      return WN_MON[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear() + " · " + wnP2(d.getUTCHours()) + ":" + wnP2(d.getUTCMinutes()) + " UTC";
-    };
     const wnClose = async () => {
       if (wnVersion && $("wnDontShow").checked) {
         try { await fetch("/api/changelog-seen?v=" + encodeURIComponent(wnVersion), { method: "POST" }); } catch { /* best-effort */ }
@@ -3951,15 +4012,7 @@
         // Header chip = newest version; body groups the last few versions so a returning user
         // sees everything they missed across our fast patches, not just the latest.
         $("wnVer").textContent = "v" + (entries[0].version || version);
-        // Newest version is expanded; older ones (2..5) are collapsed <details> — click to expand.
-        $("wnList").innerHTML = entries.map((e, i) => {
-          const bullets = "<ul>" + e.notes.map((n) => "<li>" + escapeHtml(n) + "</li>").join("") + "</ul>";
-          const dt = wnFmtUTC(e.date);
-          const head = "v" + escapeHtml(e.version) + (dt ? ' <span class="wn-date">' + dt + "</span>" : "");
-          return i === 0
-            ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + bullets + "</div>"
-            : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + bullets + "</details>";
-        }).join("");
+        $("wnList").innerHTML = wnListHtml(entries);
         card.classList.add("show");
         window.overlayApi.setModal?.(true);
       } catch { /* changelog is best-effort */ }

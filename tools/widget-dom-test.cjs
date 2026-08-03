@@ -679,18 +679,16 @@ const MININGSAY = `(async () => {
 // the failing condition is simulated directly: a primary shorter than the canvas.
 const PATCHNOTES = `(async () => {
   ${PRELUDE}
-  // Render the list exactly the way showWhatsNew does. Its own path needs overlayApi.getVersion,
-  // which this suite has no shell for — but the CONTENT is what makes the card tall, so it has to
-  // be the real changelog and not a two-line fixture.
+  // Render through the PAGE'S OWN builder. showWhatsNew itself needs overlayApi.getVersion, which
+  // this suite has no shell for, but everything below that is __wnListHtml — so the card is sized
+  // against the markup that actually ships. This suite used to keep its own copy of that markup,
+  // which meant it could go on passing against a shape nobody renders.
+  // The CONTENT has to be the real changelog too: it is what makes the card tall.
   const data = await (await fetch("/api/changelog?v=0.1.35")).json();
   const entries = (Array.isArray(data.entries) ? data.entries : []).filter(e => Array.isArray(e.notes) && e.notes.length);
   ok("the sidecar serves real patch notes to size against", entries.length > 0, entries.length + " versions");
-  document.getElementById("wnList").innerHTML = entries.map((e, i) => {
-    const bullets = "<ul>" + e.notes.map(n => "<li>" + escapeHtml(n) + "</li>").join("") + "</ul>";
-    const head = "v" + escapeHtml(e.version) + ' <span class="wn-date">Jan 1, 2026 · 00:00 UTC</span>';
-    return i === 0 ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + bullets + "</div>"
-                   : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + bullets + "</details>";
-  }).join("");
+  ok("the card is built by the page, not by this test", typeof window.__wnListHtml === "function");
+  document.getElementById("wnList").innerHTML = window.__wnListHtml(entries);
   document.getElementById("whatsnew").classList.add("show");
 
   const card = document.querySelector("#whatsnew .wn-card");
@@ -732,6 +730,69 @@ const PATCHNOTES = `(async () => {
        " - " + list.clientHeight + " of " + list.scrollHeight + "px");
   }
   document.getElementById("whatsnew").classList.remove("show");
+  return out;
+})()`;
+
+// ── Suite: patch notes are grouped and labelled ───────────────────────────────
+// Notes used to be bare paragraphs, so finding what changed meant reading all of them. Each note
+// is now { kind, label, text } and the card groups them New / Improved / Fixed.
+// Two things are worth pinning. First the ORDER, because it is an editorial decision and nothing
+// else enforces it. Second the LEGACY path: 0.1.33 and older are plain strings with no kind, and
+// they must still render — as one unheaded list, not filed under a guessed section. The sidecar
+// serves only the newest 5 versions, so the legacy case is checked against the builder directly
+// rather than waiting for a release to age out and break it in the field.
+const PATCHGROUPS = `(async () => {
+  ${PRELUDE}
+  const list = document.getElementById("wnList");
+  const data = await (await fetch("/api/changelog?v=0.1.38")).json();
+  const entries = (Array.isArray(data.entries) ? data.entries : []).filter(e => Array.isArray(e.notes) && e.notes.length);
+  const newest = entries[0];
+  ok("the newest version's notes carry a kind and a label",
+     newest.notes.every(n => n && n.kind && n.label), newest.version);
+  ok("...and every kind is one we render",
+     newest.notes.every(n => ["new", "improved", "fixed"].includes(n.kind)));
+
+  list.innerHTML = window.__wnListHtml(entries);
+  // 🔑 The card must be SHOWN before anything is measured. #whatsnew is display:none until then,
+  // so every getBoundingClientRect() reads 0 and the two geometry assertions below pass without
+  // testing anything — which is exactly how the first version of this suite reported a label x of
+  // 0 and called it agreement.
+  document.getElementById("whatsnew").classList.add("show");
+  await sleep(40);
+  const first = list.querySelector(".wn-group");
+  ok("the card is laid out, so the measurements below mean something",
+     first.getBoundingClientRect().width > 100, Math.round(first.getBoundingClientRect().width) + "px wide");
+  const headings = [...first.querySelectorAll(".wn-kind")].map(el => el.textContent);
+  const expected = ["New", "Improved", "Fixed"].filter(h =>
+    newest.notes.some(n => n.kind === h.toLowerCase()));
+  ok("sections read New, then Improved, then Fixed", headings.join(",") === expected.join(","),
+     headings.join(" / "));
+  // An empty section must be omitted, never left as a bare heading — 0.1.36 is a single fix.
+  ok("no section is left empty",
+     [...first.querySelectorAll(".wn-kind")].every(h => {
+       const ul = h.nextElementSibling;
+       return ul && ul.tagName === "UL" && ul.children.length > 0;
+     }));
+  const label = first.querySelector(".wn-label");
+  const desc = first.querySelector(".wn-desc");
+  ok("a note shows its label above its description", !!label && !!desc, label && label.textContent);
+  ok("...on its own line", !!label && label.getBoundingClientRect().bottom <= desc.getBoundingClientRect().top + 1);
+  ok("...and the label is not repeated in the description",
+     !desc.textContent.startsWith(label.textContent));
+  // Every label must be reachable in one glance: they are the scan target, so they share a left
+  // edge. Compare within a section — a heading indents nothing, but a wrapped description must
+  // not push the next label right.
+  const lefts = [...first.querySelectorAll(".wn-label")].map(el => Math.round(el.getBoundingClientRect().left));
+  ok("every label starts at the same x", new Set(lefts).size === 1, [...new Set(lefts)].join(","));
+
+  // LEGACY: a plain string, exactly as 0.1.33 and older are stored.
+  list.innerHTML = window.__wnListHtml([{ version: "0.1.33", date: null, notes: ["An old note with no label."] }]);
+  ok("a legacy note still renders", list.textContent.includes("An old note with no label."));
+  ok("...with no invented section heading", list.querySelectorAll(".wn-kind").length === 0);
+  ok("...and is not dimmed like a description under a label",
+     list.querySelector(".wn-note").classList.contains("nolabel"));
+  document.getElementById("whatsnew").classList.remove("show");
+  list.innerHTML = "";
   return out;
 })()`;
 
@@ -1686,6 +1747,7 @@ app.whenReady().then(async () => {
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
+    fails += await run("patch notes are grouped and labelled", PATCHGROUPS, null);
     fails += await run("setup nudge", SETUPNUDGE, null);
     fails += await run("background service down", SVCDOWN, null);
     fails += await run("chrome over the native view", VIEWMASK, null);

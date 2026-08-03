@@ -42,8 +42,26 @@ setInterval(() => void maybeShareLog(config, APP_VERSION), LOG_SHARE_INTERVAL_MS
 
 // "What's new" per version (overlay/changelog.json), cached after first read. Each entry is
 // { date, notes } (date = UTC release time); a bare string[] is accepted for backward-compat.
-type ChangelogEntry = string[] | { date?: string | null; notes: string[] };
-const clNotes = (e: ChangelogEntry | undefined): string[] => (Array.isArray(e) ? e : e?.notes ?? []);
+//
+// A NOTE is { kind, label, text }: `label` is the short scannable title, `text` the description,
+// and `kind` (new | improved | fixed) drives the card's grouping. A PLAIN STRING is a legacy note
+// — 0.1.33 and older were written before labels existed — and normalizes to text with no label and
+// no kind, which the card renders as a flat ungrouped list exactly as it always did. Normalising
+// HERE rather than in the card means one shape reaches every consumer, and an unknown kind from a
+// hand-edited file degrades to ungrouped instead of inventing a section.
+type ChangelogNote = string | { kind?: string | null; label?: string | null; text: string };
+type ChangelogEntry = ChangelogNote[] | { date?: string | null; notes: ChangelogNote[] };
+type NormalisedNote = { kind: string | null; label: string | null; text: string };
+const CL_KINDS = new Set(["new", "improved", "fixed"]);
+const clNote = (n: ChangelogNote): NormalisedNote | null => {
+  if (typeof n === "string") return n.trim() ? { kind: null, label: null, text: n } : null;
+  if (!n || typeof n.text !== "string" || !n.text.trim()) return null;
+  const kind = typeof n.kind === "string" && CL_KINDS.has(n.kind) ? n.kind : null;
+  const label = typeof n.label === "string" && n.label.trim() ? n.label.trim() : null;
+  return { kind, label, text: n.text };
+};
+const clNotes = (e: ChangelogEntry | undefined): NormalisedNote[] =>
+  (Array.isArray(e) ? e : e?.notes ?? []).map(clNote).filter((n): n is NormalisedNote => n !== null);
 const clDate = (e: ChangelogEntry | undefined): string | null => (Array.isArray(e) ? null : e?.date ?? null);
 let changelogCache: Record<string, ChangelogEntry> | null = null;
 function loadChangelog(): Record<string, ChangelogEntry> {
