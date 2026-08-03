@@ -2092,7 +2092,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // nowhere, while this lands in sidecar.log — the file a user can read and send. Every read
     // prints its numbers, so the colour band can be tuned from real scans instead of the single
     // frame it was built from.
-    const g = body?.glyph as { fraction?: number; total?: number; mean?: number[]; hitMean?: number[] } | undefined;
+    const g = body?.glyph as { fraction?: number; total?: number; mean?: number[]; hitMean?: number[]; ref?: { mean: number[]; lum: number; lumFloor: number } } | undefined;
     if (Number.isFinite(signature)) {
       // The tracker owns the rules, so it also says what it did with the read — one place to
       // change, and the log can never drift out of step with the behaviour it describes.
@@ -2100,7 +2100,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       console.log(
         `[mining] signature ${signature} — glyph ${body?.confirmed === true ? "FOUND" : "not found"}` +
         (g ? ` (${Math.round((g.fraction ?? 0) * 100)}% of ${g.total}px, box mean rgb ${g.mean}` +
-             `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""})` : "") +
+             `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""}` +
+             `${g.ref ? `, ref ink rgb ${g.ref.mean} lum ${g.ref.lum} floor ${g.ref.lumFloor}` : ""})` : "") +
+        // Cadence rides along so "it feels slower in this ship" is answerable from the log. It
+        // used to be console.log'd in capture.cjs, i.e. into the void — that process has no stdout.
+        ` — polling ${body?.pollMs ?? "?"}ms${body?.scanHud === true ? "" : " (no HUD words seen)"}` +
         ` — ${outcome.why}`,
       );
       // Every read, ANNOUNCED OR NOT, so the "scan read area" outline can print what the OCR saw.

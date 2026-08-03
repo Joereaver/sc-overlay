@@ -516,7 +516,20 @@ function startFabCapture({ port, configDir, onStatus }) {
       // else — and the fabricator ABOVE ALL — stays at the slow rate, because rushing a kiosk
       // risks grabbing a render mid-fade. A kiosk frame cancels fast mode outright.
       if (read.kind === "fabricator") fastUntil = 0;
-      else if (mining && read.scanHud) fastUntil = Date.now() + FAST_WINDOW_MS;
+      // 🔑 A PARSED SIGNATURE IS THE PROOF, not the HUD's wording. Fast mode used to arm only on
+      // read.scanHud — an OCR text match for "scanning / ready to scan / strong / moderate /
+      // weak". That is the mining scanner's vocabulary, and the line it comes from is USER
+      // CONFIGURABLE: a player can restyle that HUD element or switch it off entirely, and head
+      // position can carry it out of frame (Sub, in a Vulture, 2026-08-03 — the loop sat at 3s
+      // while he was actively scanning). Same mistake as the absolute glyph colour: keying on
+      // something that varies per player when a universal signal is right there.
+      //
+      // The signature number and its pin are the universal part — same place, same shape, in
+      // every ship; only the colour changes. So a frame that yielded a signature IS a frame where
+      // the player is scanning, whatever the HUD says or doesn't. scanHud is KEPT as an
+      // additional trigger because it fires on "ready to scan", i.e. slightly BEFORE the first
+      // number exists — useful when it happens to be there, never required.
+      else if (mining && (read.scanHud || typeof read.signature === "number")) fastUntil = Date.now() + FAST_WINDOW_MS;
       // Self-tuning, because this runs over a RUNNING GAME and a fixed rate is a guess about
       // someone else's PC. A tick costs a screen grab plus an OCR (~230ms on Sub's machine with
       // the warm worker, but a slower box could be several times that). Never let the loop occupy
@@ -553,6 +566,13 @@ function startFabCapture({ port, configDir, onStatus }) {
               // knows the captured frame's dimensions — the sidecar turns it into fractions.
               raw: read.raw,
               text: read.text,
+              // The poll rate RIDES ALONG rather than getting its own channel or its own log
+              // line. capture.cjs runs in the detached GUI process, whose stdout goes nowhere —
+              // the "[fab-capture] poll 900ms" line below has never reached a file anyone can
+              // read, which is why "it feels slower in this ship" could not be checked. Now every
+              // scan says what cadence it was polling at, in sidecar.log, next to its verdict.
+              pollMs: rate,
+              scanHud: read.scanHud === true,
               frame: { w: shot.getSize().width, h: shot.getSize().height },
             }),
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
