@@ -1366,6 +1366,24 @@ const ANCHOR = `(async () => {
   detachFromGroup(WBY.blueprint);
   await sleep(30);
 
+  // 1b. The GROUP HERE drop highlight, both kinds of widget. highlightDrop() sets .droptarget on
+  //     whatever you are dragging onto, and the rule was ".widget.droptarget" only — so dragging
+  //     onto the tracker (which is #panel, not .widget) showed nothing at all, on the one widget
+  //     people aim at most. Asserted via the ::after content because that IS the affordance.
+  const groupHere = (w) => {
+    const bar = el(w).querySelector(".whead");
+    return getComputedStyle(bar, "::after").content.replace(/"/g, "");
+  };
+  highlightDrop(WBY.notepad);
+  await sleep(30);
+  ok("an iframe widget shows GROUP HERE", groupHere(WBY.notepad) === "GROUP HERE", groupHere(WBY.notepad));
+  highlightDrop(WBY.blueprint);
+  await sleep(30);
+  ok("...and so does the tracker panel", groupHere(WBY.blueprint) === "GROUP HERE", groupHere(WBY.blueprint));
+  highlightDrop(null);
+  await sleep(30);
+  ok("clearing the target removes it", groupHere(WBY.blueprint) !== "GROUP HERE", groupHere(WBY.blueprint));
+
   // 2. The cog lives in the BOTTOM bar, so its menu has to open down there — it was anchored
   //    inside .head (position:relative) and opened at the TOP of the panel instead.
   const menu = document.getElementById("cogMenu");

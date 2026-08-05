@@ -522,8 +522,13 @@
   .gtab.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.22); border-color: var(--cyan); }
   .gtab.gdetach { flex: none; letter-spacing: 0; font-size: 11px; padding: 4px 7px; }
 
-  /* Drop target: the BAR you're dragging onto lights up — the thing you're actually aiming at. */
-  .widget.droptarget .whead::after { content: "GROUP HERE"; position: absolute; inset: 0;
+  /* Drop target: the BAR you're dragging onto lights up — the thing you're actually aiming at.
+     🔑 `#panel.droptarget` twin REQUIRED. The Mission & BP Tracker is a LOCAL widget — it is
+     `#panel`, not `.widget` — so a `.widget.X` rule without its `#panel.X` twin silently skips the
+     one widget people aim at most. highlightDrop() was adding the class to it all along and
+     nothing matched, so dragging onto the tracker showed no GROUP HERE at all (Sub, 2026-08-03).
+     Same family as the `.grouped` / `.moving` / `.touched` twins above. */
+  .widget.droptarget .whead::after, #panel.droptarget .whead::after { content: "GROUP HERE"; position: absolute; inset: 0;
     z-index: 55; display: flex; align-items: center; justify-content: center;
     font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.18em;
     color: #04141b; background: rgba(var(--accent-rgb), 0.9); border-radius: 0 0 9px 9px; }
