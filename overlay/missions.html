@@ -2824,6 +2824,44 @@
     if (w.local) { $("cogMenu")?.classList.add("open"); $("cog")?.classList.add("open"); return; }
     try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
   };
+  // The pages expose only __widgetSettings (open) — no close — but they DO expose their panel's
+  // root element, and both implementations open it by adding `open`. So the shell can close one
+  // without a new bridge method. Asserted by the widget suite, since it rests on that convention.
+  const wCloseSettings = (w) => {
+    if (w.local) { $("cogMenu")?.classList.remove("open"); $("cog")?.classList.remove("open"); return; }
+    try { wSettingsRoot(w)?.classList.remove("open"); } catch { /* iframe gone */ }
+  };
+
+  // ── a widget's settings close themselves after 15s of not being used ────────────────────────
+  // Sub, 2026-08-03: "if the person doesn't click in there within 15 seconds, it just goes away."
+  // Not merely tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box sitting
+  // over the game, and it masks the Web Page widget's native view for as long as it is up. A
+  // forgotten one costs you clicks and hides a widget.
+  // 🔑 "Used" means a click ANYWHERE on the widget, which is why the re-arm lives in touchWidget:
+  // every embedded page already calls summonCog on pointerdown, so a click inside an iframe-owned
+  // settings panel counts too. Without that, adjusting Mining's cog panel would have it shut under
+  // you at 15s — the shell cannot see clicks inside an iframe any other way.
+  // 15s in real use; `?wcfgidle=<ms>` shortens it so the harness doesn't sit here for a quarter of
+  // a minute per assertion (same trick as ?coghide).
+  const WCFG_IDLE_MS = +(new URLSearchParams(location.search).get("wcfgidle")) || 15000;
+  let wcfgIdleT = null;
+  let wcfgOpenFor = null; // the widget whose settings are up, so only that one gets closed
+  function cancelWidgetSettingsIdle() {
+    clearTimeout(wcfgIdleT); wcfgIdleT = null; wcfgOpenFor = null;
+  }
+  function armWidgetSettingsIdle(w) {
+    clearTimeout(wcfgIdleT);
+    if (w) wcfgOpenFor = w;
+    if (!wcfgOpenFor) { wcfgIdleT = null; return; }
+    wcfgIdleT = setTimeout(() => {
+      const target = wcfgOpenFor;
+      cancelWidgetSettingsIdle();
+      if (!target) return;
+      wEl(target)?.classList.remove("cfgopen");
+      wCloseSettings(target);
+      syncViewMask();
+    }, WCFG_IDLE_MS);
+  }
   // 🔑 The ONE place a widget goes on or off screen, and therefore the one place that tells the
   // page about it. It used to be setWidgetVisible that fired onShow/onHide — but that isn't the
   // only path here: a widget backgrounded as a GROUP TAB goes through refreshGroupDisplay, which
@@ -3389,6 +3427,7 @@
     const t = e.target;
     if (t instanceof Element && t.closest(".wcfg, .wh-cog")) return;
     document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+    cancelWidgetSettingsIdle(); // closed by hand — nothing left for the timer to close
     syncViewMask();
   });
 
@@ -3423,6 +3462,11 @@
   // Cleared when the pointer goes down anywhere else, so it behaves like hover rather than a latch.
   let touchedWidget = null;
   function touchWidget(w) {
+    // A click anywhere on the widget whose settings are up means you are still using them, so the
+    // idle timer restarts. 🔑 BEFORE the early return: clicking the SAME widget twice is the common
+    // case and must keep the panel alive. Embedded pages route their pointerdown here via
+    // summonCog, which is what makes this cover clicks INSIDE an iframe's own settings panel.
+    if (w && w === wcfgOpenFor) armWidgetSettingsIdle();
     if (touchedWidget === w) return;
     if (touchedWidget) wEl(touchedWidget)?.classList.remove("touched");
     touchedWidget = w;
@@ -3792,12 +3836,14 @@
         if (el.classList.contains("has-settings")) {
           try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); } catch { /* iframe gone */ }
           syncViewMask();
+          armWidgetSettingsIdle(w);
           return;
         }
         el.classList.add("cfgopen");
         showTextScale(w);
         showAngle(w);
         syncViewMask();
+        armWidgetSettingsIdle(w);
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
       el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });

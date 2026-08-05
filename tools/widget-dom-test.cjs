@@ -1590,6 +1590,53 @@ const ANGLE = `(async () => {
   return out;
 })()`;
 
+// A widget's settings popover closes itself after 15s of not being used (Sub, 2026-08-03). Not just
+// tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box over the game, and it
+// masks the Web Page widget's native view for as long as it is up.
+// Driven with ?wcfgidle=250 so the suite doesn't wait a quarter-minute per assertion.
+const WCFGIDLE = `(async () => {
+  ${PRELUDE}
+  const masked = [];
+  window.overlayApi = Object.assign({}, window.overlayApi, { maskWebView: (on) => masked.push(!!on) });
+  const w = WBY.notepad;               // a plain widget: the shell owns its popover
+  setWidgetVisible(w, true);
+  await sleep(200);
+  const open = () => el(w).classList.contains("cfgopen");
+  const cog = () => el(w).querySelector(".wh-cog");
+
+  cog().click();
+  await sleep(30);
+  ok("the cog opens the settings popover", open());
+  ok("...and it masks the native view while up", masked.length > 0 && masked[masked.length - 1] === true, JSON.stringify(masked.slice(-1)));
+
+  await sleep(500);
+  ok("it closes itself once idle", !open());
+  ok("...and releases the view mask", masked[masked.length - 1] === false, JSON.stringify(masked.slice(-1)));
+
+  // Using it keeps it alive. A click on the WIDGET is what counts as use — that is the signal
+  // embedded pages forward via summonCog, so it also covers clicks inside an iframe's own panel.
+  cog().click();
+  await sleep(30);
+  ok("reopens", open());
+  for (let i = 0; i < 5; i++) { await sleep(120); el(w).dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); }
+  ok("still open after 600ms of being clicked", open());
+  await sleep(500);
+  ok("...and closes once the clicking stops", !open());
+
+  // Closing by hand must not leave a timer that fires later and stamps on something else.
+  cog().click();
+  await sleep(30);
+  document.body.click();
+  await sleep(30);
+  ok("an outside click closes it immediately", !open());
+  cog().click();
+  await sleep(30);
+  ok("and it can still be reopened afterwards", open());
+  await sleep(500);
+  ok("...with the timer working again", !open());
+  return out;
+})()`;
+
 // Canvas calibration for mixed-DPI desktops — the nudge (move) and the scale (size), both aimed at
 // the dotted primary outline in arrange mode.
 //
@@ -1903,6 +1950,7 @@ app.whenReady().then(async () => {
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
+    fails += await run("widget settings close when idle", WCFGIDLE, null, "wcfgidle=250");
     // ?arrange: the calibration panel lives INSIDE the arrange scrim, so a suite that doesn't open
     // arrange mode measures a display:none control — every size assertion then passes on 0 == 0.
     // The stub preload is needed as well: the whole arrange-chrome block is behind

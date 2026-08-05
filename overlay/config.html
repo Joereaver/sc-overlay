@@ -101,6 +101,13 @@
     padding: 10px 12px; font-family: var(--font-body); font-size: 14px; border-radius: var(--radius-sm);
     transition: border-color .15s; color-scheme: dark; accent-color: var(--amber); }
   input[type=number]:focus { outline: none; border-color: var(--amber); }
+  /* Canvas-calibration control groups: a row of nudge buttons plus its readout, sitting UNDER the
+     row's label rather than squeezed to the right of it — there are nine controls between the two
+     rows and they do not fit beside a label at any sensible window width. */
+  .calgrp { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .calgrp button { min-width: 34px; }
+  .calval { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
+    min-width: 62px; text-align: center; }
   input[readonly] { color: var(--muted); }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .row .ship { font-weight: 600; min-width: 150px; }
@@ -535,18 +542,66 @@
       <input type="hidden" id="moveHotkey" />
       <div class="hint" id="moveHotkeyHint"></div>
     </div>
+    <!-- Moved here from "Performance & fixes": this whole block exists to explain why the hotkeys
+         above don't reach the game, so it belongs beside them rather than in a card nobody with
+         that problem would think to open. -->
+    <div class="setrow">
+      <span class="hklabel" style="flex:1; color:var(--muted); font-size:13px;">Hotkeys work on the desktop but not in-game?</span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Do your hotkeys work on the desktop but not while Star Citizen is focused? The game runs as admin (anti-cheat), so another app's hotkeys only reach it while focused if that app is ALSO admin.</span></span>
+    </div>
+    <div class="hint" id="adminOk" style="display:none; color:#63d6a0">✓ Running as administrator — hotkeys work while the game is focused.</div>
+    <button type="button" id="adminBtn" class="amber" style="display:none" onclick="restartAsAdmin()">Restart as administrator</button>
+    <div class="hint" id="adminHint" style="display:none">Relaunches elevated (a Windows UAC prompt — click Yes). Only affects hotkeys while the game is focused. Tip: shortcut → Properties → Compatibility → Run as administrator to skip this each launch.</div>
+  </div>
+
+  <!-- "Performance & fixes" had grown into a drawer of seven unrelated things: the overlay master
+       switch, a performance meter, two GPU workarounds, an explanation of why hotkeys don't reach
+       the game, the canvas calibration and a layout reset. Split by the question the user is
+       actually asking, and the calibration gets its own heading with its controls UNDERNEATH
+       rather than crammed to the right of a label (Sub, 2026-08-03). The admin/hotkey block moved
+       into the Hotkeys card, where someone with that problem is already looking. -->
+
+  <!-- Canvas calibration. The same two controls arrange mode offers, mirrored here because this is
+       a normal OS window that the calibration cannot move: if the canvas is far enough out of place,
+       or scaled far enough down, the on-canvas copy can itself be off-screen. Hidden unless the
+       shell exposes the bridge (an older app, or a browser source). -->
+  <div class="card" id="canvasCalRow" style="display:none">
+    <div class="label">Canvas alignment &amp; scale</div>
+    <div class="hint" style="margin-top:0">
+      For monitors running at <strong>different Windows scaling levels</strong>. If the overlay lands
+      in the wrong place, or at the wrong size, adjust it here. Turn on arrange mode over the game —
+      the dashed outline shows where the overlay thinks your main monitor is — then size and move it
+      until that outline matches your real monitor edges. Leave it at 0, 0 &middot; 100% if it
+      already lines up.
+    </div>
+    <div class="setrow">
+      <span class="hklabel" style="flex:1">Position</span>
+      <div class="calgrp">
+        <button type="button" data-cal-nx="-10" title="Move left">←</button>
+        <button type="button" data-cal-nx="10" title="Move right">→</button>
+        <button type="button" data-cal-ny="-10" title="Move up">↑</button>
+        <button type="button" data-cal-ny="10" title="Move down">↓</button>
+        <span class="calval" id="canvasCalOff">0, 0</span>
+      </div>
+    </div>
+    <div class="setrow">
+      <span class="hklabel" style="flex:1">Size</span>
+      <div class="calgrp">
+        <button type="button" data-cal-nz="-5" title="Shrink">−</button>
+        <button type="button" data-cal-nz="5" title="Grow">+</button>
+        <span class="calval" id="canvasCalScale">100%</span>
+      </div>
+    </div>
+    <div class="setrow">
+      <button type="button" id="canvasCalReset" style="width:100%">Reset to 0, 0 &middot; 100%</button>
+    </div>
+    <div class="hint">Hold <strong>Shift</strong> for finer steps. Applies immediately.</div>
   </div>
 
   <div class="card">
-    <div class="label">Performance &amp; fixes</div>
+    <div class="label">Graphics &amp; performance</div>
     <label class="opt" id="overlayShowRow" style="display:none"><input type="checkbox" id="overlayShow" /> Show the in-game overlay</label>
     <div class="hint" id="overlayShowHint" style="display:none">Hides the on-screen overlay while mission tracking and sync keep running &mdash; handy if you just want it out of the way. <strong>If you are turning this off because the overlay is crashing your game, please report it</strong> &mdash; that is a bug worth fixing, not something to work around.</div>
-    <div class="hkrow">
-      <span class="hklabel">Performance</span>
-      <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
-      <div class="hint">What this app is costing your PC right now. Widgets that pull live content (Twitch chat, a web page) cost far more than the text-only ones.</div>
-      <div id="perfOut"></div>
-    </div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="amdCompat" /> AMD compatibility mode</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">On an AMD GPU and the game crashes (Vulkan &ldquo;device lost&rdquo;) when the overlay is up? Turn this on — it forces the overlay off the GPU with a simpler no-blur panel. Requires restarting the app.</span></span>
@@ -555,33 +610,16 @@
       <label class="opt"><input type="checkbox" id="hwAccel" /> Use GPU hardware acceleration</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Off by default — the overlay renders on the CPU, avoiding crashes some GPUs hit. Turn on only if you have GPU headroom and no crashes. Requires restarting the app.</span></span>
     </div>
-    <div class="setrow">
-      <span class="hklabel" style="flex:1; color:var(--muted); font-size:13px;">Hotkeys work on the desktop but not in-game?</span>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Do your hotkeys work on the desktop but not while Star Citizen is focused? The game runs as admin (anti-cheat), so another app's hotkeys only reach it while focused if that app is ALSO admin.</span></span>
+    <div class="hkrow">
+      <span class="hklabel">What this is costing your PC</span>
+      <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
+      <div class="hint">Widgets that pull live content (Twitch chat, a web page) cost far more than the text-only ones.</div>
+      <div id="perfOut"></div>
     </div>
-    <div class="hint" id="adminOk" style="display:none; color:#63d6a0">✓ Running as administrator — hotkeys work while the game is focused.</div>
-    <button type="button" id="adminBtn" class="amber" style="display:none" onclick="restartAsAdmin()">Restart as administrator</button>
-    <div class="hint" id="adminHint" style="display:none">Relaunches elevated (a Windows UAC prompt — click Yes). Only affects hotkeys while the game is focused. Tip: shortcut → Properties → Compatibility → Run as administrator to skip this each launch.</div>
-    <!-- Canvas calibration. The same two controls arrange mode offers, mirrored here because this
-         is a normal OS window that the calibration cannot move: if the canvas is far enough out of
-         place, or scaled far enough down, the on-canvas copy can itself be off-screen. Hidden
-         unless the shell exposes the bridge (an older app, or a browser source). -->
-    <div class="hkrow" id="canvasCalRow" style="display:none">
-      <span class="hklabel">Canvas alignment &amp; scale</span>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">For mixed-DPI desktops. If your monitors run at different Windows scaling levels, the overlay canvas can land in the wrong place and at the wrong size. Turn on arrange mode (the dashed outline shows where the canvas thinks your main monitor is), then size and move it until the outline matches your real monitor edges. Leave at 0, 0 / 100% if it already lines up.</span></span>
-      <div class="hkbtn" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
-        <button type="button" data-cal-nx="-10">←</button>
-        <button type="button" data-cal-nx="10">→</button>
-        <button type="button" data-cal-ny="-10">↑</button>
-        <button type="button" data-cal-ny="10">↓</button>
-        <span id="canvasCalOff" style="font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); min-width:64px; text-align:center">0, 0</span>
-        <button type="button" data-cal-nz="-5">−</button>
-        <button type="button" data-cal-nz="5">+</button>
-        <span id="canvasCalScale" style="font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); min-width:46px; text-align:center">100%</span>
-        <button type="button" id="canvasCalReset">Reset</button>
-      </div>
-      <div class="hint">Hold Shift for finer steps. Applies immediately — open arrange mode on the overlay to see the dashed outline you are aiming at.</div>
-    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">Recover</div>
     <div class="setrow">
       <button type="button" class="danger" style="width:100%" onclick="onResetLayout()">Reset overlay layout (recover lost widgets)</button>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">If a widget ends up off-screen (e.g. dragged onto another monitor), this returns every widget to its default on-screen spot.</span></span>
