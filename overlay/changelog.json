@@ -1,6 +1,6 @@
 {
   "0.1.39": {
-    "date": "2026-08-05T00:00:00Z",
+    "date": "2026-08-05T21:06:56Z",
     "notes": [
       {
         "kind": "new",
@@ -54,18 +54,13 @@
       },
       {
         "kind": "fixed",
-        "label": "Faction standing read far too high",
-        "text": "Reputation was being counted several times per mission, so standings drifted upward — one grind showed Prestige 3 against a true Prestige 1. Two causes: the game logs a completed mission three times over and only one of those was being recognised as a repeat, and if your Star Citizen channel folders are links to one another the same log was read once per name. Run Verify from logs after updating and your standing will be rebuilt from scratch. Expect the number to go DOWN — the lower one is the correct one."
-      },
-      {
-        "kind": "fixed",
         "label": "Verify from logs could crash the background service",
         "text": "On a large logbackups folder, Verify from logs read every file into memory at once and ran the background service out of it. The button reported that verifying failed, and the overlay flashed a banner saying it was not tracking anything while the service restarted — the same cause behind both. It now reads a slice at a time, and on the folder that used to kill it, finishes in about three seconds."
       },
       {
         "kind": "fixed",
-        "label": "Battaglia standing stuck at zero",
-        "text": "For some players every completed Battaglia contract credited no reputation at all. The game labels those contracts with the reward in the title, and the app was reading that label as part of the mission's name, so it never matched a known mission. Not everyone gets those labels, which is why it worked for some people and not others. Verify from logs restores what you earned."
+        "label": "Reputation that would not count",
+        "text": "For some players, completed contracts credited no reputation at all — a standing sat at zero no matter how much you ground. The game can label a contract with its reward in the title, and the app was reading that label as part of the mission's name, so it never matched a mission it knew. Not everyone's game writes those labels, which is why this hit some people and not others. Several smaller accuracy problems in how completions are counted are fixed alongside it. Run Verify from logs after updating: your standing is rebuilt from your own logs, and the rebuilt figure is the accurate one."
       },
       {
         "kind": "fixed",
