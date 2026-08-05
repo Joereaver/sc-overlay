@@ -1527,13 +1527,16 @@ export class MissionTracker extends EventEmitter {
    *  computeRepBar looks it up). NOT idempotent — callers gate to genuinely-new completions
    *  (a real-time completion, or a from-scratch verifyFromLogs rebuild) so nothing is
    *  double-counted. Unknown/ambiguous titles are skipped. */
-  private accrueFromTitle(title: string | null | undefined): void {
-    if (!title) return;
+  /** Returns whether anything was actually credited — which is what decides if the completion
+   *  counts as spent (see accrueForCompletion). */
+  private accrueFromTitle(title: string | null | undefined): boolean {
+    if (!title) return false;
     const e = this.repTitleIndex.get(normScreenTitle(title));
-    if (!e) return;
+    if (!e) return false;
     const cur = this.repWitnessed.get(e.giver);
     if (cur && cur.scope === e.scope) cur.sum += e.amount;
     else this.repWitnessed.set(e.giver, { scope: e.scope, sum: (cur?.sum ?? 0) + e.amount });
+    return true;
   }
 
   /** Exactly-once rep accrual for one completed mission.
@@ -1545,11 +1548,19 @@ export class MissionTracker extends EventEmitter {
    *  The set rides along with repWitnessed in both directions (persist, clear-on-verify) so the
    *  two can never disagree about what has been counted. */
   private accrueForCompletion(missionId: string | null, title: string | null | undefined): void {
-    if (missionId) {
-      if (this.repAccruedMissionIds.has(missionId)) return;
-      this.repAccruedMissionIds.add(missionId);
-    }
-    this.accrueFromTitle(title);
+    // No missionId means this credit could never be recognised as already-counted, and an
+    // uncountable credit is how the over-count happened in the first place. Skipping it costs
+    // effectively nothing — measured over Sub's 291 PUB logs, requiring an id changes no giver's
+    // total — and the estimate is documented as a lower bound anyway.
+    if (!missionId) return;
+    if (this.repAccruedMissionIds.has(missionId)) return;
+    // 🔑 Record the id only if something was CREDITED. Marking it up-front looks equivalent and
+    // is not: a completion whose title the index cannot resolve YET — no dataset loaded, patch not
+    // detected, an ambiguous title — would be marked spent and could never be credited afterwards.
+    // Caught by running the real verifyFromLogs into a throwaway profile with no dataset: 388
+    // completions "spent", every giver total zero, which is indistinguishable from the recovery
+    // simply not working — i.e. exactly the symptom this fix exists to remove.
+    if (this.accrueFromTitle(title)) this.repAccruedMissionIds.add(missionId);
   }
 
   /** Per-hour aUEC + rep for the idle screen, computed from the PERSISTED completion history

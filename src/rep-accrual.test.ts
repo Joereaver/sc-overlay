@@ -141,5 +141,31 @@ const B = "bbbbbbbb-0000-0000-0000-000000000002";
   }
 }
 
+// A completion the rep-title index cannot resolve YET must not be marked as spent, or it can never
+// be credited afterwards. This is how the first version of the fix broke the recovery it exists to
+// provide: running verifyFromLogs before a dataset was loaded "spent" 388 completions and credited
+// nothing, which looks exactly like the fix not working.
+{
+  const dir = mkdtempSync(join(tmpdir(), "repaccrue-"));
+  try {
+    const t = new MissionTracker({ dataDir, stateDir: dir }); // deliberately NO detectPatch yet
+    t.apply({ kind: "accept", ts: new Date().toISOString(), missionId: A, title: TITLE } as never);
+    t.apply({ kind: "contractComplete", ts: new Date().toISOString(), missionId: A, title: TITLE } as never);
+    check("nothing is credited without a dataset", sum(t), 0);
+    // THE load-bearing assertion: unspent, so "Verify from logs" can still credit it later. (An
+    // in-session retry is separately blocked by the 30s completion card, which is by design — the
+    // documented recovery is the rebuild, not a re-fire.)
+    check("...and the completion is NOT recorded as spent", credited(t), 0);
+    // Once the dataset arrives — which happens the moment the patch is detected from the live log —
+    // completions resolve normally again.
+    t.detectPatch("<2026-08-03T00:00:00.000Z> ProductVersion: 4.9.188.23497");
+    t.detectPatch(`<2026-08-03T00:00:00.000Z>    [Cmdline* ] --envtag='PUB'`);
+    completeOnce(t, B);
+    check("completions credit again once the index can resolve them", sum(t) > 0, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${failed === 0 ? "ALL PASS" : failed + " FAILED"}`);
 process.exit(failed === 0 ? 0 : 1);
