@@ -11,8 +11,9 @@
  * witnessed, seeded/corrected by manual overrides. See data/README.md.
  */
 import { EventEmitter } from "node:events";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { parseMissionEvent, contractKeyOf, type MissionEvent } from "./missions-parser.js";
 import { classifyMission, type CombatProfile, type MissionActivity } from "./mission-classify.js";
 import { categorize, type TabKey } from "./categories.js";
@@ -474,6 +475,62 @@ export function detectChangelist(rawLine: string): string | null {
 /** The 4.8 patch wiped reputation, so only completions from 4.8+ logs count toward the
  *  rep bar. Version family is "major.minor". Unknown/unparseable → excluded (conservative:
  *  avoids counting pre-wipe rep we can't date). */
+/** A file's first `bytes` bytes as text, for reading a log's header. "" when unreadable. */
+function readHead(path: string, bytes = 4000): string {
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return ""; }
+  try {
+    const buf = Buffer.allocUnsafe(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return n > 0 ? buf.toString("utf8", 0, n) : "";
+  } catch { return ""; } finally { closeSync(fd); }
+}
+
+/** Stream a file's lines, holding only one chunk in memory.
+ *
+ *  🔴 THIS EXISTS BECAUSE `readFileSync(p, "utf8").split(/\r?\n/)` OOM-KILLED THE SIDECAR.
+ *  "Verify from logs" scans every channel's game.log plus every logbackup — on Sub's machine 291
+ *  PUB files, ~1.2 GB — and read-then-split holds the whole file as one string AND an array of
+ *  every line in it at once, on top of a process that already has the datasets and OCR models
+ *  resident. Measured 2026-08-03: it reached V8's **4 GB heap limit** in about 11 seconds and died
+ *  with "Reached heap limit Allocation failed - JavaScript heap out of memory".
+ *  🔑 The user-visible symptoms were TWO things that looked unrelated: the button reported "verify
+ *  failed" (the fetch rejects when the process dies mid-request), and the overlay flashed
+ *  "SC Overlay isn't tracking anything right now" for a second or two — the shell noticing the
+ *  sidecar exit and respawning it. Same cause.
+ *  A standalone script doing the same scan survives, which is a trap: the sidecar's baseline heap
+ *  is what makes the difference, so this cannot be reproduced outside the real process.
+ *  StringDecoder rather than buf.toString(): a 1 MiB read can land mid-UTF-8-sequence, and
+ *  stitching the pieces as strings would corrupt that character. */
+function* readLines(path: string): Generator<string> {
+  const CHUNK = 1 << 20; // 1 MiB — big enough that syscall overhead is irrelevant, small enough to forget
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return; }
+  const buf = Buffer.allocUnsafe(CHUNK);
+  const dec = new StringDecoder("utf8");
+  try {
+    let rest = "";
+    for (;;) {
+      let n: number;
+      try { n = readSync(fd, buf, 0, CHUNK, null); } catch { break; }
+      if (n <= 0) break;
+      let text = rest + dec.write(buf.subarray(0, n));
+      let i = 0;
+      for (;;) {
+        const j = text.indexOf("\n", i);
+        if (j < 0) break;
+        const end = j > i && text.charCodeAt(j - 1) === 13 ? j - 1 : j; // strip \r, as split(/\r?\n/) did
+        yield text.slice(i, end);
+        i = j + 1;
+      }
+      rest = text.slice(i);
+      text = ""; // drop the reference before the next read allocates another chunk
+    }
+    rest += dec.end();
+    if (rest) yield rest.charCodeAt(rest.length - 1) === 13 ? rest.slice(0, -1) : rest;
+  } finally { closeSync(fd); }
+}
+
 export function familyAtLeast48(family: string | null): boolean {
   if (!family) return false;
   const [maj, min] = family.split(".").map(Number);
@@ -1221,15 +1278,15 @@ export class MissionTracker extends EventEmitter {
     let receipts = 0;
     let skipped = 0;
     for (const p of paths) {
-      let text: string;
-      try {
-        text = readFileSync(p, "utf8");
-      } catch {
-        continue;
-      }
+      // 🔑 HEADER FIRST, as its own 4 KB read, then STREAM the body — never the whole file.
+      // Reading each log with readFileSync().split() OOM-killed the sidecar at V8's 4 GB heap
+      // limit on Sub's 291-file / 1.2 GB set (see readLines). Reading the header separately also
+      // means a wrong-environment log costs one page instead of its whole size.
+      const head = readHead(p);
+      if (!head) continue; // unreadable
       // Environment tag lives in the header (--envtag='PUB' / Environment: PUB).
       // Anything not PUB is a test environment — skip it.
-      const env = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(text.slice(0, 4000));
+      const env = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(head);
       const tag = (env?.[1] || env?.[2] || "").toUpperCase();
       if (tag && tag !== "PUB") {
         skipped++;
@@ -1238,10 +1295,10 @@ export class MissionTracker extends EventEmitter {
       // Version family (major.minor) from the header — the 4.8 wipe means only 4.8+
       // completions count toward the rep bar (blueprints are unaffected, so they still
       // count from every PUB log regardless of family).
-      const famM = /(?:Product|File)Version:\s*(\d+\.\d+)/.exec(text.slice(0, 4000));
+      const famM = /(?:Product|File)Version:\s*(\d+\.\d+)/.exec(head);
       const inWindow = familyAtLeast48(famM?.[1] ?? null);
       files++;
-      for (const line of text.split(/\r?\n/)) {
+      for (const line of readLines(p)) {
         // Cheap prefilter: blueprint receipts, contract completions, awards — plus the
         // mission markers/accepts we mine for rank inference.
         if (!line.includes("Received Blueprint:") && !line.includes("Contract Complete:") && !line.includes("Awarded ")

@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { extname, join, dirname, basename } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
@@ -1385,9 +1385,20 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // a renamed or oddly-named channel can neither hide a live log nor smuggle in a test one.
     const paths: string[] = [];
     const seenPaths = new Set<string>();
+    // 🔑 Deduped by RESOLVED path, not by the path as written. On a normal install the channel
+    // folders are real directories; on Sub's (and it is a common setup) LIVE, PTU, EPTU, HOTFIX and
+    // TECH-PREVIEW are all SYMLINKS to GAME — so the same physical log arrives under SIX different
+    // names, gets scanned six times, and every completion in it was credited six times. That is
+    // exactly the ~6x by which every one of his faction standings was inflated. It also made the
+    // scan six times as expensive, which is what pushed it into the 4 GB heap limit.
     const addLog = (p: string) => {
-      const k = p.toLowerCase();
-      if (!seenPaths.has(k) && existsSync(p)) { seenPaths.add(k); paths.push(p); }
+      if (!existsSync(p)) return;
+      let real = p;
+      try { real = realpathSync.native(p); } catch { /* not a link, or no permission — use it as-is */ }
+      const k = real.toLowerCase();
+      if (seenPaths.has(k)) return;
+      seenPaths.add(k);
+      paths.push(p);
     };
     const addChannel = (dir: string) => {
       addLog(join(dir, "game.log"));
