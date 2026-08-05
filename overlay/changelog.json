@@ -1,4 +1,109 @@
 {
+  "0.1.39": {
+    "date": "2026-08-05T00:00:00Z",
+    "notes": [
+      {
+        "kind": "new",
+        "label": "Canvas alignment & scale",
+        "text": "If your monitors run at different Windows scaling levels and the overlay still does not sit where it should, you can now move and resize the whole canvas by hand. It is in Settings under Canvas alignment & scale, and on the overlay itself in arrange mode. Turn on arrange mode and the dashed outline shows where the app thinks your main monitor is — size and move it until that outline matches your real monitor edges. Most people will never need it: it defaults to no adjustment, and the scaling bug it exists for is fixed below."
+      },
+      {
+        "kind": "new",
+        "label": "A widget's settings close themselves",
+        "text": "Open a widget's cog and walk away, and the settings popover now closes after fifteen seconds. Clicking anywhere on the widget keeps it open. Left up it was a permanently clickable box sitting over the game, and it also held the Web Page widget out of sight for as long as it was open."
+      },
+      {
+        "kind": "new",
+        "label": "Pop-up duration",
+        "text": "How long an SC Feed story and an Unlock Alert card stay on screen before they fade is now yours to set, in Settings under Pop-up duration. Anywhere from 3 to 60 seconds. A fixed timer is either too quick to read or too slow to get out of the way, and which one depends entirely on whether you are in a fight."
+      },
+      {
+        "kind": "new",
+        "label": "Shared logs include finished sessions",
+        "text": "If you have log sharing switched on, the app now also shares your rotated session logs, not just the one from the session you are in. Star Citizen writes a fresh log every launch, so a mission you finished yesterday was structurally out of reach — which is why some of you sent logs that genuinely contained none of your completions. Still opt-in, still scrubbed of your handle, account, IP and chat before anything leaves your PC, and filtered to the current patch."
+      },
+      {
+        "kind": "new",
+        "label": "Journal hotkey",
+        "text": "The Journal can be opened with a hotkey, Alt+F3 by default. It was the only placeable widget with no way in except the tray or the hub."
+      },
+      {
+        "kind": "improved",
+        "label": "Patch notes are labelled and grouped",
+        "text": "These notes now carry a heading each and are grouped into New, Improved and Fixed. Previously every line was an unlabelled paragraph, so finding the one that mattered to you meant reading all of them."
+      },
+      {
+        "kind": "improved",
+        "label": "Faster mining call-outs",
+        "text": "The scanner polls quickly whenever a signature is on screen, instead of watching for particular words in the scanning HUD. That HUD element can be restyled or turned off, and a shift in head position can carry it out of frame — while the signature number itself sits in the same place in every ship. Scanning in a Vulture felt sluggish for exactly that reason."
+      },
+      {
+        "kind": "improved",
+        "label": "Settings sections that match what you came for",
+        "text": "The Performance & fixes section had become a drawer holding seven unrelated things. It is now Canvas alignment & scale, Graphics & performance and Recover, and the explanation of why hotkeys do not reach the game sits with the hotkeys themselves."
+      },
+      {
+        "kind": "improved",
+        "label": "The hub's reset column says Reset",
+        "text": "The circular arrow beside each widget in the hub now has Reset written above it. On its own it reads as a refresh button, and refreshing a widget is a sensible-sounding thing that does not exist — it recentres the widget on your screen."
+      },
+      {
+        "kind": "fixed",
+        "label": "The overlay vanished at higher Windows scaling",
+        "text": "At 175% scaling and above on your main monitor, the overlay could land far enough down and right to be completely off screen, and below that it could sit offset from your monitors. The app worked out the size of your desktop by adding up rectangles that Windows reports in different units per display, so on a mixed-scaling desktop the answer described no real screen at all and Windows put the window somewhere of its own choosing. It now measures in real pixels and converts once. If your monitors all run at the same scaling you were never affected."
+      },
+      {
+        "kind": "fixed",
+        "label": "Faction standing read far too high",
+        "text": "Reputation was being counted several times per mission, so standings drifted upward — one grind showed Prestige 3 against a true Prestige 1. Two causes: the game logs a completed mission three times over and only one of those was being recognised as a repeat, and if your Star Citizen channel folders are links to one another the same log was read once per name. Run Verify from logs after updating and your standing will be rebuilt from scratch. Expect the number to go DOWN — the lower one is the correct one."
+      },
+      {
+        "kind": "fixed",
+        "label": "Verify from logs could crash the background service",
+        "text": "On a large logbackups folder, Verify from logs read every file into memory at once and ran the background service out of it. The button reported that verifying failed, and the overlay flashed a banner saying it was not tracking anything while the service restarted — the same cause behind both. It now reads a slice at a time, and on the folder that used to kill it, finishes in about three seconds."
+      },
+      {
+        "kind": "fixed",
+        "label": "Battaglia standing stuck at zero",
+        "text": "For some players every completed Battaglia contract credited no reputation at all. The game labels those contracts with the reward in the title, and the app was reading that label as part of the mission's name, so it never matched a known mission. Not everyone gets those labels, which is why it worked for some people and not others. Verify from logs restores what you earned."
+      },
+      {
+        "kind": "fixed",
+        "label": "The blueprint count did not match the website",
+        "text": "The tracker's total counted only two of the four ways it knows you own something, so it read lower than your collection on subliminal.gg and looked like sync was broken. Both numbers now come from the same set."
+      },
+      {
+        "kind": "fixed",
+        "label": "Debris was never called out",
+        "text": "With debris call-outs switched on, a debris signature could still go unannounced. The scanner confirms a reading by finding the marker drawn beside the number, and it was looking for one fixed colour — but that marker is drawn in your ship's HUD colour, so it only ever matched on the ship it was measured from. It now matches the marker against the colour of the number beside it, whatever that colour is. An exact debris value is also treated as proof on its own."
+      },
+      {
+        "kind": "fixed",
+        "label": "The overlay could come up with no widgets",
+        "text": "The overlay sometimes started completely empty, and the only way out was mashing the overlay hotkey until it caught. Two separate causes: the page could fail to load and never try again, and the list of which widgets to show could arrive before there was anything to show it to."
+      },
+      {
+        "kind": "fixed",
+        "label": "Hiding a grouped widget kicked it out of the group",
+        "text": "Hiding a stacked widget by hotkey, tray or hub detached it from its stack, and it came back as a lone window behind where it used to be. Only the widget's own ✕ detaches now. A group could also end up displaying a hidden member, which painted nothing and left no tabs to click."
+      },
+      {
+        "kind": "fixed",
+        "label": "No drop highlight on the Mission & BP Tracker",
+        "text": "Dragging a widget onto the tracker to stack them showed no GROUP HERE marker, so there was nothing to tell you the drop would land. It was the one widget the highlight had never applied to."
+      },
+      {
+        "kind": "fixed",
+        "label": "Fabricator items with a size or grade tag",
+        "text": "Items the fabricator lists with a size or grade in front of the name would not capture — the app was comparing the whole line, tag included, against its item names and never finding a match."
+      },
+      {
+        "kind": "fixed",
+        "label": "The app called itself SC Blueprint Tracker",
+        "text": "The Start-menu and desktop shortcut still said SC Blueprint Tracker. Everything else had been renamed some releases ago; the installer had one leftover. A fresh install gets the right name — an update in place may leave the old shortcut beside the new one."
+      }
+    ]
+  },
   "0.1.38": {
     "date": "2026-08-03T15:02:24Z",
     "notes": [
