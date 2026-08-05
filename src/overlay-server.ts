@@ -10,6 +10,7 @@ import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
 import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
+import { collectLogPaths } from "./log-paths.js";
 import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { MissionFeedbackStore } from "./mission-feedback.js";
@@ -1383,41 +1384,14 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // PTU session it was given). Scanning siblings is safe precisely BECAUSE that gate
     // reads the environment out of each log's header rather than trusting the folder name:
     // a renamed or oddly-named channel can neither hide a live log nor smuggle in a test one.
-    const paths: string[] = [];
-    const seenPaths = new Set<string>();
-    // 🔑 Deduped by RESOLVED path, not by the path as written. On a normal install the channel
-    // folders are real directories; on Sub's (and it is a common setup) LIVE, PTU, EPTU, HOTFIX and
-    // TECH-PREVIEW are all SYMLINKS to GAME — so the same physical log arrives under SIX different
-    // names, gets scanned six times, and every completion in it was credited six times. That is
-    // exactly the ~6x by which every one of his faction standings was inflated. It also made the
-    // scan six times as expensive, which is what pushed it into the 4 GB heap limit.
-    const addLog = (p: string) => {
-      if (!existsSync(p)) return;
-      let real = p;
-      try { real = realpathSync.native(p); } catch { /* not a link, or no permission — use it as-is */ }
-      const k = real.toLowerCase();
-      if (seenPaths.has(k)) return;
-      seenPaths.add(k);
-      paths.push(p);
-    };
-    const addChannel = (dir: string) => {
-      addLog(join(dir, "game.log"));
-      try {
-        const backups = join(dir, "logbackups");
-        for (const f of readdirSync(backups)) {
-          if (f.toLowerCase().endsWith(".log")) addLog(join(backups, f));
-        }
-      } catch {
-        /* no logbackups dir for this channel */
-      }
-    };
-    addChannel(dirname(config.logPath)); // the configured channel first
-    try {
-      const root = dirname(dirname(config.logPath)); // …/StarCitizen — its children are channels
-      for (const ch of readdirSync(root)) addChannel(join(root, ch));
-    } catch {
-      /* unusual layout — the configured channel alone still works */
-    }
+    // 🔑 Deduped by the file each path RESOLVES to, not by the path as written — see
+    // collectLogPaths, and `npm run test:logpaths` which pins both install layouts. Separate real
+    // channel folders are all still scanned; channel names that are links to one folder are
+    // scanned once. On Sub's install LIVE/PTU/EPTU/HOTFIX/TECH-PREVIEW all link to GAME, so every
+    // log arrived under SIX names: 1746 files for 291 real ones, every completion in them credited
+    // six times (exactly the ~6x his standings were inflated by), and six times the memory churn,
+    // which is what pushed the scan into the 4 GB heap limit.
+    const paths = collectLogPaths(config.logPath);
     const result = tracker.verifyFromLogs(paths);
     syncFull(); // push the recovered collection to subliminal.gg if sync is on
     res.writeHead(200, { "Content-Type": "application/json" });
