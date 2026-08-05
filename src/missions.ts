@@ -400,6 +400,11 @@ interface Persisted {
   /** giver -> witnessed reputation total on their primary org scope (post-4.8 completions).
    *  A lower bound rebuilt by "Verify from logs"; older state files predate it. */
   repWitnessed?: Record<string, { scope: string; sum: number }>;
+  /** missionIds already credited to repWitnessed. One completed mission raises THREE completion
+   *  signals, so exactly-once accrual needs this to survive restarts — an in-memory guard let
+   *  repeats through and every leak was permanent (see accrueForCompletion). Absent in older
+   *  state files, which is harmless: the next "Verify from logs" rebuilds both together. */
+  repAccruedMissionIds?: string[];
   /** normalized mission TITLE -> how many times it's been completed. The log never reports a
    *  mission's guaranteed physical rewards (ships, armour sets), but it DOES report the
    *  completion — so a completed count is the only honest "you actually received this" signal.
@@ -654,6 +659,9 @@ export class MissionTracker extends EventEmitter {
    *  Live real-time completions add to it; verifyFromLogs rebuilds it authoritatively
    *  from every logbackup. See accrueRep / computeRepBar. */
   private repWitnessed = new Map<string, { scope: string; sum: number }>();
+  /** missionIds already credited to repWitnessed — see accrueForCompletion. Persisted, because
+   *  the over-count it prevents is itself persisted. */
+  private repAccruedMissionIds = new Set<string>();
   /** giver -> rank index -> the ITEMS that rank's missions hand over. Lazily built per giver
    *  (scanning every mission for each view build would be silly) and dropped on a new dataset. */
   private rankRewards = new Map<string, Map<number, string[]>>();
@@ -1059,10 +1067,24 @@ export class MissionTracker extends EventEmitter {
       if (title && !this.completion.title) this.completion.title = title;
       return;
     }
-    // Real-time completion (not startup replay, and past the idempotency guard so it
-    // runs once): fold its rep gain into the giver's witnessed total for the rep bar.
+    // Real-time completion: fold its rep gain into the giver's witnessed total for the rep bar.
     // The current session is always the current patch (post-4.8-wipe), so no window check.
-    this.accrueFromTitle(title ?? info?.title ?? null);
+    //
+    // 🔴 GATED ON A PERSISTED PER-MISSION SET, NOT on the guard above. Measured on Sub's real
+    // 4.9 logs (2026-08-03): every single completion reaches beginCompletion **three** times —
+    // the game logs TWO COMPLETED end events (MissionEnded and EndMission, both parsing to
+    // `kind: "end"`) plus one contractComplete. 244 end events and 122 contractComplete for 122
+    // missions, and NOT ONE mission got fewer than 3.
+    // The guard above is `this.completion`, a SINGLE slot that expires after COMPLETION_HOLD_MS,
+    // so it only absorbs repeats that arrive back-to-back with nothing in between — and Sub
+    // "routinely runs several contracts at once" (see the `end` case), which is exactly the
+    // interleaving that lets a repeat through. `repWitnessed` is PERSISTED while that slot is
+    // in-memory, so every leak is permanent and they compound for the life of the profile: his
+    // Battaglia standing read 144,200 (Prestige 3) where a from-scratch verify computes 24,700
+    // (Prestige 1) off the same logs.
+    // Rep is the one thing here that must be exactly-once, so it gets its own idempotency —
+    // the same shape as completedMissionIds, which already existed for precisely this reason.
+    this.accrueForCompletion(missionId, title ?? info?.title ?? null);
     this.forcedBlueprints = null; // a new completion never inherits the last one's dev override
     this.completion = {
       missionId,
@@ -1289,9 +1311,17 @@ export class MissionTracker extends EventEmitter {
     // Rebuilt (not incremented) so a re-verify can't double-count; only 4.8+ completions
     // count (the wipe reset earlier rep). Resolves each completion by title via the
     // comprehensive rep-title index (covers non-pool missions too).
+    // 🔑 Deduped by missionId as well as cleared. The log holds THREE completion signals per
+    // mission (two COMPLETED end events plus a contractComplete — measured, see
+    // beginCompletion), and only `contractComplete` carries a title, so a title-keyed loop
+    // happens to see one per mission today. That is luck, not a rule: the moment anything else
+    // starts contributing titled completions this loop would multiply them. Recovering a profile
+    // that has been over-counted is the whole point of this rebuild, so it must not be able to
+    // reintroduce the same fault.
     this.repWitnessed.clear();
+    this.repAccruedMissionIds.clear();
     for (const c of completions) {
-      if (c.inWindow) this.accrueFromTitle(c.title);
+      if (c.inWindow) this.accrueForCompletion(c.missionId, c.title);
     }
     this.saveState();
     this.emit("change");
@@ -1506,6 +1536,22 @@ export class MissionTracker extends EventEmitter {
     else this.repWitnessed.set(e.giver, { scope: e.scope, sum: (cur?.sum ?? 0) + e.amount });
   }
 
+  /** Exactly-once rep accrual for one completed mission.
+   *
+   *  🔑 One MISSION can raise three completion signals (see beginCompletion), so "has this
+   *  completion already been credited" has to be answered by missionId against a PERSISTED set —
+   *  not by whatever card happens to be on screen. Without that, every leaked repeat is a
+   *  permanent over-count that survives every restart, and standing drifts upward forever.
+   *  The set rides along with repWitnessed in both directions (persist, clear-on-verify) so the
+   *  two can never disagree about what has been counted. */
+  private accrueForCompletion(missionId: string | null, title: string | null | undefined): void {
+    if (missionId) {
+      if (this.repAccruedMissionIds.has(missionId)) return;
+      this.repAccruedMissionIds.add(missionId);
+    }
+    this.accrueFromTitle(title);
+  }
+
   /** Per-hour aUEC + rep for the idle screen, computed from the PERSISTED completion history
    *  (so it survives app restarts and counts retroactively — the in-memory version reset every
    *  relaunch). Each entry's rep is resolved from its mission title; aUEC is the logged award
@@ -1648,6 +1694,23 @@ export class MissionTracker extends EventEmitter {
       intro: missions.filter((m) => m.rank == null).sort((a, b) => a.title.localeCompare(b.title)),
       rewards,
     };
+  }
+
+  /** Every giver's witnessed standing, and how many completions it was built from.
+   *
+   *  🔑 Exists because "my standing says Prestige 3 and I'm not" took a full log audit to pin
+   *  down, and the two numbers that would have answered it in seconds — the stored sum and the
+   *  count of completions behind it — were not visible anywhere. A sum wildly out of proportion
+   *  to the count is the signature of an accrual leak; without the count, the sum alone tells
+   *  you nothing. Surfaced through Copy diagnostics so a user can paste it. */
+  repDiagnostics(): { creditedCompletions: number; givers: { giver: string; scope: string; sum: number; standing: string | null }[] } {
+    const givers = [...this.repWitnessed.entries()]
+      .map(([giver, v]) => ({
+        giver, scope: v.scope, sum: v.sum,
+        standing: repLadderPosition(this.repScopes[v.scope], v.sum)?.standing ?? null,
+      }))
+      .sort((a, b) => b.sum - a.sum);
+    return { creditedCompletions: this.repAccruedMissionIds.size, givers };
   }
 
   /** Index pooled, titled missions by normalized title so a marker-less accept can
@@ -2145,6 +2208,7 @@ export class MissionTracker extends EventEmitter {
       this.fabOwned = new Set(data.fabOwned ?? []);
       this.inferredRank = new Map(Object.entries(data.inferredRank ?? {}));
       this.repWitnessed = new Map(Object.entries(data.repWitnessed ?? {}));
+      this.repAccruedMissionIds = new Set(data.repAccruedMissionIds ?? []);
       this.completedTitles = new Map(Object.entries(data.completedTitles ?? {}));
       this.completedKeys = new Map(Object.entries(data.completedKeys ?? {}));
       this.missionHistory = (data.missionHistory ?? []).slice(0, MISSION_HISTORY_MAX);
@@ -2161,6 +2225,7 @@ export class MissionTracker extends EventEmitter {
       fabOwned: [...this.fabOwned],
       inferredRank: Object.fromEntries(this.inferredRank),
       repWitnessed: Object.fromEntries(this.repWitnessed),
+      repAccruedMissionIds: [...this.repAccruedMissionIds],
       completedTitles: Object.fromEntries(this.completedTitles),
       completedKeys: Object.fromEntries(this.completedKeys),
       observedAt: Object.fromEntries(this.observedAt),

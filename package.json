@@ -28,6 +28,7 @@
     "test:fabclaim": "tsx src/fab-claim.test.ts",
     "simulate": "node tools/simulate.mjs",
     "test:logenv": "tsx src/log-env.test.ts",
+    "test:repaccrual": "tsx src/rep-accrual.test.ts",
     "test:logshare": "tsx src/log-share.test.ts",
     "dev:fresh": "node tools/dev-fresh.mjs"
   },

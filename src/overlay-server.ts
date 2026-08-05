@@ -2116,6 +2116,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       // window in the wrong place from a canvas laid out at the wrong scale. These are the numbers
       // that tell them apart, so they belong in the paste-able report rather than in a log file.
       geometry: overlayGeometry ?? "(the overlay has not reported yet — is it switched off?)",
+      // Standing per giver plus the completion count behind it. A sum out of proportion to the
+      // count is an accrual leak, and the count is the half that makes the sum interpretable.
+      reputation: tracker.repDiagnostics(),
     }));
     return;
   }
