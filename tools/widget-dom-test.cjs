@@ -1657,6 +1657,15 @@ const CALIBRATE = `(async () => {
   // unreachable for exactly this reason (it hung 19px above the box it belonged to).
   const nudge = document.getElementById("canvasNudge");
   const nr = nudge.getBoundingClientRect();
+  // Centred on the PRIMARY monitor, both axes. It used to sit under the arrange banner at the top
+  // edge — right where the dotted outline's own top edge is, so the control overlapped the thing it
+  // adjusts. Measured against the primary's rect, not the window's: the canvas spans every display.
+  ok("the calibration panel is centred on the primary, horizontally",
+     Math.abs((nr.left + nr.right) / 2 - (canvasInfo.px + canvasInfo.pw / 2)) < 2,
+     Math.round((nr.left + nr.right) / 2) + " vs " + Math.round(canvasInfo.px + canvasInfo.pw / 2));
+  ok("...and vertically",
+     Math.abs((nr.top + nr.bottom) / 2 - (canvasInfo.py + canvasInfo.ph / 2)) < 2,
+     Math.round((nr.top + nr.bottom) / 2) + " vs " + Math.round(canvasInfo.py + canvasInfo.ph / 2));
   const btns = [...nudge.querySelectorAll("button")];
   ok("the calibration panel carries move AND size controls", btns.length === 7, btns.length + " buttons");
   ok("every control is inside the rect the shell hit-tests", btns.every((b) => {

@@ -707,8 +707,14 @@
     background: rgba(var(--accent-rgb), 0.18); color: var(--cyan); }
   #arrangeDone:hover { background: var(--cyan); color: #04141b; }
   /* Canvas nudge — sits under the arrange banner, anchored on the PRIMARY like it. */
-  #arrangeScrim .nudge { pointer-events: auto; position: absolute; top: calc(var(--prim-top, 0px) + 64px);
-    left: var(--prim-cx, 50%); transform: translateX(-50%); display: flex; flex-direction: column;
+  /* 🔑 Centred on the PRIMARY monitor, both axes (Sub, 2026-08-03). It used to hang just under the
+     arrange banner, which put it at the top edge — the same place the dotted outline's own top edge
+     is, so the thing you are adjusting and the control you adjust it with overlapped. Dead centre
+     is the one spot that is clear of every edge you might be dragging toward. --prim-*, never vh:
+     the canvas spans every display. */
+  #arrangeScrim .nudge { pointer-events: auto; position: absolute;
+    top: calc(var(--prim-top, 0px) + var(--prim-h, 100%) / 2);
+    left: var(--prim-cx, 50%); transform: translate(-50%, -50%); display: flex; flex-direction: column;
     align-items: center; gap: 6px; padding: 10px 14px; border-radius: 10px;
     background: var(--panel-solid, rgba(4,20,27,0.92)); border: 1px solid var(--border);
     font-family: var(--sans); color: var(--cyan-text);
@@ -2695,6 +2701,11 @@
           "setWebViewHotkey", "setInteractHotkey", "setMoveHotkey", "setFabClaimHotkey",
           "setHoldMode", "resetLayout", "metrics", "openDataFolder", "isElevated",
           "restartAsAdmin", "getOverlayEnabled", "setOverlayEnabled", "onOverlayEnabledChanged",
+          // 🔑 This list is an ALLOWLIST, so a method added to config-preload.cjs reaches the
+          // settings WINDOW and silently misses the embedded widget. canvasCalibration shipped
+          // that way: config.html hides the row when the bridge doesn't answer, so the control
+          // was simply absent from the surface most people open. Add here as well as there.
+          "canvasCalibration",
         ]) {
           if (typeof c[k] === "function") out[k] = (...a) => c[k](...a);
         }

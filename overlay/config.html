@@ -89,6 +89,18 @@
   input[type=text] { width: 100%; background: var(--field); border: 1px solid var(--line); color: var(--text); padding: 10px 12px; font-family: var(--font-body); font-size: 14px; border-radius: var(--radius-sm); transition: border-color .15s; }
   input[type=text]::placeholder { color: var(--outline); }
   input[type=text]:focus { outline: none; border-color: var(--amber); }
+  /* 🔑 Number inputs had NO rule at all — only [type=text] and [type=range] were ever styled — so
+     the pop-up durations rendered as raw platform controls: white field, system font, native
+     spinners, sitting in the middle of a dark panel (Sub, 2026-08-03).
+     `color-scheme: dark` is the part that matters and the part that is easy to miss: the up/down
+     spinner is drawn by the browser and cannot be recoloured with normal properties, so on a dark
+     field its arrows come out dark-on-dark and effectively invisible. That switch is what makes
+     the browser draw them light. The spinners are kept deliberately — nudging the number up and
+     down is how the control is used. */
+  input[type=number] { width: 78px; background: var(--field); border: 1px solid var(--line); color: var(--text);
+    padding: 10px 12px; font-family: var(--font-body); font-size: 14px; border-radius: var(--radius-sm);
+    transition: border-color .15s; color-scheme: dark; accent-color: var(--amber); }
+  input[type=number]:focus { outline: none; border-color: var(--amber); }
   input[readonly] { color: var(--muted); }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .row .ship { font-weight: 600; min-width: 150px; }
@@ -603,12 +615,12 @@
     <div class="label">Pop-up duration</div>
     <div class="setrow">
       <label class="opt" for="scFeedShowSeconds">SC Feed story</label>
-      <input type="number" id="scFeedShowSeconds" min="3" max="60" step="1" style="width:78px" />
+      <input type="number" id="scFeedShowSeconds" min="3" max="60" step="1" />
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Seconds an SC Feed story stays on screen before it fades. 3–60.</span></span>
     </div>
     <div class="setrow">
       <label class="opt" for="unlockAlertShowSeconds">Unlock Alert card</label>
-      <input type="number" id="unlockAlertShowSeconds" min="3" max="60" step="1" style="width:78px" />
+      <input type="number" id="unlockAlertShowSeconds" min="3" max="60" step="1" />
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Seconds a blueprint-unlock card stays on screen before it fades. 3–60.</span></span>
     </div>
     <div class="hint">Takes effect the next time each widget loads.</div>
