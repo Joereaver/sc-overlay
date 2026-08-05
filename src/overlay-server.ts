@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync } from "node:fs";
+import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { extname, join, dirname, basename } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
@@ -10,6 +10,7 @@ import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
 import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
+import { collectLogPaths } from "./log-paths.js";
 import { MiningTracker } from "./mining.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { MissionFeedbackStore } from "./mission-feedback.js";
@@ -38,12 +39,30 @@ if (!APP_VERSION) {
 // Periodically share the current session's scrubbed log (dedup by content hash). The
 // last tick before the app closes captures the fullest session; opt-in + no-op when off.
 const LOG_SHARE_INTERVAL_MS = 20 * 60 * 1000;
-setInterval(() => void maybeShareLog(config, APP_VERSION), LOG_SHARE_INTERVAL_MS);
+setInterval(() => void maybeShareLog(config, APP_VERSION, sharedLogStatePath), LOG_SHARE_INTERVAL_MS);
 
 // "What's new" per version (overlay/changelog.json), cached after first read. Each entry is
 // { date, notes } (date = UTC release time); a bare string[] is accepted for backward-compat.
-type ChangelogEntry = string[] | { date?: string | null; notes: string[] };
-const clNotes = (e: ChangelogEntry | undefined): string[] => (Array.isArray(e) ? e : e?.notes ?? []);
+//
+// A NOTE is { kind, label, text }: `label` is the short scannable title, `text` the description,
+// and `kind` (new | improved | fixed) drives the card's grouping. A PLAIN STRING is a legacy note
+// — 0.1.33 and older were written before labels existed — and normalizes to text with no label and
+// no kind, which the card renders as a flat ungrouped list exactly as it always did. Normalising
+// HERE rather than in the card means one shape reaches every consumer, and an unknown kind from a
+// hand-edited file degrades to ungrouped instead of inventing a section.
+type ChangelogNote = string | { kind?: string | null; label?: string | null; text: string };
+type ChangelogEntry = ChangelogNote[] | { date?: string | null; notes: ChangelogNote[] };
+type NormalisedNote = { kind: string | null; label: string | null; text: string };
+const CL_KINDS = new Set(["new", "improved", "fixed"]);
+const clNote = (n: ChangelogNote): NormalisedNote | null => {
+  if (typeof n === "string") return n.trim() ? { kind: null, label: null, text: n } : null;
+  if (!n || typeof n.text !== "string" || !n.text.trim()) return null;
+  const kind = typeof n.kind === "string" && CL_KINDS.has(n.kind) ? n.kind : null;
+  const label = typeof n.label === "string" && n.label.trim() ? n.label.trim() : null;
+  return { kind, label, text: n.text };
+};
+const clNotes = (e: ChangelogEntry | undefined): NormalisedNote[] =>
+  (Array.isArray(e) ? e : e?.notes ?? []).map(clNote).filter((n): n is NormalisedNote => n !== null);
 const clDate = (e: ChangelogEntry | undefined): string | null => (Array.isArray(e) ? null : e?.date ?? null);
 let changelogCache: Record<string, ChangelogEntry> | null = null;
 function loadChangelog(): Record<string, ChangelogEntry> {
@@ -70,6 +89,10 @@ const seedConfigPath = join(overlayDir, "config.json");
 // Writable copy of the datasets: bundled pools are seeded in, and any pools the
 // tracker fetches for a not-yet-bundled patch cache here (Program Files is read-only).
 const dataDir = join(userDir, "data");
+// Which rotated sessions (logbackups/) have already been shared. Remembered by FILENAME, and
+// permanently — a backup is immutable, so "sent", "wrong patch" and "no mission signal" are all
+// final answers. Without this every app launch would re-offer the whole folder.
+const sharedLogStatePath = join(userDir, "shared-logs.json");
 
 interface Config {
   urls: string[];
@@ -174,8 +197,30 @@ interface Config {
   overlayHotkey: string;
   /** Global hotkey that shows/hides the Mining Assistant window (Electron accelerator
    *  syntax). Read by main.cjs at startup. */
+  /** Manual nudge for the overlay canvas, in PHYSICAL pixels, applied to the window's position.
+   *  Mixed-DPI desktops (a 225% 4K primary beside 100% 1080p monitors) leave the canvas offset
+   *  from the real monitors. Rather than guess the DPI maths, the user drags it into place like a
+   *  console game's safe-area screen.
+   *  🔑 Defaults to 0,0, so a correct setup is bit-for-bit unaffected. */
+  canvasOffsetX: number;
+  canvasOffsetY: number;
+  /** The other half of that calibration: a uniform scale for the canvas coordinate space. Changing
+   *  the PRIMARY monitor's Windows scaling leaves the canvas both mis-placed AND mis-sized (Sub,
+   *  2026-08-03), and an offset can only fix the placement. Applied as CSS `zoom` on the canvas
+   *  document, so the dotted primary outline, every widget's position and every widget's contents
+   *  scale as one — the user grows it until the outline sits on their real monitor edges.
+   *  🔑 Defaults to 1. */
+  canvasScale: number;
+  /** Seconds an SC Feed story stays on screen before fading (Argante's ask). Clamped 3–60:
+   *  under 3 nothing is readable, and a notifier that never leaves is a panel, not a pop-up. */
+  scFeedShowSeconds: number;
+  /** Seconds an Unlock Alert card stays up. Same clamp, same reasoning. */
+  unlockAlertShowSeconds: number;
   miningHotkey: string;
   webViewHotkey: string;
+  /** Global hotkey that shows/hides the Journal widget (Electron accelerator syntax).
+   *  Read by electron/main.cjs at startup. */
+  notepadHotkey: string;
   /** Hold-to-interact hotkey (Electron accelerator, default "F"): when hold-to-interact mode is
    *  on, the overlay is passive (click-through) unless this key is HELD. */
   interactHotkey: string;
@@ -279,8 +324,14 @@ const DEFAULTS: Config = {
   bindingPng: "",
   bindingHotkey: "Ctrl+F3",
   overlayHotkey: "F3",
+  canvasOffsetX: 0,
+  canvasOffsetY: 0,
+  canvasScale: 1,
+  scFeedShowSeconds: 12,
+  unlockAlertShowSeconds: 8,
   miningHotkey: "Shift+F3",
   webViewHotkey: "Ctrl+Shift+F3",
+  notepadHotkey: "Alt+F3",
   interactHotkey: "F",
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
@@ -448,6 +499,10 @@ async function verifySyncToken(): Promise<TokenVerdict> {
 // surfaced by /api/diagnostics, and a save that succeeds clears it.
 let lastSaveError: { at: string; error: string } | null = null;
 let lastSaveOk: string | null = null;
+// Live overlay geometry, merged from the shell (`shell` key) and the canvas page (`canvas` key).
+// See the /api/overlay-geometry routes; in memory only, because it describes a window that exists
+// right now and a stale copy would be worse than none.
+let overlayGeometry: Record<string, unknown> | null = null;
 const saveConfig = async (): Promise<void> => {
   try {
     mkdirSync(userDir, { recursive: true });
@@ -1329,30 +1384,14 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // PTU session it was given). Scanning siblings is safe precisely BECAUSE that gate
     // reads the environment out of each log's header rather than trusting the folder name:
     // a renamed or oddly-named channel can neither hide a live log nor smuggle in a test one.
-    const paths: string[] = [];
-    const seenPaths = new Set<string>();
-    const addLog = (p: string) => {
-      const k = p.toLowerCase();
-      if (!seenPaths.has(k) && existsSync(p)) { seenPaths.add(k); paths.push(p); }
-    };
-    const addChannel = (dir: string) => {
-      addLog(join(dir, "game.log"));
-      try {
-        const backups = join(dir, "logbackups");
-        for (const f of readdirSync(backups)) {
-          if (f.toLowerCase().endsWith(".log")) addLog(join(backups, f));
-        }
-      } catch {
-        /* no logbackups dir for this channel */
-      }
-    };
-    addChannel(dirname(config.logPath)); // the configured channel first
-    try {
-      const root = dirname(dirname(config.logPath)); // …/StarCitizen — its children are channels
-      for (const ch of readdirSync(root)) addChannel(join(root, ch));
-    } catch {
-      /* unusual layout — the configured channel alone still works */
-    }
+    // 🔑 Deduped by the file each path RESOLVES to, not by the path as written — see
+    // collectLogPaths, and `npm run test:logpaths` which pins both install layouts. Separate real
+    // channel folders are all still scanned; channel names that are links to one folder are
+    // scanned once. On Sub's install LIVE/PTU/EPTU/HOTFIX/TECH-PREVIEW all link to GAME, so every
+    // log arrived under SIX names: 1746 files for 291 real ones, every completion in them credited
+    // six times (exactly the ~6x his standings were inflated by), and six times the memory churn,
+    // which is what pushed the scan into the 4 GB heap limit.
+    const paths = collectLogPaths(config.logPath);
     const result = tracker.verifyFromLogs(paths);
     syncFull(); // push the recovered collection to subliminal.gg if sync is on
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -1724,6 +1763,26 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.overlayHotkey === "string") config.overlayHotkey = body.overlayHotkey.trim();
     if (typeof body.miningHotkey === "string") config.miningHotkey = body.miningHotkey.trim();
     if (typeof body.webViewHotkey === "string") config.webViewHotkey = body.webViewHotkey.trim();
+    if (typeof body.notepadHotkey === "string") config.notepadHotkey = body.notepadHotkey.trim();
+    // Clamped SERVER-side as well as in the input: a hand-edited config.json with 0 (or a string)
+    // would otherwise make a notifier vanish instantly or never leave, with no control to undo it.
+    const showSecs = (v: unknown, fallback: number): number =>
+      typeof v === "number" && Number.isFinite(v) ? Math.max(3, Math.min(60, Math.round(v))) : fallback;
+    // Clamped to one screen's worth in each direction: enough for any real misalignment, and a
+    // typo can never fling the canvas somewhere the user cannot find it to nudge it back.
+    const nudge = (v: unknown, fallback: number): number =>
+      typeof v === "number" && Number.isFinite(v) ? Math.max(-4000, Math.min(4000, Math.round(v))) : fallback;
+    if (body.canvasOffsetX !== undefined) config.canvasOffsetX = nudge(body.canvasOffsetX, config.canvasOffsetX);
+    if (body.canvasOffsetY !== undefined) config.canvasOffsetY = nudge(body.canvasOffsetY, config.canvasOffsetY);
+    // Canvas scale, same reasoning as the nudge: clamped here as well as in the UI, because 0 (or
+    // a string, or a hand-edited 40) collapses the whole canvas to a dot with no visible control
+    // left to undo it. 0.5–3 covers every real Windows scaling ratio (a 225% primary beside 100%
+    // side monitors is the worst case seen) with room either side.
+    const canvasZoom = (v: unknown, fallback: number): number =>
+      typeof v === "number" && Number.isFinite(v) ? Math.max(0.5, Math.min(3, Math.round(v * 100) / 100)) : fallback;
+    if (body.canvasScale !== undefined) config.canvasScale = canvasZoom(body.canvasScale, config.canvasScale);
+    if (body.scFeedShowSeconds !== undefined) config.scFeedShowSeconds = showSecs(body.scFeedShowSeconds, config.scFeedShowSeconds);
+    if (body.unlockAlertShowSeconds !== undefined) config.unlockAlertShowSeconds = showSecs(body.unlockAlertShowSeconds, config.unlockAlertShowSeconds);
     if (typeof body.interactHotkey === "string") config.interactHotkey = body.interactHotkey.trim();
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();
@@ -1759,7 +1818,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // A changed token → re-resolve subscriber entitlement now (don't wait for the 20-min tick).
     void pollEntitlement();
     // If log-sharing was just turned on, upload the current session now.
-    void maybeShareLog(config, APP_VERSION);
+    void maybeShareLog(config, APP_VERSION, sharedLogStatePath);
     // Push prefs (e.g. the time-format toggle) to any open overlay immediately.
     broadcastMissions();
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -2037,7 +2096,35 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       },
       display: { hwAccel: config.hwAccel === true, amdCompat: config.amdCompat === true, theme: config.theme || "mobiglas" },
       twitch: { chatChannel: config.twitchChannel || "(none)", signedInAs: config.twitchUserLogin || "(not signed in)" },
+      // Mixed-DPI is the one class of bug that is INVISIBLE from a machine whose monitors all
+      // match, and the reports that reach us ("it's offset", "it vanished") can't distinguish a
+      // window in the wrong place from a canvas laid out at the wrong scale. These are the numbers
+      // that tell them apart, so they belong in the paste-able report rather than in a log file.
+      geometry: overlayGeometry ?? "(the overlay has not reported yet — is it switched off?)",
+      // Standing per giver plus the completion count behind it. A sum out of proportion to the
+      // count is an accrual leak, and the count is the half that makes the sum interpretable.
+      reputation: tracker.repDiagnostics(),
     }));
+    return;
+  }
+
+  // Where the overlay window ACTUALLY is, and what the canvas made of it. Reported by the shell
+  // (only it can see `screen` and the window's real bounds) and by the canvas page (only it knows
+  // what it rendered), because a mixed-DPI fault can live in either half.
+  // 🔑 In memory only, and last-write-wins: this is a snapshot of a live window, so persisting it
+  // would just serve a stale answer after a monitor change.
+  if (url === "/api/overlay-geometry" && req.method === "POST") {
+    const body = await readBody(req);
+    if (body && typeof body === "object") {
+      overlayGeometry = { ...(overlayGeometry ?? {}), ...body, at: new Date().toISOString() };
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (url === "/api/overlay-geometry" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(overlayGeometry ?? {}));
     return;
   }
 
@@ -2052,7 +2139,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // nowhere, while this lands in sidecar.log — the file a user can read and send. Every read
     // prints its numbers, so the colour band can be tuned from real scans instead of the single
     // frame it was built from.
-    const g = body?.glyph as { fraction?: number; total?: number; mean?: number[]; hitMean?: number[] } | undefined;
+    const g = body?.glyph as { fraction?: number; total?: number; mean?: number[]; hitMean?: number[]; ref?: { mean: number[]; lum: number; lumFloor: number } } | undefined;
     if (Number.isFinite(signature)) {
       // The tracker owns the rules, so it also says what it did with the read — one place to
       // change, and the log can never drift out of step with the behaviour it describes.
@@ -2060,7 +2147,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       console.log(
         `[mining] signature ${signature} — glyph ${body?.confirmed === true ? "FOUND" : "not found"}` +
         (g ? ` (${Math.round((g.fraction ?? 0) * 100)}% of ${g.total}px, box mean rgb ${g.mean}` +
-             `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""})` : "") +
+             `${g.hitMean ? `, matched mean rgb ${g.hitMean}` : ""}` +
+             `${g.ref ? `, ref ink rgb ${g.ref.mean} lum ${g.ref.lum} floor ${g.ref.lumFloor}` : ""})` : "") +
+        // Cadence rides along so "it feels slower in this ship" is answerable from the log. It
+        // used to be console.log'd in capture.cjs, i.e. into the void — that process has no stdout.
+        ` — polling ${body?.pollMs ?? "?"}ms${body?.scanHud === true ? "" : " (no HUD words seen)"}` +
         ` — ${outcome.why}`,
       );
       // Every read, ANNOUNCED OR NOT, so the "scan read area" outline can print what the OCR saw.

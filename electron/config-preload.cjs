@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld("overlayConfig", {
   // Opt-in "hold to interact" mode (live-applied), and a layout reset for lost widgets.
   setHoldMode: (on) => ipcRenderer.invoke("app:set-hold-mode", !!on),
   resetLayout: () => ipcRenderer.invoke("overlay:reset-layout"),
+  // Canvas calibration for mixed-DPI desktops: { x, y, scale }; pass nothing to just read it.
+  // 🔑 This surface exists BECAUSE of the bug it fixes — a canvas far enough out of place (or
+  // scaled far enough down) can put the on-canvas arrange-mode copy off-screen, and the Settings
+  // window is a normal OS window the calibration cannot touch.
+  canvasCalibration: (cal) => ipcRenderer.invoke("app:canvas-calibration", cal),
   // Master overlay switch (crash workaround) — controlled live via the shell, not the
   // sidecar config, so toggling destroys/creates the HUD window immediately.
   getOverlayEnabled: () => ipcRenderer.invoke("overlay:get-enabled"),

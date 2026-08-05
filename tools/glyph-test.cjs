@@ -41,40 +41,58 @@ const HUD_CYAN = [69, 208, 224];  // the overlay's own accent
 const WHITE = [255, 255, 255];
 
 app.whenReady().then(() => {
-  // ── colour: what must and must not read as the glyph ─────────────────────────────────────
-  const at = (rgb) => {
-    const img = frame(80, 60, SPACE, [{ x: 20, y: 15, w: 15, h: 22, rgb }]);
-    return findScanGlyph(img, { x: 10, y: 5, w: 40, h: 40 });
-  };
-  ok("the measured pin is FOUND", at(PIN).seen, JSON.stringify(at(PIN)));
-  ok("HUD yellow is not (blue too low)", !at(HUD_YELLOW).seen, JSON.stringify(at(HUD_YELLOW)));
-  ok("the overlay's own cyan is not (green far above red)", !at(HUD_CYAN).seen, JSON.stringify(at(HUD_CYAN)));
-  ok("white is not (no yellow-green gap at all)", !at(WHITE).seen, JSON.stringify(at(WHITE)));
-  ok("empty space is not", !findScanGlyph(frame(80, 60, SPACE), { x: 10, y: 5, w: 40, h: 40 }).seen);
-
-  // Translucency: the pill blends with whatever is behind it, so test the pin mixed 50/50 with a
-  // bright rock and with dark space — the case the measurements warned had never been validated.
-  const mix = (a, b, t) => a.map((v, i) => Math.round(v * (1 - t) + b[i] * t));
-  ok("still found blended 50% into dark space", at(mix(PIN, SPACE, 0.5)).seen, JSON.stringify(at(mix(PIN, SPACE, 0.5))));
-  const ROCK = [150, 140, 120];
-  ok("still found blended 50% into a lit rock", at(mix(PIN, ROCK, 0.5)).seen, JSON.stringify(at(mix(PIN, ROCK, 0.5))));
-
-  // ── a whole-frame rehearsal: number, pin, and a SCANNING label that must not fool it ──────
-  const scene = frame(400, 200, SPACE, [
-    { x: 120, y: 92, w: 15, h: 22, rgb: PIN },        // the pin
-    { x: 146, y: 96, w: 37, h: 13, rgb: WHITE },      // the number itself
-    { x: 40, y: 40, w: 90, h: 16, rgb: HUD_YELLOW },  // "SCANNING"
-  ]);
-  // The box glyphSearchBox() produces for a 37×13 number at x=146 (asserted separately in
-  // glyph-geom-test.ts): 34 wide, 29 tall, ending just left of the number.
+  // 🔑 THE CONTRACT CHANGED. There is no "pin colour" any more: the pin is drawn in the SHIP'S
+  // HUD colour, which changes with the ship, so the old absolute yellow-green band could only
+  // ever confirm for the one ship it was measured on — and every other HUD silently made pure
+  // debris un-announceable (debris has no rock-table match, so the glyph is its only evidence).
+  // The invariant now is RELATIVE: the pin matches the colour of the NUMBER beside it, because
+  // both are the same HUD layer. So these cases sweep several HUD colours rather than one.
   const searchBox = { x: 110, y: 88, w: 34, h: 29 };
-  ok("a full scene reads as a real scan", findScanGlyph(scene, searchBox).seen);
-  const noPin = frame(400, 200, SPACE, [
-    { x: 146, y: 96, w: 37, h: 13, rgb: WHITE },      // a bare number, no pin beside it
-    { x: 40, y: 40, w: 90, h: 16, rgb: HUD_YELLOW },
+  const NUM = { x: 146, y: 96, w: 37, h: 13 };  // the number's own bbox, the colour reference
+  const PIN_AT = { x: 120, y: 92, w: 15, h: 22 };
+  /** A scene with a number in `numRgb` and, optionally, a pin in `pinRgb` beside it. */
+  const scene = (numRgb, pinRgb, extra = []) => frame(400, 200, SPACE, [
+    ...(pinRgb ? [{ ...PIN_AT, rgb: pinRgb }] : []),
+    { ...NUM, rgb: numRgb },
+    ...extra,
   ]);
-  ok("the same number with NO pin does not", !findScanGlyph(noPin, searchBox).seen,
-     JSON.stringify(findScanGlyph(noPin, searchBox)));
+  const look = (numRgb, pinRgb, extra) => findScanGlyph(scene(numRgb, pinRgb, extra), searchBox, NUM);
+
+  // Every one of these is a plausible ship HUD. All must confirm — that is the entire fix.
+  for (const [label, hud] of [
+    ["the measured yellow-green HUD", PIN],
+    ["a cyan HUD", HUD_CYAN],
+    ["a white HUD", WHITE],
+    ["an amber HUD", [235, 170, 40]],
+    ["a red HUD", [220, 70, 60]],
+    ["a green HUD", [80, 220, 110]],
+  ]) {
+    const r = look(hud, hud);
+    ok(`${label}: pin matching its number is FOUND`, r.seen, JSON.stringify({ f: r.fraction, ref: r.ref && r.ref.mean }));
+  }
+
+  // The discriminator is no longer hue-in-the-abstract but hue RELATIVE to the number.
+  ok("a pin in a DIFFERENT colour from the number is not",
+     !look(HUD_CYAN, [235, 170, 40]).seen, JSON.stringify(look(HUD_CYAN, [235, 170, 40])));
+  ok("a bare number with no pin is not", !look(WHITE, null).seen, JSON.stringify(look(WHITE, null)));
+  ok("empty space is not", !findScanGlyph(frame(400, 200, SPACE), searchBox, NUM).seen);
+  // A HUD label elsewhere on screen must not leak in — the search box is anchored on the number.
+  ok("a SCANNING label outside the box does not count",
+     !look(WHITE, null, [{ x: 40, y: 40, w: 90, h: 16, rgb: WHITE }]).seen);
+
+  // Translucency: the pill blends with whatever is behind it. Brightness-normalised hue is what
+  // makes this survive — a dimmed pin keeps its hue even as its luminance falls.
+  const mix = (a, b, t) => a.map((v, i) => Math.round(v * (1 - t) + b[i] * t));
+  ok("still found blended 50% into dark space", look(PIN, mix(PIN, SPACE, 0.5)).seen,
+     JSON.stringify(look(PIN, mix(PIN, SPACE, 0.5))));
+  const ROCK = [150, 140, 120];
+  ok("still found blended 50% into a lit rock", look(PIN, mix(PIN, ROCK, 0.5)).seen,
+     JSON.stringify(look(PIN, mix(PIN, ROCK, 0.5))));
+
+  // Without a text rect there is nothing to calibrate against, and it must REFUSE rather than
+  // fall back to a guessed colour — a wrong absolute colour is the bug being fixed.
+  const noRef = findScanGlyph(scene(PIN, PIN), searchBox, null);
+  ok("no text rect -> refuses, and says why", !noRef.seen && /calibrate/.test(noRef.why), noRef.why);
 
   const failed = results.filter((r) => !r.pass);
   for (const r of results) console.log(`  ${r.pass ? "ok  " : "FAIL"} ${r.name}${r.detail ? "   [" + r.detail + "]" : ""}`);

@@ -1,7 +1,7 @@
 {
   "name": "sc-log-watcher",
-  "version": "0.1.38",
-  "description": "SubliminalsTV SC Blueprint Tracker â€” game.log watcher + overlay.",
+  "version": "0.1.39",
+  "description": "SubliminalsTV SC Overlay - game.log watcher + widget canvas for Star Citizen.",
   "type": "module",
   "main": "electron/main.cjs",
   "author": "SubliminalsTV",
@@ -28,6 +28,9 @@
     "test:fabclaim": "tsx src/fab-claim.test.ts",
     "simulate": "node tools/simulate.mjs",
     "test:logenv": "tsx src/log-env.test.ts",
+    "test:repaccrual": "tsx src/rep-accrual.test.ts",
+    "test:logpaths": "tsx src/log-paths.test.ts",
+    "test:logshare": "tsx src/log-share.test.ts",
     "dev:fresh": "node tools/dev-fresh.mjs"
   },
   "dependencies": {
@@ -78,7 +81,7 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "SC Blueprint Tracker"
+      "shortcutName": "SC Overlay"
     },
     "publish": [
       {

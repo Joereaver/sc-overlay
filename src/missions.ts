@@ -11,8 +11,9 @@
  * witnessed, seeded/corrected by manual overrides. See data/README.md.
  */
 import { EventEmitter } from "node:events";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { parseMissionEvent, contractKeyOf, type MissionEvent } from "./missions-parser.js";
 import { classifyMission, type CombatProfile, type MissionActivity } from "./mission-classify.js";
 import { categorize, type TabKey } from "./categories.js";
@@ -400,6 +401,11 @@ interface Persisted {
   /** giver -> witnessed reputation total on their primary org scope (post-4.8 completions).
    *  A lower bound rebuilt by "Verify from logs"; older state files predate it. */
   repWitnessed?: Record<string, { scope: string; sum: number }>;
+  /** missionIds already credited to repWitnessed. One completed mission raises THREE completion
+   *  signals, so exactly-once accrual needs this to survive restarts — an in-memory guard let
+   *  repeats through and every leak was permanent (see accrueForCompletion). Absent in older
+   *  state files, which is harmless: the next "Verify from logs" rebuilds both together. */
+  repAccruedMissionIds?: string[];
   /** normalized mission TITLE -> how many times it's been completed. The log never reports a
    *  mission's guaranteed physical rewards (ships, armour sets), but it DOES report the
    *  completion — so a completed count is the only honest "you actually received this" signal.
@@ -469,6 +475,62 @@ export function detectChangelist(rawLine: string): string | null {
 /** The 4.8 patch wiped reputation, so only completions from 4.8+ logs count toward the
  *  rep bar. Version family is "major.minor". Unknown/unparseable → excluded (conservative:
  *  avoids counting pre-wipe rep we can't date). */
+/** A file's first `bytes` bytes as text, for reading a log's header. "" when unreadable. */
+function readHead(path: string, bytes = 4000): string {
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return ""; }
+  try {
+    const buf = Buffer.allocUnsafe(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return n > 0 ? buf.toString("utf8", 0, n) : "";
+  } catch { return ""; } finally { closeSync(fd); }
+}
+
+/** Stream a file's lines, holding only one chunk in memory.
+ *
+ *  🔴 THIS EXISTS BECAUSE `readFileSync(p, "utf8").split(/\r?\n/)` OOM-KILLED THE SIDECAR.
+ *  "Verify from logs" scans every channel's game.log plus every logbackup — on Sub's machine 291
+ *  PUB files, ~1.2 GB — and read-then-split holds the whole file as one string AND an array of
+ *  every line in it at once, on top of a process that already has the datasets and OCR models
+ *  resident. Measured 2026-08-03: it reached V8's **4 GB heap limit** in about 11 seconds and died
+ *  with "Reached heap limit Allocation failed - JavaScript heap out of memory".
+ *  🔑 The user-visible symptoms were TWO things that looked unrelated: the button reported "verify
+ *  failed" (the fetch rejects when the process dies mid-request), and the overlay flashed
+ *  "SC Overlay isn't tracking anything right now" for a second or two — the shell noticing the
+ *  sidecar exit and respawning it. Same cause.
+ *  A standalone script doing the same scan survives, which is a trap: the sidecar's baseline heap
+ *  is what makes the difference, so this cannot be reproduced outside the real process.
+ *  StringDecoder rather than buf.toString(): a 1 MiB read can land mid-UTF-8-sequence, and
+ *  stitching the pieces as strings would corrupt that character. */
+function* readLines(path: string): Generator<string> {
+  const CHUNK = 1 << 20; // 1 MiB — big enough that syscall overhead is irrelevant, small enough to forget
+  let fd: number;
+  try { fd = openSync(path, "r"); } catch { return; }
+  const buf = Buffer.allocUnsafe(CHUNK);
+  const dec = new StringDecoder("utf8");
+  try {
+    let rest = "";
+    for (;;) {
+      let n: number;
+      try { n = readSync(fd, buf, 0, CHUNK, null); } catch { break; }
+      if (n <= 0) break;
+      let text = rest + dec.write(buf.subarray(0, n));
+      let i = 0;
+      for (;;) {
+        const j = text.indexOf("\n", i);
+        if (j < 0) break;
+        const end = j > i && text.charCodeAt(j - 1) === 13 ? j - 1 : j; // strip \r, as split(/\r?\n/) did
+        yield text.slice(i, end);
+        i = j + 1;
+      }
+      rest = text.slice(i);
+      text = ""; // drop the reference before the next read allocates another chunk
+    }
+    rest += dec.end();
+    if (rest) yield rest.charCodeAt(rest.length - 1) === 13 ? rest.slice(0, -1) : rest;
+  } finally { closeSync(fd); }
+}
+
 export function familyAtLeast48(family: string | null): boolean {
   if (!family) return false;
   const [maj, min] = family.split(".").map(Number);
@@ -654,6 +716,9 @@ export class MissionTracker extends EventEmitter {
    *  Live real-time completions add to it; verifyFromLogs rebuilds it authoritatively
    *  from every logbackup. See accrueRep / computeRepBar. */
   private repWitnessed = new Map<string, { scope: string; sum: number }>();
+  /** missionIds already credited to repWitnessed — see accrueForCompletion. Persisted, because
+   *  the over-count it prevents is itself persisted. */
+  private repAccruedMissionIds = new Set<string>();
   /** giver -> rank index -> the ITEMS that rank's missions hand over. Lazily built per giver
    *  (scanning every mission for each view build would be silly) and dropped on a new dataset. */
   private rankRewards = new Map<string, Map<number, string[]>>();
@@ -1059,10 +1124,24 @@ export class MissionTracker extends EventEmitter {
       if (title && !this.completion.title) this.completion.title = title;
       return;
     }
-    // Real-time completion (not startup replay, and past the idempotency guard so it
-    // runs once): fold its rep gain into the giver's witnessed total for the rep bar.
+    // Real-time completion: fold its rep gain into the giver's witnessed total for the rep bar.
     // The current session is always the current patch (post-4.8-wipe), so no window check.
-    this.accrueFromTitle(title ?? info?.title ?? null);
+    //
+    // 🔴 GATED ON A PERSISTED PER-MISSION SET, NOT on the guard above. Measured on Sub's real
+    // 4.9 logs (2026-08-03): every single completion reaches beginCompletion **three** times —
+    // the game logs TWO COMPLETED end events (MissionEnded and EndMission, both parsing to
+    // `kind: "end"`) plus one contractComplete. 244 end events and 122 contractComplete for 122
+    // missions, and NOT ONE mission got fewer than 3.
+    // The guard above is `this.completion`, a SINGLE slot that expires after COMPLETION_HOLD_MS,
+    // so it only absorbs repeats that arrive back-to-back with nothing in between — and Sub
+    // "routinely runs several contracts at once" (see the `end` case), which is exactly the
+    // interleaving that lets a repeat through. `repWitnessed` is PERSISTED while that slot is
+    // in-memory, so every leak is permanent and they compound for the life of the profile: his
+    // Battaglia standing read 144,200 (Prestige 3) where a from-scratch verify computes 24,700
+    // (Prestige 1) off the same logs.
+    // Rep is the one thing here that must be exactly-once, so it gets its own idempotency —
+    // the same shape as completedMissionIds, which already existed for precisely this reason.
+    this.accrueForCompletion(missionId, title ?? info?.title ?? null);
     this.forcedBlueprints = null; // a new completion never inherits the last one's dev override
     this.completion = {
       missionId,
@@ -1199,15 +1278,15 @@ export class MissionTracker extends EventEmitter {
     let receipts = 0;
     let skipped = 0;
     for (const p of paths) {
-      let text: string;
-      try {
-        text = readFileSync(p, "utf8");
-      } catch {
-        continue;
-      }
+      // 🔑 HEADER FIRST, as its own 4 KB read, then STREAM the body — never the whole file.
+      // Reading each log with readFileSync().split() OOM-killed the sidecar at V8's 4 GB heap
+      // limit on Sub's 291-file / 1.2 GB set (see readLines). Reading the header separately also
+      // means a wrong-environment log costs one page instead of its whole size.
+      const head = readHead(p);
+      if (!head) continue; // unreadable
       // Environment tag lives in the header (--envtag='PUB' / Environment: PUB).
       // Anything not PUB is a test environment — skip it.
-      const env = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(text.slice(0, 4000));
+      const env = /--envtag=.?([A-Za-z0-9_]+)|Environment:\s*([A-Za-z0-9_]+)/.exec(head);
       const tag = (env?.[1] || env?.[2] || "").toUpperCase();
       if (tag && tag !== "PUB") {
         skipped++;
@@ -1216,10 +1295,10 @@ export class MissionTracker extends EventEmitter {
       // Version family (major.minor) from the header — the 4.8 wipe means only 4.8+
       // completions count toward the rep bar (blueprints are unaffected, so they still
       // count from every PUB log regardless of family).
-      const famM = /(?:Product|File)Version:\s*(\d+\.\d+)/.exec(text.slice(0, 4000));
+      const famM = /(?:Product|File)Version:\s*(\d+\.\d+)/.exec(head);
       const inWindow = familyAtLeast48(famM?.[1] ?? null);
       files++;
-      for (const line of text.split(/\r?\n/)) {
+      for (const line of readLines(p)) {
         // Cheap prefilter: blueprint receipts, contract completions, awards — plus the
         // mission markers/accepts we mine for rank inference.
         if (!line.includes("Received Blueprint:") && !line.includes("Contract Complete:") && !line.includes("Awarded ")
@@ -1289,9 +1368,17 @@ export class MissionTracker extends EventEmitter {
     // Rebuilt (not incremented) so a re-verify can't double-count; only 4.8+ completions
     // count (the wipe reset earlier rep). Resolves each completion by title via the
     // comprehensive rep-title index (covers non-pool missions too).
+    // 🔑 Deduped by missionId as well as cleared. The log holds THREE completion signals per
+    // mission (two COMPLETED end events plus a contractComplete — measured, see
+    // beginCompletion), and only `contractComplete` carries a title, so a title-keyed loop
+    // happens to see one per mission today. That is luck, not a rule: the moment anything else
+    // starts contributing titled completions this loop would multiply them. Recovering a profile
+    // that has been over-counted is the whole point of this rebuild, so it must not be able to
+    // reintroduce the same fault.
     this.repWitnessed.clear();
+    this.repAccruedMissionIds.clear();
     for (const c of completions) {
-      if (c.inWindow) this.accrueFromTitle(c.title);
+      if (c.inWindow) this.accrueForCompletion(c.missionId, c.title);
     }
     this.saveState();
     this.emit("change");
@@ -1497,13 +1584,40 @@ export class MissionTracker extends EventEmitter {
    *  computeRepBar looks it up). NOT idempotent — callers gate to genuinely-new completions
    *  (a real-time completion, or a from-scratch verifyFromLogs rebuild) so nothing is
    *  double-counted. Unknown/ambiguous titles are skipped. */
-  private accrueFromTitle(title: string | null | undefined): void {
-    if (!title) return;
+  /** Returns whether anything was actually credited — which is what decides if the completion
+   *  counts as spent (see accrueForCompletion). */
+  private accrueFromTitle(title: string | null | undefined): boolean {
+    if (!title) return false;
     const e = this.repTitleIndex.get(normScreenTitle(title));
-    if (!e) return;
+    if (!e) return false;
     const cur = this.repWitnessed.get(e.giver);
     if (cur && cur.scope === e.scope) cur.sum += e.amount;
     else this.repWitnessed.set(e.giver, { scope: e.scope, sum: (cur?.sum ?? 0) + e.amount });
+    return true;
+  }
+
+  /** Exactly-once rep accrual for one completed mission.
+   *
+   *  🔑 One MISSION can raise three completion signals (see beginCompletion), so "has this
+   *  completion already been credited" has to be answered by missionId against a PERSISTED set —
+   *  not by whatever card happens to be on screen. Without that, every leaked repeat is a
+   *  permanent over-count that survives every restart, and standing drifts upward forever.
+   *  The set rides along with repWitnessed in both directions (persist, clear-on-verify) so the
+   *  two can never disagree about what has been counted. */
+  private accrueForCompletion(missionId: string | null, title: string | null | undefined): void {
+    // No missionId means this credit could never be recognised as already-counted, and an
+    // uncountable credit is how the over-count happened in the first place. Skipping it costs
+    // effectively nothing — measured over Sub's 291 PUB logs, requiring an id changes no giver's
+    // total — and the estimate is documented as a lower bound anyway.
+    if (!missionId) return;
+    if (this.repAccruedMissionIds.has(missionId)) return;
+    // 🔑 Record the id only if something was CREDITED. Marking it up-front looks equivalent and
+    // is not: a completion whose title the index cannot resolve YET — no dataset loaded, patch not
+    // detected, an ambiguous title — would be marked spent and could never be credited afterwards.
+    // Caught by running the real verifyFromLogs into a throwaway profile with no dataset: 388
+    // completions "spent", every giver total zero, which is indistinguishable from the recovery
+    // simply not working — i.e. exactly the symptom this fix exists to remove.
+    if (this.accrueFromTitle(title)) this.repAccruedMissionIds.add(missionId);
   }
 
   /** Per-hour aUEC + rep for the idle screen, computed from the PERSISTED completion history
@@ -1648,6 +1762,23 @@ export class MissionTracker extends EventEmitter {
       intro: missions.filter((m) => m.rank == null).sort((a, b) => a.title.localeCompare(b.title)),
       rewards,
     };
+  }
+
+  /** Every giver's witnessed standing, and how many completions it was built from.
+   *
+   *  🔑 Exists because "my standing says Prestige 3 and I'm not" took a full log audit to pin
+   *  down, and the two numbers that would have answered it in seconds — the stored sum and the
+   *  count of completions behind it — were not visible anywhere. A sum wildly out of proportion
+   *  to the count is the signature of an accrual leak; without the count, the sum alone tells
+   *  you nothing. Surfaced through Copy diagnostics so a user can paste it. */
+  repDiagnostics(): { creditedCompletions: number; givers: { giver: string; scope: string; sum: number; standing: string | null }[] } {
+    const givers = [...this.repWitnessed.entries()]
+      .map(([giver, v]) => ({
+        giver, scope: v.scope, sum: v.sum,
+        standing: repLadderPosition(this.repScopes[v.scope], v.sum)?.standing ?? null,
+      }))
+      .sort((a, b) => b.sum - a.sum);
+    return { creditedCompletions: this.repAccruedMissionIds.size, givers };
   }
 
   /** Index pooled, titled missions by normalized title so a marker-less accept can
@@ -2094,7 +2225,14 @@ export class MissionTracker extends EventEmitter {
       completed: holdActive || (effectiveId ? this.completedMissionIds.has(effectiveId) : false),
       pools,
       totals: { owned, total },
-      collectedTotal: this.observed.size + [...this.overrides.values()].filter(Boolean).length,
+      // 🔑 The SAME set the site sync uploads, so the widget and subliminal.gg can never disagree.
+      // This used to be `observed.size + overrides(true).length`, which counted only two of the
+      // FOUR ownership sources — it silently dropped starter-gear defaults (8 items) and every
+      // fabricator-confirmed tick. Sub read 169 in the widget against 178 on the site and the
+      // natural conclusion was that sync was broken. Counting NAMES against the site's UUIDs was
+      // the second half of the same mismatch (harmless today — no name maps to two UUIDs — but
+      // it was one dataset change away from drifting again).
+      collectedTotal: this.collectedItemsWithDates().length,
       recentMissions: this.recentMissions(),
       recentBlueprints: this.recentBlueprints(),
       earnings: this.earningRates(),
@@ -2138,6 +2276,7 @@ export class MissionTracker extends EventEmitter {
       this.fabOwned = new Set(data.fabOwned ?? []);
       this.inferredRank = new Map(Object.entries(data.inferredRank ?? {}));
       this.repWitnessed = new Map(Object.entries(data.repWitnessed ?? {}));
+      this.repAccruedMissionIds = new Set(data.repAccruedMissionIds ?? []);
       this.completedTitles = new Map(Object.entries(data.completedTitles ?? {}));
       this.completedKeys = new Map(Object.entries(data.completedKeys ?? {}));
       this.missionHistory = (data.missionHistory ?? []).slice(0, MISSION_HISTORY_MAX);
@@ -2154,6 +2293,7 @@ export class MissionTracker extends EventEmitter {
       fabOwned: [...this.fabOwned],
       inferredRank: Object.fromEntries(this.inferredRank),
       repWitnessed: Object.fromEntries(this.repWitnessed),
+      repAccruedMissionIds: [...this.repAccruedMissionIds],
       completedTitles: Object.fromEntries(this.completedTitles),
       completedKeys: Object.fromEntries(this.completedKeys),
       observedAt: Object.fromEntries(this.observedAt),

@@ -89,6 +89,25 @@
   input[type=text] { width: 100%; background: var(--field); border: 1px solid var(--line); color: var(--text); padding: 10px 12px; font-family: var(--font-body); font-size: 14px; border-radius: var(--radius-sm); transition: border-color .15s; }
   input[type=text]::placeholder { color: var(--outline); }
   input[type=text]:focus { outline: none; border-color: var(--amber); }
+  /* 🔑 Number inputs had NO rule at all — only [type=text] and [type=range] were ever styled — so
+     the pop-up durations rendered as raw platform controls: white field, system font, native
+     spinners, sitting in the middle of a dark panel (Sub, 2026-08-03).
+     `color-scheme: dark` is the part that matters and the part that is easy to miss: the up/down
+     spinner is drawn by the browser and cannot be recoloured with normal properties, so on a dark
+     field its arrows come out dark-on-dark and effectively invisible. That switch is what makes
+     the browser draw them light. The spinners are kept deliberately — nudging the number up and
+     down is how the control is used. */
+  input[type=number] { width: 78px; background: var(--field); border: 1px solid var(--line); color: var(--text);
+    padding: 10px 12px; font-family: var(--font-body); font-size: 14px; border-radius: var(--radius-sm);
+    transition: border-color .15s; color-scheme: dark; accent-color: var(--amber); }
+  input[type=number]:focus { outline: none; border-color: var(--amber); }
+  /* Canvas-calibration control groups: a row of nudge buttons plus its readout, sitting UNDER the
+     row's label rather than squeezed to the right of it — there are nine controls between the two
+     rows and they do not fit beside a label at any sensible window width. */
+  .calgrp { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .calgrp button { min-width: 34px; }
+  .calval { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);
+    min-width: 62px; text-align: center; }
   input[readonly] { color: var(--muted); }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .row .ship { font-weight: 600; min-width: 150px; }
@@ -265,6 +284,7 @@
       setInteractHotkey: call("setInteractHotkey"), setMoveHotkey: call("setMoveHotkey"),
       setFabClaimHotkey: call("setFabClaimHotkey"),
       setHoldMode: call("setHoldMode"), resetLayout: call("resetLayout"),
+      canvasCalibration: call("canvasCalibration"),
       metrics: call("metrics"), openDataFolder: call("openDataFolder"),
       isElevated: call("isElevated"), restartAsAdmin: call("restartAsAdmin"),
       getOverlayEnabled: call("getOverlayEnabled"), setOverlayEnabled: call("setOverlayEnabled"),
@@ -481,6 +501,13 @@
       <div class="hint" id="webViewHotkeyHint"></div>
     </div>
     <div class="hkrow">
+      <span class="hklabel">Journal</span>
+      <button type="button" id="notepadHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('notepad')">Alt + F3</button>
+      <button type="button" class="hkclear" id="notepadHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('notepad')">✕</button>
+      <input type="hidden" id="notepadHotkey" />
+      <div class="hint" id="notepadHotkeyHint"></div>
+    </div>
+    <div class="hkrow">
       <span class="hklabel">Mining Scanner</span>
       <button type="button" id="miningHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('mining')">Shift + F3</button>
       <button type="button" class="hkclear" id="miningHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('mining')">✕</button>
@@ -515,18 +542,66 @@
       <input type="hidden" id="moveHotkey" />
       <div class="hint" id="moveHotkeyHint"></div>
     </div>
+    <!-- Moved here from "Performance & fixes": this whole block exists to explain why the hotkeys
+         above don't reach the game, so it belongs beside them rather than in a card nobody with
+         that problem would think to open. -->
+    <div class="setrow">
+      <span class="hklabel" style="flex:1; color:var(--muted); font-size:13px;">Hotkeys work on the desktop but not in-game?</span>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Do your hotkeys work on the desktop but not while Star Citizen is focused? The game runs as admin (anti-cheat), so another app's hotkeys only reach it while focused if that app is ALSO admin.</span></span>
+    </div>
+    <div class="hint" id="adminOk" style="display:none; color:#63d6a0">✓ Running as administrator — hotkeys work while the game is focused.</div>
+    <button type="button" id="adminBtn" class="amber" style="display:none" onclick="restartAsAdmin()">Restart as administrator</button>
+    <div class="hint" id="adminHint" style="display:none">Relaunches elevated (a Windows UAC prompt — click Yes). Only affects hotkeys while the game is focused. Tip: shortcut → Properties → Compatibility → Run as administrator to skip this each launch.</div>
+  </div>
+
+  <!-- "Performance & fixes" had grown into a drawer of seven unrelated things: the overlay master
+       switch, a performance meter, two GPU workarounds, an explanation of why hotkeys don't reach
+       the game, the canvas calibration and a layout reset. Split by the question the user is
+       actually asking, and the calibration gets its own heading with its controls UNDERNEATH
+       rather than crammed to the right of a label (Sub, 2026-08-03). The admin/hotkey block moved
+       into the Hotkeys card, where someone with that problem is already looking. -->
+
+  <!-- Canvas calibration. The same two controls arrange mode offers, mirrored here because this is
+       a normal OS window that the calibration cannot move: if the canvas is far enough out of place,
+       or scaled far enough down, the on-canvas copy can itself be off-screen. Hidden unless the
+       shell exposes the bridge (an older app, or a browser source). -->
+  <div class="card" id="canvasCalRow" style="display:none">
+    <div class="label">Canvas alignment &amp; scale</div>
+    <div class="hint" style="margin-top:0">
+      For monitors running at <strong>different Windows scaling levels</strong>. If the overlay lands
+      in the wrong place, or at the wrong size, adjust it here. Turn on arrange mode over the game —
+      the dashed outline shows where the overlay thinks your main monitor is — then size and move it
+      until that outline matches your real monitor edges. Leave it at 0, 0 &middot; 100% if it
+      already lines up.
+    </div>
+    <div class="setrow">
+      <span class="hklabel" style="flex:1">Position</span>
+      <div class="calgrp">
+        <button type="button" data-cal-nx="-10" title="Move left">←</button>
+        <button type="button" data-cal-nx="10" title="Move right">→</button>
+        <button type="button" data-cal-ny="-10" title="Move up">↑</button>
+        <button type="button" data-cal-ny="10" title="Move down">↓</button>
+        <span class="calval" id="canvasCalOff">0, 0</span>
+      </div>
+    </div>
+    <div class="setrow">
+      <span class="hklabel" style="flex:1">Size</span>
+      <div class="calgrp">
+        <button type="button" data-cal-nz="-5" title="Shrink">−</button>
+        <button type="button" data-cal-nz="5" title="Grow">+</button>
+        <span class="calval" id="canvasCalScale">100%</span>
+      </div>
+    </div>
+    <div class="setrow">
+      <button type="button" id="canvasCalReset" style="width:100%">Reset to 0, 0 &middot; 100%</button>
+    </div>
+    <div class="hint">Hold <strong>Shift</strong> for finer steps. Applies immediately.</div>
   </div>
 
   <div class="card">
-    <div class="label">Performance &amp; fixes</div>
+    <div class="label">Graphics &amp; performance</div>
     <label class="opt" id="overlayShowRow" style="display:none"><input type="checkbox" id="overlayShow" /> Show the in-game overlay</label>
     <div class="hint" id="overlayShowHint" style="display:none">Hides the on-screen overlay while mission tracking and sync keep running &mdash; handy if you just want it out of the way. <strong>If you are turning this off because the overlay is crashing your game, please report it</strong> &mdash; that is a bug worth fixing, not something to work around.</div>
-    <div class="hkrow">
-      <span class="hklabel">Performance</span>
-      <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
-      <div class="hint">What this app is costing your PC right now. Widgets that pull live content (Twitch chat, a web page) cost far more than the text-only ones.</div>
-      <div id="perfOut"></div>
-    </div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="amdCompat" /> AMD compatibility mode</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">On an AMD GPU and the game crashes (Vulkan &ldquo;device lost&rdquo;) when the overlay is up? Turn this on — it forces the overlay off the GPU with a simpler no-blur panel. Requires restarting the app.</span></span>
@@ -535,13 +610,16 @@
       <label class="opt"><input type="checkbox" id="hwAccel" /> Use GPU hardware acceleration</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Off by default — the overlay renders on the CPU, avoiding crashes some GPUs hit. Turn on only if you have GPU headroom and no crashes. Requires restarting the app.</span></span>
     </div>
-    <div class="setrow">
-      <span class="hklabel" style="flex:1; color:var(--muted); font-size:13px;">Hotkeys work on the desktop but not in-game?</span>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Do your hotkeys work on the desktop but not while Star Citizen is focused? The game runs as admin (anti-cheat), so another app's hotkeys only reach it while focused if that app is ALSO admin.</span></span>
+    <div class="hkrow">
+      <span class="hklabel">What this is costing your PC</span>
+      <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
+      <div class="hint">Widgets that pull live content (Twitch chat, a web page) cost far more than the text-only ones.</div>
+      <div id="perfOut"></div>
     </div>
-    <div class="hint" id="adminOk" style="display:none; color:#63d6a0">✓ Running as administrator — hotkeys work while the game is focused.</div>
-    <button type="button" id="adminBtn" class="amber" style="display:none" onclick="restartAsAdmin()">Restart as administrator</button>
-    <div class="hint" id="adminHint" style="display:none">Relaunches elevated (a Windows UAC prompt — click Yes). Only affects hotkeys while the game is focused. Tip: shortcut → Properties → Compatibility → Run as administrator to skip this each launch.</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Recover</div>
     <div class="setrow">
       <button type="button" class="danger" style="width:100%" onclick="onResetLayout()">Reset overlay layout (recover lost widgets)</button>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">If a widget ends up off-screen (e.g. dragged onto another monitor), this returns every widget to its default on-screen spot.</span></span>
@@ -566,6 +644,26 @@
       white-space:pre-wrap; font-size:11px; line-height:1.5; background:rgba(0,0,0,0.28);
       border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--muted)"></pre>
   </div>
+  <!-- How long the two pop-up widgets stay up. Argante asked for this: a notifier that fades on
+       a fixed timer is either too quick to read or too slow to get out of the way, and which one
+       depends entirely on whether you're in a fight. Lives in Settings rather than each widget's
+       cog because SC Feed's cog is already the alert-sound panel, and a notifier you're trying to
+       slow down is by definition one that keeps vanishing before you can open its cog. -->
+  <div class="card">
+    <div class="label">Pop-up duration</div>
+    <div class="setrow">
+      <label class="opt" for="scFeedShowSeconds">SC Feed story</label>
+      <input type="number" id="scFeedShowSeconds" min="3" max="60" step="1" />
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Seconds an SC Feed story stays on screen before it fades. 3–60.</span></span>
+    </div>
+    <div class="setrow">
+      <label class="opt" for="unlockAlertShowSeconds">Unlock Alert card</label>
+      <input type="number" id="unlockAlertShowSeconds" min="3" max="60" step="1" />
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Seconds a blueprint-unlock card stays on screen before it fades. 3–60.</span></span>
+    </div>
+    <div class="hint">Takes effect the next time each widget loads.</div>
+  </div>
+
   <!-- ══════════ TIER 3 ══════════
        "More" used to be a junk drawer: browser sources, promos, diagnostics and About all in one
        heap. Diagnostics moved up to Performance & fixes where it belongs, promos got their own
@@ -773,6 +871,8 @@
     document.getElementById("fabClaim").checked = !!cfg.fabClaim;
     document.getElementById("missionOcr").checked = !!cfg.missionOcr;
     document.getElementById("miningAutoShow").checked = !!cfg.miningAutoShow;
+    document.getElementById("scFeedShowSeconds").value = String(cfg.scFeedShowSeconds ?? 12);
+    document.getElementById("unlockAlertShowSeconds").value = String(cfg.unlockAlertShowSeconds ?? 8);
     document.getElementById("shareLogs").checked = !!cfg.shareLogs;
     document.getElementById("theme").value = cfg.theme || "mobiglas";
     // Manufacturer skins are a Twitch-sub perk. Entitlement comes from the server (cfg.premium,
@@ -851,6 +951,14 @@
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done).catch(done); else done();
   });
 
+  // A number input can be emptied or spun to 0, and either would make a notifier vanish on
+  // arrival with no obvious way back. Clamped here AND server-side — the server has to hold the
+  // line for a hand-edited config.json, this one keeps the UI from ever showing a bad value.
+  function showSecs(id, fallback) {
+    const v = Math.round(Number(document.getElementById(id).value));
+    return Number.isFinite(v) && v > 0 ? Math.max(3, Math.min(60, v)) : fallback;
+  }
+
   async function save() {
     cfg.logPath = document.getElementById("logPath").value.trim();
     cfg.autoSwitch = document.getElementById("autoSwitch").checked;
@@ -868,6 +976,8 @@
       fabClaim: document.getElementById("fabClaim").checked,
       missionOcr: document.getElementById("missionOcr").checked,
       miningAutoShow: document.getElementById("miningAutoShow").checked,
+      scFeedShowSeconds: showSecs("scFeedShowSeconds", 12),
+      unlockAlertShowSeconds: showSecs("unlockAlertShowSeconds", 8),
       shareLogs: document.getElementById("shareLogs").checked,
       theme: document.getElementById("theme").value,
     };
@@ -928,6 +1038,49 @@
     if (window.overlayConfig && window.overlayConfig.resetLayout) await window.overlayConfig.resetLayout();
   }
 
+  // ── canvas calibration (mixed-DPI) ───────────────────────────────────────
+  // The shell owns this, not the form: it re-fits the overlay window and persists through the
+  // sidecar, so it must NOT go through save() — that would round-trip a stale copy of the value.
+  // Mirrors arrange mode's control exactly; whichever surface you use, the other reads the same
+  // numbers back the next time it opens.
+  (function () {
+    const row = document.getElementById("canvasCalRow");
+    const api = () => (window.overlayConfig && window.overlayConfig.canvasCalibration) || null;
+    if (!row || !api()) return; // older shell / browser source → leave the row hidden
+    let cal = { x: 0, y: 0, scale: 1 };
+    const show = () => {
+      document.getElementById("canvasCalOff").textContent = cal.x + ", " + cal.y;
+      document.getElementById("canvasCalScale").textContent = Math.round(cal.scale * 100) + "%";
+    };
+    const push = async () => {
+      try { cal = (await api()(cal)) || cal; } catch { /* shell gone */ }
+      show();
+    };
+    (async () => {
+      let cur = null;
+      try { cur = await api()(); } catch { /* shell gone */ }
+      if (!cur) return; // no answer → this build can't calibrate; don't offer a control that lies
+      cal = cur; row.style.display = ""; show();
+    })();
+    row.addEventListener("click", (e) => {
+      const b = e.target instanceof Element ? e.target.closest("button") : null;
+      if (!b || !row.contains(b)) return;
+      if (b.id === "canvasCalReset") { cal = { x: 0, y: 0, scale: 1 }; void push(); return; }
+      const nz = Number(b.dataset.calNz || 0);
+      if (nz) {
+        const pct = Math.round(cal.scale * 100) + Math.sign(nz) * (e.shiftKey ? 1 : 5);
+        cal = { x: cal.x, y: cal.y, scale: Math.max(0.5, Math.min(3, pct / 100)) };
+        void push();
+        return;
+      }
+      const step = e.shiftKey ? 1 : 10;
+      const nx = Number(b.dataset.calNx || 0), ny = Number(b.dataset.calNy || 0);
+      if (!nx && !ny) return;
+      cal = { x: cal.x + Math.sign(nx) * step, y: cal.y + Math.sign(ny) * step, scale: cal.scale };
+      void push();
+    });
+  })();
+
   // ── configurable hotkeys: click-to-capture, live-applied ─────────────────
   // Two hotkeys share one capture flow: the overlay show/hide toggle and the
   // binding-chart PNG toggle. Each names its input/button/hint els + live-apply fn.
@@ -940,6 +1093,8 @@
                apply: (a) => window.overlayConfig && window.overlayConfig.setMiningHotkey && window.overlayConfig.setMiningHotkey(a) },
     webView: { input: "webViewHotkey", btn: "webViewHotkeyBtn", hint: "webViewHotkeyHint", def: "Ctrl+Shift+F3",
                apply: (a) => window.overlayConfig && window.overlayConfig.setWebViewHotkey && window.overlayConfig.setWebViewHotkey(a) },
+    notepad: { input: "notepadHotkey", btn: "notepadHotkeyBtn", hint: "notepadHotkeyHint", def: "Alt+F3",
+               apply: (a) => window.overlayConfig && window.overlayConfig.setNotepadHotkey && window.overlayConfig.setNotepadHotkey(a) },
     interact: { input: "interactHotkey", btn: "interactHotkeyBtn", hint: "interactHotkeyHint", def: "F", bare: true,
                apply: (a) => window.overlayConfig && window.overlayConfig.setInteractHotkey && window.overlayConfig.setInteractHotkey(a) },
     move: { input: "moveHotkey", btn: "moveHotkeyBtn", hint: "moveHotkeyHint", def: "Ctrl+Alt+M",

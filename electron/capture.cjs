@@ -149,39 +149,112 @@ function hasRender(image) {
 // except that the pill is translucent, and a pin blended halfway into dark space is a REAL scan
 // (measured 50% blend: 99,105,64). minB/minG sit just under that, still far above the HUD yellow
 // (B 25–43) that has to stay out.
+// 🔑 NO ABSOLUTE COLOUR. The pin's colour is the SHIP'S HUD colour, and that changes with the
+// ship the player is flying (Sub, 2026-08-03) — so the old yellow-green band, tuned to one frame
+// from one ship, could only ever work for that ship. Every other HUD read `confirmed: false`,
+// which silently made pure debris un-announceable: debris has no rock-table match, so the glyph
+// is the ONLY evidence it has, and a glyph that never confirms means no debris call-out ever.
+// That is the "2,000 and 6,000 are never called out" report, and it was never about those values.
+//
+// The invariant that survives a HUD recolour: THE PIN IS DRAWN IN THE SAME COLOUR AS THE NUMBER
+// BESIDE IT. Both are the same HUD layer. So the number's own pixels calibrate the match for that
+// frame, and the test becomes "is there ink beside the number that looks like the number's ink" —
+// true for a yellow HUD, a blue one, a white one, and any future one.
 const GLYPH = {
-  minB: 60,        // above HUD yellow (25–43), under a pin blended 50% into space (64)
-  minG: 85,        // the glyph is bright; dark space behind the pill is not
-  maxGR: 60,       // green and red stay close (yellow-green), unlike a cyan/blue HUD element
-  minGR: -25,      // ...in either direction; translucency shifts this around
-  // ...and it must still BE yellow-green. Without this, white (255,255,255) passes every test
-  // above — any bright white HUD element beside a number would read as a scan glyph. The pin
-  // keeps blue well below red/green (190,200 vs 113 = 77 clear); white has no gap at all.
-  minYellow: 30,
-  minFraction: 0.04, // the pin is ~15×22 in a ~34×29 box; even heavily blended it clears this
+  /** Fraction of the search box that must be pin-coloured ink. The pin is ~15×22 in a ~34×29
+   *  box (~33%), so this stays generous for a heavily blended one. */
+  minFraction: 0.04,
+  /** How close a pixel's HUE must be to the number's ink, as a distance between brightness-
+   *  normalised RGB triplets (0 = identical hue, ~1.4 = opposite). Generous because the pin is
+   *  often semi-transparent over space, which desaturates it toward the background. */
+  maxHueDist: 0.22,
+  /** A hit must also be BRIGHT — at least this fraction of the NUMBER's own ink luminance — so
+   *  the dark space showing through a translucent pin doesn't count as ink just for having the
+   *  right hue. Deliberately a fraction of the ink and NOT a step above the sampled background:
+   *  a tight OCR bbox can be almost pure ink, making background ~= ink, and a floor derived from
+   *  that gap then demands the pin be as bright as the number — which a translucent pin never is.
+   *  0.35 clears a pin blended 50% into space (measured ~52% of ink) with margin. */
+  minLumRatio: 0.35,
+  /** Below this the text sample is too dim/flat to trust as a reference (the number itself was
+   *  probably not in the box we were handed) — see the fallback in findScanGlyph. */
+  minInkLum: 40,
 };
+
+/** Brightness-normalised RGB — strips intensity, keeps hue. A dim and a bright version of the
+ *  same HUD colour normalise to the same triplet, which is the whole point: the pin is routinely
+ *  dimmer than the number because space shows through it. */
+function chroma(r, g, b) {
+  const s = r + g + b;
+  return s > 0 ? [r / s, g / s, b / s] : [0, 0, 0];
+}
+function chromaDist(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) * 1.732; // scaled so ~1 is "very different"
+}
+
+/** Sample a rect and derive its INK: the colour of the bright minority (glyph strokes) rather
+ *  than the dark majority (background). Percentile, not a fixed threshold, so it self-scales to
+ *  whatever the HUD's brightness is. */
+function sampleInk(bmp, w, x0, y0, x1, y1) {
+  const lums = [];
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      lums.push(0.114 * bmp[i] + 0.587 * bmp[i + 1] + 0.299 * bmp[i + 2]);
+    }
+  }
+  if (!lums.length) return null;
+  const sorted = lums.slice().sort((a, b) => a - b);
+  // Top quartile = the strokes. Text is a minority of its own bounding box, so a mean over the
+  // whole box would return the BACKGROUND and every comparison after it would be meaningless.
+  const cut = sorted[Math.floor(sorted.length * 0.75)];
+  const bg = sorted[Math.floor(sorted.length * 0.25)];
+  let n = 0, sr = 0, sg = 0, sb = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      const l = 0.114 * bmp[i] + 0.587 * bmp[i + 1] + 0.299 * bmp[i + 2];
+      if (l >= cut) { n++; sr += bmp[i + 2]; sg += bmp[i + 1]; sb += bmp[i]; }
+    }
+  }
+  if (!n) return null;
+  const mean = [Math.round(sr / n), Math.round(sg / n), Math.round(sb / n)];
+  return { mean, chroma: chroma(mean[0], mean[1], mean[2]), lum: cut, bg };
+}
 
 /** Sample the box beside the signature number and decide whether the scan glyph is in it.
  *  Returns the measurements too — they go in the log so the thresholds can be tuned from real
  *  scans rather than guessed at a second time. */
-function findScanGlyph(image, rect) {
+function findScanGlyph(image, rect, textRect) {
   const { width: w, height: h } = image.getSize();
-  const x0 = Math.max(0, Math.min(Math.round(rect.x), w - 1));
-  const y0 = Math.max(0, Math.min(Math.round(rect.y), h - 1));
-  const x1 = Math.max(x0, Math.min(Math.round(rect.x + rect.w), w));
-  const y1 = Math.max(y0, Math.min(Math.round(rect.y + rect.h), h));
+  const clamp = (r) => {
+    const x0 = Math.max(0, Math.min(Math.round(r.x), w - 1));
+    const y0 = Math.max(0, Math.min(Math.round(r.y), h - 1));
+    return [x0, y0, Math.max(x0, Math.min(Math.round(r.x + r.w), w)), Math.max(y0, Math.min(Math.round(r.y + r.h), h))];
+  };
+  const [x0, y0, x1, y1] = clamp(rect);
   const total = (x1 - x0) * (y1 - y0);
-  if (total <= 0) return { seen: false, fraction: 0, total: 0, mean: null };
+  if (total <= 0) return { seen: false, fraction: 0, total: 0, mean: null, ref: null, why: "empty search box" };
   const bmp = image.getBitmap(); // BGRA, 4 bytes/pixel
+
+  // The reference is the NUMBER's own ink — same HUD layer, therefore same colour, whatever ship
+  // the player is in. Without a usable text rect there is nothing to calibrate against and we say
+  // so rather than falling back to a guess: a wrong absolute colour is exactly the bug being fixed.
+  const ink = textRect ? sampleInk(bmp, w, ...clamp(textRect)) : null;
+  if (!ink || ink.lum < GLYPH.minInkLum) {
+    return { seen: false, fraction: 0, total, mean: null, ref: null,
+             why: ink ? `text ink too dim to calibrate (lum ${Math.round(ink.lum)})` : "no text rect to calibrate from" };
+  }
+  // A hit must match the number's HUE and be bright relative to the number's own background —
+  // hue alone would accept the dark space seen through a translucent pin.
+  const lumFloor = ink.lum * GLYPH.minLumRatio;
   let hits = 0, sr = 0, sg = 0, sb = 0, hr = 0, hg = 0, hb = 0;
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
       const i = (y * w + x) * 4;
       const b = bmp[i], g = bmp[i + 1], r = bmp[i + 2];
       sr += r; sg += g; sb += b;
-      const gr = g - r;
-      if (b >= GLYPH.minB && g >= GLYPH.minG && gr <= GLYPH.maxGR && gr >= GLYPH.minGR
-          && Math.min(r, g) - b >= GLYPH.minYellow) {
+      const lum = 0.114 * b + 0.587 * g + 0.299 * r;
+      if (lum >= lumFloor && chromaDist(chroma(r, g, b), ink.chroma) <= GLYPH.maxHueDist) {
         hits++; hr += r; hg += g; hb += b;
       }
     }
@@ -193,6 +266,10 @@ function findScanGlyph(image, rect) {
     total,
     mean: [Math.round(sr / total), Math.round(sg / total), Math.round(sb / total)],
     hitMean: hits ? [Math.round(hr / hits), Math.round(hg / hits), Math.round(hb / hits)] : null,
+    // Logged so a HUD that still fails can be diagnosed from a user's sidecar.log without
+    // guessing — this is what the old absolute thresholds could never tell us.
+    ref: { mean: ink.mean, lum: Math.round(ink.lum), bg: Math.round(ink.bg), lumFloor: Math.round(lumFloor) },
+    why: `${hits}/${total} px matched the number's ink`,
   };
 }
 
@@ -439,7 +516,20 @@ function startFabCapture({ port, configDir, onStatus }) {
       // else — and the fabricator ABOVE ALL — stays at the slow rate, because rushing a kiosk
       // risks grabbing a render mid-fade. A kiosk frame cancels fast mode outright.
       if (read.kind === "fabricator") fastUntil = 0;
-      else if (mining && read.scanHud) fastUntil = Date.now() + FAST_WINDOW_MS;
+      // 🔑 A PARSED SIGNATURE IS THE PROOF, not the HUD's wording. Fast mode used to arm only on
+      // read.scanHud — an OCR text match for "scanning / ready to scan / strong / moderate /
+      // weak". That is the mining scanner's vocabulary, and the line it comes from is USER
+      // CONFIGURABLE: a player can restyle that HUD element or switch it off entirely, and head
+      // position can carry it out of frame (Sub, in a Vulture, 2026-08-03 — the loop sat at 3s
+      // while he was actively scanning). Same mistake as the absolute glyph colour: keying on
+      // something that varies per player when a universal signal is right there.
+      //
+      // The signature number and its pin are the universal part — same place, same shape, in
+      // every ship; only the colour changes. So a frame that yielded a signature IS a frame where
+      // the player is scanning, whatever the HUD says or doesn't. scanHud is KEPT as an
+      // additional trigger because it fires on "ready to scan", i.e. slightly BEFORE the first
+      // number exists — useful when it happens to be there, never required.
+      else if (mining && (read.scanHud || typeof read.signature === "number")) fastUntil = Date.now() + FAST_WINDOW_MS;
       // Self-tuning, because this runs over a RUNNING GAME and a fixed rate is a guess about
       // someone else's PC. A tick costs a screen grab plus an OCR (~230ms on Sub's machine with
       // the warm worker, but a slower box could be several times that). Never let the loop occupy
@@ -458,7 +548,7 @@ function startFabCapture({ port, configDir, onStatus }) {
       // A mining signature: the sidecar deliberately does NOT act on it until we've checked the
       // frame for the scan glyph beside the number — it has the OCR but not the pixels.
       if (read.kind === "mineable" && typeof read.signature === "number" && read.pin) {
-        const glyph = findScanGlyph(shot, read.pin);
+        const glyph = findScanGlyph(shot, read.pin, read.text);
         try {
           // The measurements go WITH the verdict so the SIDECAR logs them. This process is a
           // detached GUI app — its stdout goes nowhere, so logging here wrote the numbers into
@@ -476,6 +566,13 @@ function startFabCapture({ port, configDir, onStatus }) {
               // knows the captured frame's dimensions — the sidecar turns it into fractions.
               raw: read.raw,
               text: read.text,
+              // The poll rate RIDES ALONG rather than getting its own channel or its own log
+              // line. capture.cjs runs in the detached GUI process, whose stdout goes nowhere —
+              // the "[fab-capture] poll 900ms" line below has never reached a file anyone can
+              // read, which is why "it feels slower in this ship" could not be checked. Now every
+              // scan says what cadence it was polling at, in sidecar.log, next to its verdict.
+              pollMs: rate,
+              scanHud: read.scanHud === true,
               frame: { w: shot.getSize().width, h: shot.getSize().height },
             }),
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

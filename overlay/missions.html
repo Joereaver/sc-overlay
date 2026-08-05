@@ -522,8 +522,13 @@
   .gtab.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.22); border-color: var(--cyan); }
   .gtab.gdetach { flex: none; letter-spacing: 0; font-size: 11px; padding: 4px 7px; }
 
-  /* Drop target: the BAR you're dragging onto lights up — the thing you're actually aiming at. */
-  .widget.droptarget .whead::after { content: "GROUP HERE"; position: absolute; inset: 0;
+  /* Drop target: the BAR you're dragging onto lights up — the thing you're actually aiming at.
+     🔑 `#panel.droptarget` twin REQUIRED. The Mission & BP Tracker is a LOCAL widget — it is
+     `#panel`, not `.widget` — so a `.widget.X` rule without its `#panel.X` twin silently skips the
+     one widget people aim at most. highlightDrop() was adding the class to it all along and
+     nothing matched, so dragging onto the tracker showed no GROUP HERE at all (Sub, 2026-08-03).
+     Same family as the `.grouped` / `.moving` / `.touched` twins above. */
+  .widget.droptarget .whead::after, #panel.droptarget .whead::after { content: "GROUP HERE"; position: absolute; inset: 0;
     z-index: 55; display: flex; align-items: center; justify-content: center;
     font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: 0.18em;
     color: #04141b; background: rgba(var(--accent-rgb), 0.9); border-radius: 0 0 9px 9px; }
@@ -569,6 +574,11 @@
   #hub .hub-title .dia { width: 7px; height: 7px; background: var(--cyan-bright); transform: rotate(45deg); box-shadow: 0 0 8px var(--cyan); }
   #hub .hub-sec { font-family: var(--sans); font-size: 8.5px; font-weight: 700; letter-spacing: 0.18em;
     text-transform: uppercase; color: var(--cyan-dim); padding: 9px 14px 4px; border-top: 1px solid var(--divider); margin-top: 3px; }
+  /* The ↺ column needs naming: on its own the glyph reads as REFRESH, and "refresh this widget" is
+     a plausible-sounding action that does not exist (Sub, 2026-08-03). A column header is enough —
+     the per-row tooltip already says what it does, but nobody hovers a button they think they
+     understand. Right-aligned over the buttons, and the row is display-only. */
+  #hub .hub-sec.cols { display: flex; align-items: baseline; justify-content: space-between; gap: 9px; }
   #hub .hub-row { display: flex; align-items: center; gap: 9px; padding: 6px 14px; font-family: var(--sans);
     font-size: 12.5px; color: var(--cyan-text); }
   #hub .hub-row.tog { cursor: pointer; }
@@ -696,6 +706,32 @@
     text-transform: uppercase; padding: 6px 16px; border-radius: 20px; border: 1px solid var(--cyan);
     background: rgba(var(--accent-rgb), 0.18); color: var(--cyan); }
   #arrangeDone:hover { background: var(--cyan); color: #04141b; }
+  /* Canvas nudge — sits under the arrange banner, anchored on the PRIMARY like it. */
+  /* 🔑 Centred on the PRIMARY monitor, both axes (Sub, 2026-08-03). It used to hang just under the
+     arrange banner, which put it at the top edge — the same place the dotted outline's own top edge
+     is, so the thing you are adjusting and the control you adjust it with overlapped. Dead centre
+     is the one spot that is clear of every edge you might be dragging toward. --prim-*, never vh:
+     the canvas spans every display. */
+  #arrangeScrim .nudge { pointer-events: auto; position: absolute;
+    top: calc(var(--prim-top, 0px) + var(--prim-h, 100%) / 2);
+    left: var(--prim-cx, 50%); transform: translate(-50%, -50%); display: flex; flex-direction: column;
+    align-items: center; gap: 6px; padding: 10px 14px; border-radius: 10px;
+    background: var(--panel-solid, rgba(4,20,27,0.92)); border: 1px solid var(--border);
+    font-family: var(--sans); color: var(--cyan-text);
+    /* 🔑 Capped against the PRIMARY monitor (--prim-w), never vw — the canvas spans every display,
+       so vw is the whole virtual desktop and would let this run off the monitor it centres on. */
+    max-width: calc(var(--prim-w, 100%) - 60px); }
+  #arrangeScrim .nudge .nl { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--cyan); }
+  #arrangeScrim .nudge .nh { font-size: 10px; color: var(--cyan-dim); text-align: center; }
+  /* Wraps because it carries two control groups now (move, then size) and a narrow primary would
+     otherwise push the Reset button off the edge — the same unreachable-control trap as the scan
+     box's Reset. */
+  #arrangeScrim .nrow { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; }
+  #arrangeScrim .nrow button { cursor: pointer; min-width: 30px; height: 26px; padding: 0 8px;
+    font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--cyan);
+    background: rgba(var(--accent-rgb), 0.10); border: 1px solid var(--cyan-dim); border-radius: 7px; }
+  #arrangeScrim .nrow button:hover { background: var(--cyan); color: #04141b; }
+  #arrangeScrim .nrow .nv { font-family: var(--mono); font-size: 11px; color: var(--gold); min-width: 62px; text-align: center; }
 
   /* Move/reposition mode: whole panel becomes a drag surface with a banner. */
   #moveBanner { display: none; position: absolute; inset: 0; z-index: 50; -webkit-app-region: drag; cursor: move;
@@ -1007,6 +1043,22 @@
   #whatsnew ul { list-style: none; margin: 7px 0 0; padding: 0; }
   #whatsnew li { display: flex; gap: 8px; padding: 4px 0; font-size: 12px; line-height: 1.4; color: var(--cyan-text); }
   #whatsnew li::before { content: "◆"; color: var(--cyan); font-size: 7px; flex: none; transform: translateY(4px); }
+  /* Grouped notes: a NEW / IMPROVED / FIXED heading, then label-on-its-own-line entries. The
+     label is what people scan, so every one starts at the same x — hence the note body is its
+     own column beside the ◆ rather than inline text that wraps under the marker.
+     `min-width: 0` is load-bearing: without it a long unbroken word in a description would
+     refuse to shrink and push the card wider than its own max-width. */
+  #whatsnew .wn-kind { display: flex; align-items: center; gap: 7px; margin: 11px 0 1px;
+    font-family: var(--sans); font-size: 9.5px; font-weight: 700; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--gold); }
+  #whatsnew .wn-kind::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  #whatsnew ul + .wn-kind { margin-top: 13px; }
+  #whatsnew .wn-note { flex: 1; min-width: 0; }
+  #whatsnew .wn-label { font-weight: 700; color: var(--cyan-bright); }
+  #whatsnew .wn-desc { color: var(--cyan-text); opacity: 0.82; }
+  /* A legacy note (0.1.33 and older) has no label — its description carries the whole line, so it
+     must not read as the dimmer half of a pair that isn't there. */
+  #whatsnew .wn-note.nolabel .wn-desc { opacity: 1; }
   #whatsnew .wn-foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--border); flex: none; }
   #whatsnew .wn-dismiss { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--cyan-dim); cursor: pointer; user-select: none; }
   #whatsnew .wn-dismiss input { width: 15px; height: 15px; accent-color: var(--cyan); }
@@ -1384,7 +1436,7 @@
     <!-- On/off on the left, "put it back in the middle of the screen" on the right. The reset is
          here because this menu is the only chrome you can still reach when a widget has been
          dragged off the bottom of the monitor — its own bar went with it. -->
-    <div class="hub-sec">Widgets</div>
+    <div class="hub-sec cols"><span>Widgets</span><span>Reset</span></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgBlueprint" checked /> Mission &amp; BP Tracker</label><button type="button" class="hub-reset" data-w="blueprint" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgMining" /> Mining Scanner</label><button type="button" class="hub-reset" data-w="mining" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgNotepad" /> Journal</label><button type="button" class="hub-reset" data-w="notepad" title="Recentre this widget on screen">↺</button></div>
@@ -1430,7 +1482,31 @@
   <div id="dragShield"></div>
 
   <!-- Full-screen arrange-mode indicator (shell only). Click-through except its banner. -->
-  <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div></div>
+  <div id="arrangeScrim"><div class="ab"><span class="dia"></span><span><b>Arrange mode</b> · drag widgets to move · corners to resize</span><button type="button" id="arrangeDone">Done</button></div>
+    <!-- Canvas calibration. Only meaningful on a mixed-DPI desktop, where the canvas lands in the
+         wrong PLACE and — once the PRIMARY monitor's Windows scaling is what changed — at the
+         wrong SIZE too, so the dotted outline above doesn't sit on the real monitor edges. Both
+         controls aim at that one outline: move it, then size it. Lives INSIDE the arrange scrim so
+         it appears exactly when the outline does, and is anchored on --prim-* like the banner so it
+         stays on the primary. 🔑 Also mirrored in the Settings WINDOW, because if the canvas is far
+         enough out this control can itself be off-screen — and that window is a normal OS window
+         the calibration cannot touch. -->
+    <div class="nudge" id="canvasNudge">
+      <span class="nl">Canvas not lining up with your monitor?</span>
+      <div class="nrow">
+        <button type="button" data-nx="-10" data-ny="0" title="Nudge left">←</button>
+        <button type="button" data-nx="10" data-ny="0" title="Nudge right">→</button>
+        <button type="button" data-nx="0" data-ny="-10" title="Nudge up">↑</button>
+        <button type="button" data-nx="0" data-ny="10" title="Nudge down">↓</button>
+        <span class="nv" id="nudgeVal">0, 0</span>
+        <button type="button" data-nz="-5" title="Shrink the canvas">−</button>
+        <button type="button" data-nz="5" title="Grow the canvas">+</button>
+        <span class="nv" id="nudgeScale">100%</span>
+        <button type="button" id="nudgeReset" title="Back to no offset and 100%">Reset</button>
+      </div>
+      <span class="nh">Hold Shift for finer steps. Size it with − / + until the dashed outline matches your monitor, then move it into place.</span>
+    </div>
+  </div>
 
   <!-- Every embedded widget lives here, generated from the WIDGETS registry (see buildWidgetEls).
        Each is a same-origin iframe so the embedded page's own audio/SSE/render code stays intact,
@@ -2489,12 +2565,50 @@
   function applyCanvasVars() {
     const ci = canvasInfo; if (!ci) return;
     const s = document.documentElement.style, vw = ci.vw != null ? ci.vw : (ci.px + ci.pw);
+    // The user's canvas scale (mixed-DPI calibration; 1 for everyone who doesn't need it). CSS
+    // `zoom` on the ROOT scales the whole canvas as one — the dotted primary outline, every
+    // widget's position and, measured in Electron 43, the content INSIDE each widget's iframe.
+    // 🔑 It also makes getBoundingClientRect() report zoom-adjusted px, so the regions we hand the
+    // shell for cursor hit-testing stay in window coordinates with no correction at either end.
+    s.zoom = ci.scale && ci.scale !== 1 ? String(ci.scale) : "";
     s.setProperty("--prim-top", ci.py + "px");
     s.setProperty("--prim-left", ci.px + "px");
     s.setProperty("--prim-cx", (ci.px + ci.pw / 2) + "px");
     s.setProperty("--prim-right", (vw - (ci.px + ci.pw)) + "px");
     s.setProperty("--prim-w", ci.pw + "px");
     s.setProperty("--prim-h", ci.ph + "px");
+  }
+  // Re-read the geometry and re-lay-out everything that hangs off it. The shell fires
+  // overlay:canvas-changed whenever the window is re-fitted — a monitor plugged/unplugged, a
+  // WINDOWS DISPLAY-SCALING CHANGE, or the user nudging the canvas. Without this the window
+  // resized underneath a page still laid out for the old arrangement, and the nudge appeared to
+  // do nothing at all (the window moved; --prim-* and every widget's position did not).
+  async function refreshCanvasGeometry() {
+    try { canvasInfo = await window.overlayApi?.getCanvasInfo?.() || canvasInfo; } catch { /* keep what we had */ }
+    applyCanvasVars();
+    applyAllFrames();
+    drawScanBox();
+    reportGeometry();
+  }
+  // The canvas's half of the mixed-DPI diagnostics: what this document actually LAID OUT, which
+  // only it can say. The shell posts the display/window half (see reportGeometry in main.cjs); a
+  // fault can live in either, and the pair is what tells "the window is in the wrong place" apart
+  // from "the window is right and the canvas inside it is the wrong size".
+  function reportGeometry() {
+    if (!CANVAS) return;
+    const s = getComputedStyle(document.documentElement);
+    const v = (n) => s.getPropertyValue(n).trim();
+    const body = { canvas: {
+      canvasInfo,
+      zoom: document.documentElement.style.zoom || "(none)",
+      devicePixelRatio: window.devicePixelRatio,
+      inner: { w: window.innerWidth, h: window.innerHeight },
+      // The dotted primary outline is drawn from these, so they ARE the alignment target.
+      prim: { top: v("--prim-top"), left: v("--prim-left"), w: v("--prim-w"), h: v("--prim-h"), right: v("--prim-right") },
+    } };
+    fetch("/api/overlay-geometry", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).catch(() => { /* diagnostics must never break a re-layout */ });
   }
   // ══ Canvas widgets ═══════════════════════════════════════════════════════════════════════
   // Every embedded widget is the same object: an iframe on THIS canvas whose geometry this shell
@@ -2587,6 +2701,11 @@
           "setWebViewHotkey", "setInteractHotkey", "setMoveHotkey", "setFabClaimHotkey",
           "setHoldMode", "resetLayout", "metrics", "openDataFolder", "isElevated",
           "restartAsAdmin", "getOverlayEnabled", "setOverlayEnabled", "onOverlayEnabledChanged",
+          // 🔑 This list is an ALLOWLIST, so a method added to config-preload.cjs reaches the
+          // settings WINDOW and silently misses the embedded widget. canvasCalibration shipped
+          // that way: config.html hides the row when the bridge doesn't answer, so the control
+          // was simply absent from the surface most people open. Add here as well as there.
+          "canvasCalibration",
         ]) {
           if (typeof c[k] === "function") out[k] = (...a) => c[k](...a);
         }
@@ -2705,6 +2824,44 @@
     if (w.local) { $("cogMenu")?.classList.add("open"); $("cog")?.classList.add("open"); return; }
     try { frameWin(w)?.__widgetSettings?.(); } catch { /* iframe gone */ }
   };
+  // The pages expose only __widgetSettings (open) — no close — but they DO expose their panel's
+  // root element, and both implementations open it by adding `open`. So the shell can close one
+  // without a new bridge method. Asserted by the widget suite, since it rests on that convention.
+  const wCloseSettings = (w) => {
+    if (w.local) { $("cogMenu")?.classList.remove("open"); $("cog")?.classList.remove("open"); return; }
+    try { wSettingsRoot(w)?.classList.remove("open"); } catch { /* iframe gone */ }
+  };
+
+  // ── a widget's settings close themselves after 15s of not being used ────────────────────────
+  // Sub, 2026-08-03: "if the person doesn't click in there within 15 seconds, it just goes away."
+  // Not merely tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box sitting
+  // over the game, and it masks the Web Page widget's native view for as long as it is up. A
+  // forgotten one costs you clicks and hides a widget.
+  // 🔑 "Used" means a click ANYWHERE on the widget, which is why the re-arm lives in touchWidget:
+  // every embedded page already calls summonCog on pointerdown, so a click inside an iframe-owned
+  // settings panel counts too. Without that, adjusting Mining's cog panel would have it shut under
+  // you at 15s — the shell cannot see clicks inside an iframe any other way.
+  // 15s in real use; `?wcfgidle=<ms>` shortens it so the harness doesn't sit here for a quarter of
+  // a minute per assertion (same trick as ?coghide).
+  const WCFG_IDLE_MS = +(new URLSearchParams(location.search).get("wcfgidle")) || 15000;
+  let wcfgIdleT = null;
+  let wcfgOpenFor = null; // the widget whose settings are up, so only that one gets closed
+  function cancelWidgetSettingsIdle() {
+    clearTimeout(wcfgIdleT); wcfgIdleT = null; wcfgOpenFor = null;
+  }
+  function armWidgetSettingsIdle(w) {
+    clearTimeout(wcfgIdleT);
+    if (w) wcfgOpenFor = w;
+    if (!wcfgOpenFor) { wcfgIdleT = null; return; }
+    wcfgIdleT = setTimeout(() => {
+      const target = wcfgOpenFor;
+      cancelWidgetSettingsIdle();
+      if (!target) return;
+      wEl(target)?.classList.remove("cfgopen");
+      wCloseSettings(target);
+      syncViewMask();
+    }, WCFG_IDLE_MS);
+  }
   // 🔑 The ONE place a widget goes on or off screen, and therefore the one place that tells the
   // page about it. It used to be setWidgetVisible that fired onShow/onHide — but that isn't the
   // only path here: a widget backgrounded as a GROUP TAB goes through refreshGroupDisplay, which
@@ -2853,10 +3010,23 @@
   function applyGroup(g) { for (const k of g.members) { const w = WBY[k]; if (w) applyFrame(w); } renderGroupTabs(); }
 
   // Only the active member of a group is displayed; the rest stay mounted but hidden.
+  /** Which member a stack actually DISPLAYS — not always `active`.
+   *
+   *  `active` is the tab the user last fronted and it is deliberately STICKY: hiding a member
+   *  (hotkey, tray, hub) no longer drops it from the stack, so `active` can point at something
+   *  currently hidden. Displaying that member would paint nothing AND draw no tab strip —
+   *  renderGroupTabs puts the tabs in the displayed member's own bar — so the whole stack would
+   *  become invisible and unclickable with no way back. Falling back to any visible member keeps
+   *  the stack reachable while leaving `active` untouched, so the user's chosen tab returns the
+   *  moment they unhide it. */
+  const groupShown = (g) => (WBY[g.active]?.s.visible ? g.active : null)
+    || g.members.find((k) => WBY[k]?.s.visible) || g.active;
+
   function refreshGroupDisplay(g) {
+    const shown = groupShown(g);
     for (const k of g.members) {
       const w = WBY[k], el = wEl(w); if (!w || !el) continue;
-      showEl(w, w.s.visible && g.active === k);
+      showEl(w, w.s.visible && shown === k);
     }
     renderGroupTabs();
   }
@@ -2869,10 +3039,15 @@
       const el = wEl(w); if (!el) continue;
       const slot = el.querySelector(".wh-tabs"); if (!slot) continue;
       const g = groupOf(w);
-      if (!g || g.active !== w.key) { if (slot.innerHTML) slot.innerHTML = ""; continue; }
-      slot.innerHTML = g.members.map((k) => {
+      // Tabs belong to the member actually on screen, which is not always `active` — see groupShown.
+      const shown = g ? groupShown(g) : null;
+      if (!g || shown !== w.key) { if (slot.innerHTML) slot.innerHTML = ""; continue; }
+      // Only members that are actually SHOWN get a tab. A hidden one is still in the stack (it
+      // rejoins the moment its hotkey/tray toggle brings it back) but listing it would be a dead
+      // control: clicking a tab fronts a member, and fronting something hidden displays nothing.
+      slot.innerHTML = g.members.filter((k) => WBY[k]?.s.visible).map((k) => {
         const m = WBY[k]; if (!m) return "";
-        return '<button type="button" class="gtab' + (g.active === k ? " on" : "") + '"'
+        return '<button type="button" class="gtab' + (shown === k ? " on" : "") + '"'
           + ' data-g="' + g.id + '" data-k="' + k + '">' + escapeHtml(m.title) + '</button>';
       }).join("")
         + '<button type="button" class="gtab gdetach" data-g="' + g.id + '" title="Pop this tab out of the group">⧉</button>';
@@ -3252,6 +3427,7 @@
     const t = e.target;
     if (t instanceof Element && t.closest(".wcfg, .wh-cog")) return;
     document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+    cancelWidgetSettingsIdle(); // closed by hand — nothing left for the timer to close
     syncViewMask();
   });
 
@@ -3286,6 +3462,11 @@
   // Cleared when the pointer goes down anywhere else, so it behaves like hover rather than a latch.
   let touchedWidget = null;
   function touchWidget(w) {
+    // A click anywhere on the widget whose settings are up means you are still using them, so the
+    // idle timer restarts. 🔑 BEFORE the early return: clicking the SAME widget twice is the common
+    // case and must keep the panel alive. Embedded pages route their pointerdown here via
+    // summonCog, which is what makes this cover clicks INSIDE an iframe's own settings panel.
+    if (w && w === wcfgOpenFor) armWidgetSettingsIdle();
     if (touchedWidget === w) return;
     if (touchedWidget) wEl(touchedWidget)?.classList.remove("touched");
     touchedWidget = w;
@@ -3376,8 +3557,13 @@
       showEl(w, false); // fires onHide
       unloadFrame(w);
       el.classList.remove("moving");
-      // Closing a tab leaves the stack, the way closing a browser tab does.
-      if (g) detachFromGroup(w);
+      // 🔑 Hiding does NOT leave the stack. Closing a tab does — but the ✕ is the only control
+      // that means "close", and it detaches on its own (see the .wh-close handler). Everything
+      // else routed here is a visibility TOGGLE: a hotkey, the tray, the hub checkbox. Detaching
+      // on those orphaned the widget — Argante: hide the Mining Scanner by hotkey and it was
+      // kicked out of its group, then came back as a lone window sitting behind the stack it used
+      // to belong to. `active` is left alone so the tab he chose is still fronted when it returns.
+      if (g) refreshGroupDisplay(g);
     }
     renderGroupTabs();
   }
@@ -3455,7 +3641,9 @@
     e.stopPropagation();
     const g = GROUPS.find((x) => x.id === btn.dataset.g); if (!g) return;
     if (btn.classList.contains("gdetach")) {
-      const active = WBY[g.active]; if (active) detachFromGroup(active);
+      // Pop out the member you can SEE, which is not always `active` — the ⧉ sits in the displayed
+      // member's own tab strip, so targeting `active` could pop a hidden widget instead.
+      const active = WBY[groupShown(g)]; if (active) detachFromGroup(active);
       return;
     }
     const w = WBY[btn.dataset.k]; if (!w) return;
@@ -3522,6 +3710,32 @@
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
       renderGroupTabs();
+      // 🔑 PULL the shell's visibility state, now that the widgets actually EXIST.
+      //
+      // This is the fix for "the app starts and none of my widgets are anywhere to be found"
+      // (Sub, 2026-08-03). The shell PUSHES visibility from did-finish-load, but this loader is
+      // async — it awaits getWidgets() — so those messages routinely arrive BEFORE any widget
+      // element has been built. setWidgetVisible opens with `const el = wEl(w); if (!el) return;`
+      // so every one of them was SILENTLY DROPPED and the canvas stayed empty. The only escape
+      // was the overlay hotkey, which destroys and recreates the window (setOverlayEnabled) and
+      // re-runs the whole race — hence "hit F3, sometimes twice".
+      //
+      // A push cannot fix this, because the shell has no way to know when the renderer is ready;
+      // every attempt to time it is another guess. So the renderer ASKS, at the one moment it
+      // knows it is ready. `app:widget-states` and preload's widgetStates() already existed for
+      // exactly this — nothing had ever called them.
+      //
+      // bringToFront:false — this is a REPLAY of saved state, not a click, so it must not
+      // re-front a stack's tab (same reason did-finish-load sends `initial: true`).
+      try {
+        const states = await window.overlayApi?.widgetStates?.();
+        if (states) {
+          for (const [key, on] of Object.entries(states)) {
+            const w = WBY[key];
+            if (w && !!on !== !!w.s.visible) setWidgetVisible(w, !!on, false);
+          }
+        }
+      } catch { /* no shell — OBS/browser, where the page owns its own visibility */ }
       // 🔑 APPLY the restored `active` — restoring it isn't enough. Two things make this the only
       // place it can happen: the loader is async (it awaits getWidgets), so the shell's per-widget
       // visibility messages can land BEFORE GROUPS exists, at which point groupOf() is null and
@@ -3601,6 +3815,11 @@
       const setter = "set" + w.key.charAt(0).toUpperCase() + w.key.slice(1);
       el.querySelector(".wh-close")?.addEventListener("click", (e) => {
         e.stopPropagation();
+        // Closing a tab leaves the stack, the way closing a browser tab does. This is the ONLY
+        // control that means "close" — a hotkey or tray toggle just hides — so the detach lives
+        // here rather than in setWidgetVisible, which cannot tell the two apart (both arrive back
+        // from the shell on the same visibility channel).
+        detachFromGroup(w);
         if (window.overlayApi?.[setter]) window.overlayApi[setter](false);
         else setWidgetVisible(w, false); // no shell (OBS/browser) — hide locally
       });
@@ -3617,12 +3836,14 @@
         if (el.classList.contains("has-settings")) {
           try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); } catch { /* iframe gone */ }
           syncViewMask();
+          armWidgetSettingsIdle(w);
           return;
         }
         el.classList.add("cfgopen");
         showTextScale(w);
         showAngle(w);
         syncViewMask();
+        armWidgetSettingsIdle(w);
       });
       el.querySelector(".wcfg")?.addEventListener("click", (e) => e.stopPropagation());
       el.querySelector(".wcfg-dn")?.addEventListener("click", (e) => { e.stopPropagation(); bumpTextScale(w, -0.1); });
@@ -3672,6 +3893,8 @@
       try { canvasInfo = await window.overlayApi?.getCanvasInfo?.() || null; } catch { /* single-monitor fallback */ }
       applyCanvasVars(); // pin screen-anchored chrome to the primary monitor (multi-monitor void-safe)
       drawScanBox();     // now that the real display geometry is known, not the window's guess
+      window.overlayApi?.onCanvasChanged?.(() => { void refreshCanvasGeometry(); });
+      reportGeometry(); // baseline, so diagnostics has an answer before anything changes
       let saved = null;
       // (the panel's own layout is loaded by the registry loader, keyed "blueprint")
       const q = new URLSearchParams(location.search); // test overrides
@@ -3684,7 +3907,11 @@
         for (const w of WIDGETS) syncArrange(w);
       }
       if (q.has("cogopen")) { $("cogMenu").classList.add("open"); $("cog").classList.add("open"); } // headless-test the widget cog
-      if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><ul><li>Newest note one</li><li>Newest note two</li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li>Older note</li></ul></div>'; $("whatsnew").classList.add("show"); } // headless-test the patch-notes modal
+      // headless-test the patch-notes modal. Markup is written out rather than built through
+      // wnListHtml because that lives in a later block and isn't on `window` yet at this point.
+      // It mirrors the builder's shape: a kind heading, then label-over-description notes, plus
+      // one legacy unlabelled note so both paths are on screen at once.
+      if (q.has("whatsnew")) { $("wnVer").textContent = "v0.1.31"; $("wnList").innerHTML = '<div class="wn-group"><div class="wn-gver">v0.1.31</div><div class="wn-kind">New</div><ul><li><div class="wn-note"><div class="wn-label">Newest note one</div><div class="wn-desc">What the first change actually does.</div></div></li></ul><div class="wn-kind">Fixed</div><ul><li><div class="wn-note"><div class="wn-label">Newest note two</div><div class="wn-desc">What the second change actually does.</div></div></li></ul></div><div class="wn-group"><div class="wn-gver">v0.1.30</div><ul><li><div class="wn-note nolabel"><div class="wn-desc">Older note</div></div></li></ul></div>'; $("whatsnew").classList.add("show"); }
       if (q.has("cog")) $("globalCog").classList.add("show"); // headless-test the summoned cog
       if (q.has("bppop")) maybeBpPop({ name: "MH1 Multi-Tool", image: null, at: new Date().toISOString() }); // headless-test the blueprint-received pop
       if (q.has("rates")) { $("panel").classList.remove("empty"); document.body.classList.remove("empty"); const el = $("pool"); if (el) el.innerHTML = recentActivityHtml({ earnings: { repLastHr: 1240, repPace: 1480, aUECLastHr: null, aUECPace: null, missions: 6 }, recentMissions: [{ title: "Blackbox Retrieval Very Dangerous", aUEC: null, at: new Date().toISOString() }], recentBlueprints: [{ name: "MH1 Multi-Tool", at: new Date().toISOString() }] }); } // headless-test the idle per-hour rates
@@ -3832,6 +4059,55 @@
 
   // Electron overlay: report hover so the shell makes the HUD clickable only while
   // the pointer is over it (clicks pass to the game everywhere else). No-op in OBS.
+  // ── "What's new" card: the markup builder ───────────────────────────────────────────────────
+  // Page scope, OUTSIDE the overlayApi guard below, because building markup from JSON needs no
+  // shell — only showWhatsNew does (it reads the app version through the preload). Keeping it in
+  // there made it unreachable to anything without an Electron shell, the widget suite included,
+  // which is why that suite used to carry its own copy of this markup and could pass against a
+  // shape nobody rendered.
+  const WN_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const wnP2 = (n) => String(n).padStart(2, "0");
+  const wnFmtUTC = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return WN_MON[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear() + " · " + wnP2(d.getUTCHours()) + ":" + wnP2(d.getUTCMinutes()) + " UTC";
+  };
+  // Group order is fixed and deliberate: what you gained, then what got better, then what stopped
+  // being broken. Fixes last because they are the least interesting thing in a release to everyone
+  // except the person who hit the bug.
+  const WN_KINDS = [["new", "New"], ["improved", "Improved"], ["fixed", "Fixed"]];
+  const wnNoteHtml = (n) => {
+    const text = typeof n === "string" ? n : (n && n.text) || "";
+    const label = n && n.label ? '<div class="wn-label">' + escapeHtml(n.label) + "</div>" : "";
+    return '<li><div class="wn-note' + (label ? "" : " nolabel") + '">' + label +
+           '<div class="wn-desc">' + escapeHtml(text) + "</div></div></li>";
+  };
+  // A version renders as New / Improved / Fixed sections. Notes with NO kind — everything written
+  // before 0.1.34, which the sidecar normalises to text-only — fall through to a single unheaded
+  // list at the top, so an old version keeps the shape it shipped with rather than being filed
+  // under a guess. An empty section is omitted entirely, never left as a bare heading: 0.1.36 is
+  // a single fix and would otherwise show two empty ones.
+  const wnBodyHtml = (notes) => {
+    const unkinded = notes.filter((n) => !n || !n.kind);
+    let html = unkinded.length ? "<ul>" + unkinded.map(wnNoteHtml).join("") + "</ul>" : "";
+    for (const [kind, heading] of WN_KINDS) {
+      const group = notes.filter((n) => n && n.kind === kind);
+      if (group.length) html += '<div class="wn-kind">' + heading + "</div><ul>" + group.map(wnNoteHtml).join("") + "</ul>";
+    }
+    return html;
+  };
+  // Newest version is expanded; older ones (2..5) are collapsed <details> — click to expand.
+  const wnListHtml = (entries) => entries.map((e, i) => {
+    const body = wnBodyHtml(Array.isArray(e.notes) ? e.notes : []);
+    const dt = wnFmtUTC(e.date);
+    const head = "v" + escapeHtml(e.version) + (dt ? ' <span class="wn-date">' + dt + "</span>" : "");
+    return i === 0
+      ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + body + "</div>"
+      : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + body + "</details>";
+  }).join("");
+  window.__wnListHtml = wnListHtml; // the widget suite renders through this, never its own copy
+
   if (window.overlayApi) {
     const panel = $("panel");
     panel.classList.add("electron"); // reveals the grab handle (OBS mode has no window to move)
@@ -3868,6 +4144,46 @@
     ab.addEventListener("mouseleave", () => { abLeaveT = setTimeout(() => window.overlayApi.hover(false), 150); });
     $("arrangeDone").addEventListener("click", () => window.overlayApi.endMove());
 
+    // ── canvas calibration (nudge + scale) ──────────────────────────────────────────────────
+    // Moves and sizes the whole canvas. Widget coordinates are untouched, so nobody's saved layout
+    // shifts, and the canvas keeps spanning every monitor — dragging a widget to another screen
+    // still works, which is the first thing a multi-monitor user does. Every change round-trips
+    // through the shell, which re-fits the window and pushes overlay:canvas-changed back, so the
+    // dotted outline the user is aiming at redraws from the same numbers that were just saved.
+    {
+      let cal = { x: 0, y: 0, scale: 1 };
+      const show = () => {
+        const v = $("nudgeVal"); if (v) v.textContent = cal.x + ", " + cal.y;
+        const s = $("nudgeScale"); if (s) s.textContent = Math.round(cal.scale * 100) + "%";
+      };
+      const push = async () => {
+        try { cal = (await window.overlayApi?.canvasCalibration?.(cal)) || cal; } catch { /* no shell */ }
+        show();
+      };
+      // Read the stored value so the display is honest the moment arrange mode opens.
+      (async () => { try { cal = (await window.overlayApi?.canvasCalibration?.()) || cal; } catch { /* none */ } show(); })();
+      $("canvasNudge")?.addEventListener("click", (e) => {
+        const b = e.target instanceof Element ? e.target.closest("button") : null; if (!b) return;
+        e.stopPropagation();
+        if (b.id === "nudgeReset") { cal = { x: 0, y: 0, scale: 1 }; void push(); return; }
+        const nz = Number(b.dataset.nz || 0);
+        if (nz) {
+          // Shift = 1%, for the last bit of sizing once the dashed edge is nearly right.
+          const stepPct = e.shiftKey ? 1 : 5;
+          const pct = Math.round(cal.scale * 100) + Math.sign(nz) * stepPct;
+          cal = { ...cal, scale: Math.max(0.5, Math.min(3, pct / 100)) };
+          void push();
+          return;
+        }
+        // Shift = 1px, for the last bit of alignment once the dashed edge is nearly right.
+        const step = e.shiftKey ? 1 : 10;
+        const nx = Number(b.dataset.nx || 0), ny = Number(b.dataset.ny || 0);
+        if (!nx && !ny) return;
+        cal = { ...cal, x: cal.x + Math.sign(nx) * step, y: cal.y + Math.sign(ny) * step };
+        void push();
+      });
+    }
+
     // Report interactive element rects to the shell (~10×/s) so pollCursor() can hit-test the
     // cursor against them — REPLACES forward:true mouse-forwarding (which stuttered the whole
     // cursor when elevated). Inactive elements are display:none → 0-size → filtered out.
@@ -3893,7 +4209,7 @@
       // twice for no gain.
       // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
     // it would swallow game clicks along a blank strip above the taskbar for the whole session.
-    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, #arrangeScrim .nudge, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
@@ -3917,14 +4233,6 @@
     // from the hub's "Patch notes" button (force=true ignores the per-version seen flag).
     // Hover-interactive + flagged as a modal so it stays clickable to close even when locked.
     let wnVersion = null;
-    const WN_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const wnP2 = (n) => String(n).padStart(2, "0");
-    const wnFmtUTC = (iso) => {
-      if (!iso) return "";
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return "";
-      return WN_MON[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear() + " · " + wnP2(d.getUTCHours()) + ":" + wnP2(d.getUTCMinutes()) + " UTC";
-    };
     const wnClose = async () => {
       if (wnVersion && $("wnDontShow").checked) {
         try { await fetch("/api/changelog-seen?v=" + encodeURIComponent(wnVersion), { method: "POST" }); } catch { /* best-effort */ }
@@ -3951,15 +4259,7 @@
         // Header chip = newest version; body groups the last few versions so a returning user
         // sees everything they missed across our fast patches, not just the latest.
         $("wnVer").textContent = "v" + (entries[0].version || version);
-        // Newest version is expanded; older ones (2..5) are collapsed <details> — click to expand.
-        $("wnList").innerHTML = entries.map((e, i) => {
-          const bullets = "<ul>" + e.notes.map((n) => "<li>" + escapeHtml(n) + "</li>").join("") + "</ul>";
-          const dt = wnFmtUTC(e.date);
-          const head = "v" + escapeHtml(e.version) + (dt ? ' <span class="wn-date">' + dt + "</span>" : "");
-          return i === 0
-            ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + bullets + "</div>"
-            : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + bullets + "</details>";
-        }).join("");
+        $("wnList").innerHTML = wnListHtml(entries);
         card.classList.add("show");
         window.overlayApi.setModal?.(true);
       } catch { /* changelog is best-effort */ }

@@ -424,7 +424,51 @@ function primaryBounds() {
 // can be dragged across monitors; the page renders widgets at their PRIMARY-relative position +
 // the primary's offset within the canvas (overlay:canvas-info → px/py), so existing layouts stay
 // put on the primary and only a deliberate drag carries a widget onto another display.
+//
+// 🔴 THE UNION MUST BE TAKEN IN *PHYSICAL* PIXELS, NOT IN THE REPORTED DIP BOUNDS. On Windows each
+// display's `bounds` is expressed in ITS OWN DIP — divided by ITS OWN scaleFactor — so on a
+// mixed-DPI desktop the reported rectangles are in different units and their union is a number
+// that describes no coordinate system at all. Measured on Sub's rig at 200% (2026-08-03): a
+// 3440×1440 primary reports 1720×720 while a 1080×1920 secondary at 100% reports its true size,
+// giving a "desktop" of 2800×1924 against a real one of 4520×2644. setBounds was then handed that
+// nonsense and Windows put the window somewhere else entirely — asked x=-1080, got x=-540 — so the
+// canvas was laid out for a window that did not exist. The dotted outline landed BELOW the bottom
+// of his monitor, which is the "at 175% and up the whole overlay just disappears" report.
+//
+// 🔑 The error scales with the primary's scaleFactor, which is why 100–150% looked fine and 175%+
+// did not: at 100% every display's DIP *is* its physical size and the old union was accidentally
+// correct. Uniform-DPI desktops are unaffected by this change for the same reason — with one scale
+// factor everywhere, unioning-then-converting and converting-then-unioning are the same operation.
+//
+// So: rebuild each display's physical rect (`bounds * its own scaleFactor` — the inverse of the
+// per-display conversion Electron applied), union THOSE, and hand the result to
+// screen.screenToDipRect() to get back the single DIP rect setBounds actually wants.
+function physicalDesktopBounds() {
+  const all = screen.getAllDisplays();
+  const rects = all.map((d) => {
+    const sf = d.scaleFactor || 1;
+    return {
+      x: Math.round(d.bounds.x * sf), y: Math.round(d.bounds.y * sf),
+      right: Math.round((d.bounds.x + d.bounds.width) * sf),
+      bottom: Math.round((d.bounds.y + d.bounds.height) * sf),
+    };
+  });
+  const minX = Math.min(...rects.map((r) => r.x));
+  const minY = Math.min(...rects.map((r) => r.y));
+  const maxX = Math.max(...rects.map((r) => r.right));
+  const maxY = Math.max(...rects.map((r) => r.bottom));
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
 function virtualDesktopBounds() {
+  const phys = physicalDesktopBounds();
+  // screenToDipRect is Windows-only; everywhere else (and on any build without it) the reported
+  // bounds are already the one true coordinate system, so the old union is correct as written.
+  if (typeof screen.screenToDipRect === "function") {
+    try {
+      const r = screen.screenToDipRect(null, phys);
+      if (r && Number.isFinite(r.width) && r.width > 0 && r.height > 0) return r;
+    } catch { /* fall through to the plain union */ }
+  }
   const all = screen.getAllDisplays();
   const minX = Math.min(...all.map((d) => d.bounds.x));
   const minY = Math.min(...all.map((d) => d.bounds.y));
@@ -435,10 +479,111 @@ function virtualDesktopBounds() {
 // The widget overlay spans the virtual desktop (multi-monitor). fullDisplayBounds() drives the
 // overlay window + overlay:canvas-info. (The binding-chart PNG stays PRIMARY-only — it's a
 // gameplay reference overlay, not a widget canvas — so it uses primaryBounds() directly.)
-function fullDisplayBounds() { return virtualDesktopBounds(); }
-// Re-fit every canvas window when the monitor layout changes (plugged/unplugged/rearranged).
+// User nudge for the canvas, in physical px. Read from config at startup and updated live by the
+// arrange-mode nudge; 0,0 for everyone whose canvas already lines up.
+let canvasOffset = { x: 0, y: 0 };
+// The other half of the calibration: a uniform scale for the canvas coordinate space, applied by
+// the page as CSS `zoom` on <html>. Changing the PRIMARY monitor's Windows scaling leaves the
+// canvas both mis-placed AND mis-sized, and an offset alone can only fix the placement.
+// 🔑 Measured, not assumed (Electron 43): CSS `zoom` on the root scales iframe CONTENT as well as
+// the frame box — 100×40 inside a widget iframe renders 200×80 at zoom 2 — and
+// getBoundingClientRect() returns zoom-ADJUSTED px, so the regions the page reports for cursor
+// hit-testing are already in window coordinates and need no correction here. That is what rules
+// out webContents.setZoomFactor(), whose zoom is per-ORIGIN and would drag the Settings window
+// (same localhost origin) along with the canvas.
+let canvasScale = 1;
+/** The canvas's window rect: the UNION of the un-nudged virtual desktop and the nudged canvas.
+ *
+ *  🔑 The nudge moves the WINDOW, never the widget coordinates. Widget positions live in
+ *  widgets.json in canvas space; if the nudge changed what that space MEANS, every existing
+ *  layout would silently relocate. Translating the window leaves saved layouts untouched, and
+ *  keeps the canvas spanning the whole virtual desktop — so dragging a widget onto another
+ *  monitor still works, which is the thing a mixed-DPI user is most likely to want.
+ *
+ *  🔑 GROW, don't just translate. The first version moved the window without resizing it, so a
+ *  nudge of -408,-199 walked the canvas OFF the right/bottom of the desktop and CLIPPED the edge
+ *  it was pushed toward — a widget parked on the far monitor became unreachable. The window now
+ *  spans everything the canvas could need: it starts at whichever is further left/up of the
+ *  desktop origin and the nudged origin, and is wide/tall enough to still reach the desktop's far
+ *  edge. The canvas content then sits at canvasContentShift() INSIDE that window.
+ *
+ *  Why a manual nudge at all: on a mixed-DPI desktop (Jman — 4K @225% primary beside two 1080p
+ *  @100%) the canvas comes out the right SIZE but in the wrong PLACE. Sub reproduced it by
+ *  setting one of his own monitors to 175%: "it shifts everything down and to the right". Rather
+ *  than guess the DPI arithmetic and risk moving the canvas for everyone it currently suits, the
+ *  user drags it into place against the dotted primary outline, like a console safe-area screen. */
+function fullDisplayBounds() {
+  const v = virtualDesktopBounds();
+  const o = canvasOffset, z = canvasScale;
+  // The window has to cover BOTH the whole desktop (so a widget can still be dragged to any
+  // monitor) and wherever the scaled, nudged canvas content now reaches — hence the max/min pair
+  // rather than a plain translate. At o=0,z=1 this is exactly virtualDesktopBounds().
+  return {
+    x: v.x + Math.min(0, o.x),
+    y: v.y + Math.min(0, o.y),
+    width: Math.round(Math.max(v.width, o.x + v.width * z) - Math.min(0, o.x)),
+    height: Math.round(Math.max(v.height, o.y + v.height * z) - Math.min(0, o.y)),
+  };
+}
+/** Where canvas coordinate 0,0 sits INSIDE the window, in client px.
+ *  A negative nudge extends the window left/up and the content stays at 0; a positive nudge keeps
+ *  the window origin and pushes the content in. Either way `windowOrigin + shift` lands on
+ *  `virtualDesktopOrigin + offset`, which is the whole point. */
+function canvasContentShift() {
+  return { x: Math.max(0, canvasOffset.x), y: Math.max(0, canvasOffset.y) };
+}
+// Mirrors the sidecar's clamp (see canvasZoom in overlay-server.ts) — a hand-edited 0 would
+// collapse the canvas to a dot with no visible control left to undo it.
+function clampCanvasScale(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.max(0.5, Math.min(3, Math.round(v * 100) / 100)) : 1;
+}
+// Re-fit every canvas window when the monitor layout changes (plugged/unplugged/rearranged) or
+// the user nudges. 🔑 The PAGE has to be told as well: --prim-* and every widget's on-screen
+// position are derived from overlay:canvas-info, which it fetches ONCE at load. Without this the
+// window resized and the canvas inside it stayed laid out for the old monitor arrangement — which
+// is what a Windows display-scaling change looks like from the user's side.
 function refitCanvasWindows() {
-  try { if (overlay && !overlay.isDestroyed()) overlay.setBounds(fullDisplayBounds()); } catch { /* ignore */ }
+  try {
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.setBounds(fullDisplayBounds());
+      overlay.webContents.send("overlay:canvas-changed");
+    }
+  } catch { /* ignore */ }
+  reportGeometry();
+}
+// What the shell believes about the displays and where it actually put the window. Posted to the
+// sidecar so it can be read back over HTTP and pasted from Copy diagnostics.
+//
+// 🔑 This exists because mixed-DPI is invisible from a machine whose monitors match, and every
+// report of it ("it's offset", "the whole overlay vanished") is equally consistent with a window
+// in the wrong PLACE and a canvas laid out at the wrong SCALE. `asked` vs `got` is the pair that
+// separates them: if they differ, Windows moved or resized the window out from under us and no
+// amount of canvas arithmetic will explain it.
+// Logging it from here would go nowhere — this is a detached GUI process with no stdout.
+function reportGeometry() {
+  try {
+    const v = virtualDesktopBounds();
+    const asked = fullDisplayBounds();
+    const prim = screen.getPrimaryDisplay();
+    const shell = {
+      displays: screen.getAllDisplays().map((d) => ({
+        id: d.id, primary: d.id === prim.id, scaleFactor: d.scaleFactor, rotation: d.rotation,
+        bounds: d.bounds, workArea: d.workArea, size: d.size,
+      })),
+      physicalDesktop: physicalDesktopBounds(),
+      virtualDesktop: v,
+      primary: prim.bounds,
+      calibration: { x: canvasOffset.x, y: canvasOffset.y, scale: canvasScale, shift: canvasContentShift() },
+      window: {
+        asked,
+        got: overlay && !overlay.isDestroyed() ? overlay.getBounds() : null,
+        visible: overlay && !overlay.isDestroyed() ? overlay.isVisible() : null,
+        enabled: overlayEnabled,
+      },
+    };
+    void postJson("/api/overlay-geometry", { shell });
+  } catch { /* diagnostics must never be the thing that breaks a refit */ }
 }
 
 // The overlay is a FULL-SCREEN transparent canvas that hosts free-floating widgets (the Blueprint
@@ -480,7 +625,40 @@ function createOverlay() {
   overlay.setBounds(bounds);
   // Clear any cached copy + cache-bust the URL so UI changes always show up.
   const hudUrl = `${HUD_URL}?v=${Date.now()}${AMD_COMPAT ? "&lite=1" : ""}`;
-  overlay.webContents.session.clearCache().finally(() => overlay.loadURL(hudUrl));
+  // 🔑 THE CANVAS MUST RETRY ITS OWN LOAD. This page is SERVED BY the sidecar, so any moment the
+  // server isn't answering yet — a slow first start, a respawn, a machine under load — the load
+  // fails and the window sits there transparent and EMPTY, forever. There is no error and nothing
+  // to click: the user simply has no widgets. `waitForServer()` narrows the window but cannot
+  // close it (it proves the server answered ONCE, not that this specific request will land), and
+  // createOverlay also runs when waitForServer TIMED OUT, which is precisely when the load fails.
+  //
+  // The only reason this was survivable is that the overlay hotkey happens to DESTROY and RECREATE
+  // the window, so mashing F3 eventually got a load in — which is exactly how Sub had been
+  // working around it, and is not something a user could be expected to discover (2026-08-03).
+  //
+  // The Web Page widget has had a did-fail-load handler all along; the canvas, which matters far
+  // more, had none and no .catch() on loadURL either.
+  let hudTries = 0;
+  const loadHud = () => {
+    overlay?.loadURL(hudUrl).catch(() => scheduleHudRetry("loadURL rejected"));
+  };
+  const scheduleHudRetry = (why) => {
+    if (!overlay || overlay.isDestroyed() || overlayLoaded) return;
+    if (++hudTries > 20) {
+      console.error(`[electron] canvas failed to load after ${hudTries} tries (${why}) — giving up`);
+      return;
+    }
+    const wait = Math.min(3000, 250 * hudTries); // ramp to 3s; the sidecar's own respawn is slower
+    console.error(`[electron] canvas load failed (${why}) — retry ${hudTries} in ${wait}ms`);
+    setTimeout(loadHud, wait);
+  };
+  overlay.webContents.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
+    // -3 is ERR_ABORTED, which a superseding load fires on the one it replaced — retrying that
+    // would fight the load that is already on its way.
+    if (!isMainFrame || code === -3) return;
+    scheduleHudRetry(`${desc} (${code})`);
+  });
+  overlay.webContents.session.clearCache().finally(loadHud);
   // Once the page is up, tell the renderer the mining widget's initial state: shown if the user
   // left it open last session, else armed-hidden if auto-show is on (so it can self-pop).
   overlay.webContents.on("did-finish-load", () => {
@@ -697,13 +875,14 @@ function startMousePoll() {
 // rendered ON TOP of the widget and blocked it.
 
 // Patch the sidecar config over HTTP (the config lives in the sidecar process).
-async function postConfig(patch) {
+async function postJson(route, body) {
   try {
-    await fetch(`http://localhost:${PORT}/api/config`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+    await fetch(`http://localhost:${PORT}${route}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
   } catch { /* sidecar not up yet — non-fatal */ }
 }
+async function postConfig(patch) { return postJson("/api/config", patch); }
 
 // ── Mining Assistant widget (in-canvas) ───────────────────────────────────────
 // The Mining Assistant is now an iframe widget INSIDE the overlay canvas (see missions.html +
@@ -922,6 +1101,19 @@ function registerWebViewHotkey(accel) {
   if (!accel || typeof accel !== "string") return { ok: true };
   const r = hotkeys.register(accel, () => setWebView(!webViewVisible));
   if (r.ok) webViewAccel = accel;
+  return r;
+}
+
+// Live-rebindable hotkey for the Journal widget. It was the one placeable widget with no way to
+// reach it without the tray or the hub — Argante asked for this, and a scratchpad you have to
+// alt-tab to open is a scratchpad you don't use mid-flight.
+let notepadAccel = null;
+function registerNotepadHotkey(accel) {
+  if (notepadAccel) hotkeys.unregister(notepadAccel);
+  notepadAccel = null;
+  if (!accel || typeof accel !== "string") return { ok: true };
+  const r = hotkeys.register(accel, toggleNotepad);
+  if (r.ok) notepadAccel = accel;
   return r;
 }
 
@@ -1448,6 +1640,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     overlayEnabled = readOverlayEnabled();
     if (overlayEnabled) createOverlay();
+    reportGeometry(); // baseline for diagnostics, before any monitor change moves things around
     createTray();
     setupUpdater();
     // First run → wizard; existing user with unfinished setup → one dismissible banner. Runs
@@ -1464,6 +1657,7 @@ if (!app.requestSingleInstanceLock()) {
     let overlayKey = "F3";
     let bindKey = "Ctrl+F3";
     let miningKey = "Shift+F3";
+    let notepadKey = "Alt+F3";
     let interactKey = "F";
     let moveKey = "Ctrl+Alt+M";
     let fabClaimKey = "F4";
@@ -1477,6 +1671,11 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof c.overlayHotkey === "string") overlayKey = c.overlayHotkey;
       if (typeof c.bindingHotkey === "string") bindKey = c.bindingHotkey;
       if (typeof c.webViewHotkey === "string") registerWebViewHotkey(c.webViewHotkey);
+      if (typeof c.notepadHotkey === "string") notepadKey = c.notepadHotkey;
+      if (Number.isFinite(c.canvasOffsetX) || Number.isFinite(c.canvasOffsetY)) {
+        canvasOffset = { x: Number(c.canvasOffsetX) || 0, y: Number(c.canvasOffsetY) || 0 };
+      }
+      if (Number.isFinite(c.canvasScale)) canvasScale = clampCanvasScale(c.canvasScale);
       if (typeof c.miningHotkey === "string") miningKey = c.miningHotkey;
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
@@ -1487,6 +1686,7 @@ if (!app.requestSingleInstanceLock()) {
     registerOverlayHotkey(overlayKey);
     registerBindingHotkey(bindKey);
     registerMiningHotkey(miningKey);
+    registerNotepadHotkey(notepadKey);
     registerInteractHotkey(interactKey);
     registerMoveHotkey(moveKey);
     registerFabClaimHotkey(fabClaimKey);
@@ -1613,6 +1813,8 @@ if (!app.requestSingleInstanceLock()) {
     registerMiningHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-webview-hotkey", (_e, accel) =>
     registerWebViewHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("set-notepad-hotkey", (_e, accel) =>
+    registerNotepadHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-interact-hotkey", (_e, accel) =>
     registerInteractHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-move-hotkey", (_e, accel) =>
@@ -1622,10 +1824,28 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.handle("overlay:reset-layout", () => { resetWidgetLayout(); return true; });
   // Primary display's offset + size within the full-desktop canvas, so the page can default a
   // new/reset widget onto the PRIMARY monitor (not a corner of a left/top secondary display).
+  // 🔑 px/py carry the nudge's content shift, so ONE number moves everything: widget frames render
+  // at `x + px` and every screen-anchored bit of chrome pins to --prim-*, which is also px/py. The
+  // canvas coordinate space moves as a unit and the dotted outline stays a usable alignment target.
+  // vw/vh are the WINDOW's size (grown by the nudge), not the desktop's — --prim-right measures in
+  // from the window's right edge.
+  // 🔑 Everything here is in CANVAS px — what the page writes into a CSS length — which the page's
+  // `zoom: scale` then multiplies on the way to the screen. So pw/ph stay the primary's raw size
+  // (it RENDERS scale× bigger, which is the point: the user grows it until the dotted outline sits
+  // on their real monitor edges), while the window-relative shift and the window's own span are
+  // real pixels and have to be divided by the scale to survive the multiply.
   ipcMain.handle("overlay:canvas-info", () => {
-    const v = fullDisplayBounds();
+    const v = virtualDesktopBounds();
+    const w = fullDisplayBounds();
+    const s = canvasContentShift();
+    const z = canvasScale;
     const p = screen.getPrimaryDisplay().bounds;
-    return { px: p.x - v.x, py: p.y - v.y, pw: p.width, ph: p.height, vw: v.width, vh: v.height };
+    return {
+      px: p.x - v.x + s.x / z, py: p.y - v.y + s.y / z,
+      pw: p.width, ph: p.height,
+      vw: w.width / z, vh: w.height / z,
+      scale: z,
+    };
   });
   // Hold-to-interact opt-in: when off (default), the overlay is clickable whenever the cursor is
   // over a widget; when on, it's passive unless the interact key is held.
@@ -1737,6 +1957,21 @@ if (!app.requestSingleInstanceLock()) {
   // Binding chart is hotkey-only (never kept on). Both widgets now live in the one overlay
   // renderer, so mining is a shell-owned visibility flag (setMiningVisible) rather than a window.
   // (sendMiningVisible / pushWidgetStates / setMiningVisible are defined at module scope above.)
+  // Live canvas calibration — the nudge and the scale together, since both re-fit the same window
+  // and either one alone leaves a mixed-DPI canvas wrong. Applies immediately (refit) so the user
+  // sees the dotted outline move and resize as they press, then persists via the sidecar — which
+  // is the only writer of config.json. Called with no argument it just reports the current value,
+  // which is how both surfaces (arrange mode and the Settings window) open showing the truth.
+  ipcMain.handle("app:canvas-calibration", (_e, cal) => {
+    if (cal && Number.isFinite(cal.x) && Number.isFinite(cal.y)) {
+      const clamp = (n) => Math.max(-4000, Math.min(4000, Math.round(n)));
+      canvasOffset = { x: clamp(cal.x), y: clamp(cal.y) };
+      if (Number.isFinite(cal.scale)) canvasScale = clampCanvasScale(cal.scale);
+      refitCanvasWindows();
+      postConfig({ canvasOffsetX: canvasOffset.x, canvasOffsetY: canvasOffset.y, canvasScale });
+    }
+    return { x: canvasOffset.x, y: canvasOffset.y, scale: canvasScale };
+  });
   ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {
     if (on) { miningAutoSuppress = 0; setMiningVisible(true); }

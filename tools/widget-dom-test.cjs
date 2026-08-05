@@ -112,8 +112,33 @@ const GROUPING = `(async () => {
   groupWidgets(party, mining);
   const gs = saved.filter(s => s[0] === "__groups").pop();
   ok("groups persisted under __groups", !!gs && Array.isArray(gs[1].list), gs ? JSON.stringify(gs[1]).slice(0, 110) : "none");
+  // HIDING IS NOT CLOSING. A hotkey / tray / hub toggle routes through setWidgetVisible, and it
+  // used to detach — so hiding the Mining Scanner by hotkey orphaned it, and it came back as a
+  // lone window sitting behind the stack it used to belong to (Argante, 0.1.35). Only the ✕ means
+  // close. These two assertions are the whole contract, so they are written as a pair.
   setWidgetVisible(WBY.party, false);
-  ok("closing a tab leaves the stack", GROUPS.length === 0, GROUPS.length);
+  ok("hiding a member KEEPS it in the stack", GROUPS.length === 1 && GROUPS[0].members.length === 2,
+     GROUPS[0] ? GROUPS[0].members.join(",") : "no group");
+  // The active tab still points at the hidden member — deliberately, so the tab the user chose is what
+  // returns. That makes the next three assertions load-bearing: a stack that displays a hidden
+  // member paints nothing AND draws no tab strip (tabs live in the displayed member's own bar),
+  // which would leave the whole group invisible and unclickable with no way back.
+  ok("...and the active tab is still remembered", GROUPS[0] && GROUPS[0].active === "party",
+     GROUPS[0] && GROUPS[0].active);
+  ok("...but the stack still shows a member", shown(mining));
+  const hidStrip = el(mining).querySelector(".wh-tabs");
+  ok("...with its tab strip", !!(hidStrip && hidStrip.innerHTML.trim()));
+  ok("...listing only members you can actually see",
+     hidStrip ? hidStrip.querySelectorAll(".gtab:not(.gdetach)").length === 1 : false,
+     hidStrip ? hidStrip.querySelectorAll(".gtab:not(.gdetach)").length + " tab(s)" : "no strip");
+  setWidgetVisible(WBY.party, true);
+  await sleep(30);
+  ok("unhiding rejoins the stack, fronted", GROUPS.length === 1 && GROUPS[0].active === "party" && shown(party),
+     GROUPS[0] && GROUPS[0].active);
+  // The ✕ is the ONE control that means "close", so it is the one that leaves the stack.
+  el(party).querySelector(".wh-close").click();
+  await sleep(30);
+  ok("the ✕ closes OUT of the stack", GROUPS.length === 0, GROUPS.length);
 
   // Regression: a widget switched on while arrange is ALREADY active used to open undecorated —
   // no drag banner, "not in move mode like every other app" — because arrange only ever swept the
@@ -679,18 +704,16 @@ const MININGSAY = `(async () => {
 // the failing condition is simulated directly: a primary shorter than the canvas.
 const PATCHNOTES = `(async () => {
   ${PRELUDE}
-  // Render the list exactly the way showWhatsNew does. Its own path needs overlayApi.getVersion,
-  // which this suite has no shell for — but the CONTENT is what makes the card tall, so it has to
-  // be the real changelog and not a two-line fixture.
+  // Render through the PAGE'S OWN builder. showWhatsNew itself needs overlayApi.getVersion, which
+  // this suite has no shell for, but everything below that is __wnListHtml — so the card is sized
+  // against the markup that actually ships. This suite used to keep its own copy of that markup,
+  // which meant it could go on passing against a shape nobody renders.
+  // The CONTENT has to be the real changelog too: it is what makes the card tall.
   const data = await (await fetch("/api/changelog?v=0.1.35")).json();
   const entries = (Array.isArray(data.entries) ? data.entries : []).filter(e => Array.isArray(e.notes) && e.notes.length);
   ok("the sidecar serves real patch notes to size against", entries.length > 0, entries.length + " versions");
-  document.getElementById("wnList").innerHTML = entries.map((e, i) => {
-    const bullets = "<ul>" + e.notes.map(n => "<li>" + escapeHtml(n) + "</li>").join("") + "</ul>";
-    const head = "v" + escapeHtml(e.version) + ' <span class="wn-date">Jan 1, 2026 · 00:00 UTC</span>';
-    return i === 0 ? '<div class="wn-group"><div class="wn-gver">' + head + "</div>" + bullets + "</div>"
-                   : '<details class="wn-group"><summary class="wn-gver">' + head + "</summary>" + bullets + "</details>";
-  }).join("");
+  ok("the card is built by the page, not by this test", typeof window.__wnListHtml === "function");
+  document.getElementById("wnList").innerHTML = window.__wnListHtml(entries);
   document.getElementById("whatsnew").classList.add("show");
 
   const card = document.querySelector("#whatsnew .wn-card");
@@ -732,6 +755,69 @@ const PATCHNOTES = `(async () => {
        " - " + list.clientHeight + " of " + list.scrollHeight + "px");
   }
   document.getElementById("whatsnew").classList.remove("show");
+  return out;
+})()`;
+
+// ── Suite: patch notes are grouped and labelled ───────────────────────────────
+// Notes used to be bare paragraphs, so finding what changed meant reading all of them. Each note
+// is now { kind, label, text } and the card groups them New / Improved / Fixed.
+// Two things are worth pinning. First the ORDER, because it is an editorial decision and nothing
+// else enforces it. Second the LEGACY path: 0.1.33 and older are plain strings with no kind, and
+// they must still render — as one unheaded list, not filed under a guessed section. The sidecar
+// serves only the newest 5 versions, so the legacy case is checked against the builder directly
+// rather than waiting for a release to age out and break it in the field.
+const PATCHGROUPS = `(async () => {
+  ${PRELUDE}
+  const list = document.getElementById("wnList");
+  const data = await (await fetch("/api/changelog?v=0.1.38")).json();
+  const entries = (Array.isArray(data.entries) ? data.entries : []).filter(e => Array.isArray(e.notes) && e.notes.length);
+  const newest = entries[0];
+  ok("the newest version's notes carry a kind and a label",
+     newest.notes.every(n => n && n.kind && n.label), newest.version);
+  ok("...and every kind is one we render",
+     newest.notes.every(n => ["new", "improved", "fixed"].includes(n.kind)));
+
+  list.innerHTML = window.__wnListHtml(entries);
+  // 🔑 The card must be SHOWN before anything is measured. #whatsnew is display:none until then,
+  // so every getBoundingClientRect() reads 0 and the two geometry assertions below pass without
+  // testing anything — which is exactly how the first version of this suite reported a label x of
+  // 0 and called it agreement.
+  document.getElementById("whatsnew").classList.add("show");
+  await sleep(40);
+  const first = list.querySelector(".wn-group");
+  ok("the card is laid out, so the measurements below mean something",
+     first.getBoundingClientRect().width > 100, Math.round(first.getBoundingClientRect().width) + "px wide");
+  const headings = [...first.querySelectorAll(".wn-kind")].map(el => el.textContent);
+  const expected = ["New", "Improved", "Fixed"].filter(h =>
+    newest.notes.some(n => n.kind === h.toLowerCase()));
+  ok("sections read New, then Improved, then Fixed", headings.join(",") === expected.join(","),
+     headings.join(" / "));
+  // An empty section must be omitted, never left as a bare heading — 0.1.36 is a single fix.
+  ok("no section is left empty",
+     [...first.querySelectorAll(".wn-kind")].every(h => {
+       const ul = h.nextElementSibling;
+       return ul && ul.tagName === "UL" && ul.children.length > 0;
+     }));
+  const label = first.querySelector(".wn-label");
+  const desc = first.querySelector(".wn-desc");
+  ok("a note shows its label above its description", !!label && !!desc, label && label.textContent);
+  ok("...on its own line", !!label && label.getBoundingClientRect().bottom <= desc.getBoundingClientRect().top + 1);
+  ok("...and the label is not repeated in the description",
+     !desc.textContent.startsWith(label.textContent));
+  // Every label must be reachable in one glance: they are the scan target, so they share a left
+  // edge. Compare within a section — a heading indents nothing, but a wrapped description must
+  // not push the next label right.
+  const lefts = [...first.querySelectorAll(".wn-label")].map(el => Math.round(el.getBoundingClientRect().left));
+  ok("every label starts at the same x", new Set(lefts).size === 1, [...new Set(lefts)].join(","));
+
+  // LEGACY: a plain string, exactly as 0.1.33 and older are stored.
+  list.innerHTML = window.__wnListHtml([{ version: "0.1.33", date: null, notes: ["An old note with no label."] }]);
+  ok("a legacy note still renders", list.textContent.includes("An old note with no label."));
+  ok("...with no invented section heading", list.querySelectorAll(".wn-kind").length === 0);
+  ok("...and is not dimmed like a description under a label",
+     list.querySelector(".wn-note").classList.contains("nolabel"));
+  document.getElementById("whatsnew").classList.remove("show");
+  list.innerHTML = "";
   return out;
 })()`;
 
@@ -1195,6 +1281,14 @@ const DRAG = `(async () => {
   ok("the reset is flush right in the row",
      Math.abs(mRow.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) < 20,
      Math.round(mRow.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) + "px from the edge");
+  // The column is HEADED, because a bare circular arrow reads as "refresh" and refreshing a widget
+  // is a plausible-sounding action that does not exist. The header only works if it sits over the
+  // buttons it names, so assert the alignment rather than just the text.
+  const hdr = [...document.querySelectorAll("#hub .hub-sec.cols span")].pop();
+  ok("the reset column is headed", hdr && hdr.textContent.trim() === "Reset", hdr && hdr.textContent);
+  ok("...and the header sits over the reset buttons", hdr
+     && Math.abs(hdr.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) < 12,
+     hdr && Math.round(hdr.getBoundingClientRect().right - mBtn.getBoundingClientRect().right) + "px off");
   const wasChecked = mChk.checked;
   mining.s.x = -4000; mining.s.y = 9000; applyFrame(mining);
   mBtn.click();
@@ -1271,6 +1365,24 @@ const ANCHOR = `(async () => {
   ok("the grouped panel's bar is a reportable region", !!document.querySelector("#panel.grouped .whead"));
   detachFromGroup(WBY.blueprint);
   await sleep(30);
+
+  // 1b. The GROUP HERE drop highlight, both kinds of widget. highlightDrop() sets .droptarget on
+  //     whatever you are dragging onto, and the rule was ".widget.droptarget" only — so dragging
+  //     onto the tracker (which is #panel, not .widget) showed nothing at all, on the one widget
+  //     people aim at most. Asserted via the ::after content because that IS the affordance.
+  const groupHere = (w) => {
+    const bar = el(w).querySelector(".whead");
+    return getComputedStyle(bar, "::after").content.replace(/"/g, "");
+  };
+  highlightDrop(WBY.notepad);
+  await sleep(30);
+  ok("an iframe widget shows GROUP HERE", groupHere(WBY.notepad) === "GROUP HERE", groupHere(WBY.notepad));
+  highlightDrop(WBY.blueprint);
+  await sleep(30);
+  ok("...and so does the tracker panel", groupHere(WBY.blueprint) === "GROUP HERE", groupHere(WBY.blueprint));
+  highlightDrop(null);
+  await sleep(30);
+  ok("clearing the target removes it", groupHere(WBY.blueprint) !== "GROUP HERE", groupHere(WBY.blueprint));
 
   // 2. The cog lives in the BOTTOM bar, so its menu has to open down there — it was anchored
   //    inside .head (position:relative) and opened at the TOP of the panel instead.
@@ -1475,6 +1587,159 @@ const ANGLE = `(async () => {
 
   while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
   for (const w of WIDGETS) resetWidget(w);
+  return out;
+})()`;
+
+// A widget's settings popover closes itself after 15s of not being used (Sub, 2026-08-03). Not just
+// tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box over the game, and it
+// masks the Web Page widget's native view for as long as it is up.
+// Driven with ?wcfgidle=250 so the suite doesn't wait a quarter-minute per assertion.
+const WCFGIDLE = `(async () => {
+  ${PRELUDE}
+  const masked = [];
+  window.overlayApi = Object.assign({}, window.overlayApi, { maskWebView: (on) => masked.push(!!on) });
+  const w = WBY.notepad;               // a plain widget: the shell owns its popover
+  setWidgetVisible(w, true);
+  await sleep(200);
+  const open = () => el(w).classList.contains("cfgopen");
+  const cog = () => el(w).querySelector(".wh-cog");
+
+  cog().click();
+  await sleep(30);
+  ok("the cog opens the settings popover", open());
+  ok("...and it masks the native view while up", masked.length > 0 && masked[masked.length - 1] === true, JSON.stringify(masked.slice(-1)));
+
+  await sleep(500);
+  ok("it closes itself once idle", !open());
+  ok("...and releases the view mask", masked[masked.length - 1] === false, JSON.stringify(masked.slice(-1)));
+
+  // Using it keeps it alive. A click on the WIDGET is what counts as use — that is the signal
+  // embedded pages forward via summonCog, so it also covers clicks inside an iframe's own panel.
+  cog().click();
+  await sleep(30);
+  ok("reopens", open());
+  for (let i = 0; i < 5; i++) { await sleep(120); el(w).dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); }
+  ok("still open after 600ms of being clicked", open());
+  await sleep(500);
+  ok("...and closes once the clicking stops", !open());
+
+  // Closing by hand must not leave a timer that fires later and stamps on something else.
+  cog().click();
+  await sleep(30);
+  document.body.click();
+  await sleep(30);
+  ok("an outside click closes it immediately", !open());
+  cog().click();
+  await sleep(30);
+  ok("and it can still be reopened afterwards", open());
+  await sleep(500);
+  ok("...with the timer working again", !open());
+  return out;
+})()`;
+
+// Canvas calibration for mixed-DPI desktops — the nudge (move) and the scale (size), both aimed at
+// the dotted primary outline in arrange mode.
+//
+// The property that matters is that the outline stays a USABLE ALIGNMENT TARGET: the outline and
+// the widgets have to move and scale as ONE coordinate space, or the user lines the outline up
+// with their monitor and the widgets land somewhere else. Both derive from canvas-info's px/py,
+// which is exactly what is asserted here.
+//
+// The shell is absent in this harness, so canvasInfo is driven directly — the same shape
+// overlay:canvas-info returns.
+const CALIBRATE = `(async () => {
+  ${PRELUDE}
+  const root = document.documentElement;
+  const primLeft = () => getComputedStyle(root).getPropertyValue("--prim-left").trim();
+  const w = WBY.notepad;
+  setWidgetVisible(w, true);
+  await sleep(200);
+  w.s.x = 300; w.s.y = 120;
+
+  // Baseline: no calibration at all, which is what every correctly-aligned user has.
+  canvasInfo = { px: 40, py: 20, pw: 1000, ph: 800, vw: 3000, vh: 1200, scale: 1 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("no scale set means no zoom on the document", root.style.zoom === "", JSON.stringify(root.style.zoom));
+  ok("the outline pins to px", primLeft() === "40px", primLeft());
+  ok("a widget sits at its saved x PLUS px", cs(w, "--wx") === "340px", cs(w, "--wx"));
+  // 🔑 Measure a FIXED-SIZE control, not the panel: the panel wraps, so at 2x it re-flows to fit
+  // the narrower CSS viewport and comes out well under double — a real behaviour that would make
+  // this assertion look like a broken zoom. A button's height cannot wrap.
+  const btnH = () => document.querySelector("#canvasNudge .nrow button").getBoundingClientRect().height;
+  const btnH0 = btnH();
+
+  // A nudge: canvas-info carries the shift in px/py, so BOTH the outline and the widget move by it
+  // and the gap between them is untouched. That gap is what makes the outline an alignment target.
+  canvasInfo = { px: 40 + 150, py: 20 + 60, pw: 1000, ph: 800, vw: 3000, vh: 1200, scale: 1 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("nudging moves the outline", primLeft() === "190px", primLeft());
+  ok("...and moves the widget by exactly the same amount", cs(w, "--wx") === "490px", cs(w, "--wx"));
+  ok("...so the widget's offset FROM the outline is unchanged", 490 - 190 === 300);
+
+  // A scale: applied as CSS zoom on the root, so the whole canvas renders bigger — the outline,
+  // the widgets and (measured in Electron 43) the content inside each widget's iframe.
+  // 🔑 px/pw stay RAW canvas px; the zoom is what multiplies them on the way to the screen. If
+  // canvas-info pre-divided by the scale, the outline would never change size and there would be
+  // nothing to calibrate against.
+  canvasInfo = { px: 40, py: 20, pw: 1000, ph: 800, vw: 1500, vh: 600, scale: 2 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("the scale becomes a document zoom", root.style.zoom === "2", root.style.zoom);
+  ok("the outline's CSS position is NOT pre-divided", primLeft() === "40px", primLeft());
+  ok("a widget keeps its canvas coordinates too", cs(w, "--wx") === "340px", cs(w, "--wx"));
+  // Ground truth that the zoom really scales rendering: a fixed-size control measures double.
+  // getBoundingClientRect reports zoom-ADJUSTED px, which is also why the regions this page hands
+  // the shell for cursor hit-testing need no correction at either end.
+  ok("chrome really renders at 2x", Math.abs(btnH() - btnH0 * 2) < 2, btnH0 + " -> " + btnH());
+
+  canvasInfo = { px: 40, py: 20, pw: 1000, ph: 800, vw: 3000, vh: 1200, scale: 1 };
+  applyCanvasVars(); applyAllFrames();
+  await sleep(30);
+  ok("going back to 100% clears the zoom", root.style.zoom === "", JSON.stringify(root.style.zoom));
+
+  // The control itself. Every button must sit INSIDE the panel's own rect — the shell only makes
+  // the window clickable over the rects this page reports, and the scan box's Reset button was
+  // unreachable for exactly this reason (it hung 19px above the box it belonged to).
+  const nudge = document.getElementById("canvasNudge");
+  const nr = nudge.getBoundingClientRect();
+  // Centred on the PRIMARY monitor, both axes. It used to sit under the arrange banner at the top
+  // edge — right where the dotted outline's own top edge is, so the control overlapped the thing it
+  // adjusts. Measured against the primary's rect, not the window's: the canvas spans every display.
+  ok("the calibration panel is centred on the primary, horizontally",
+     Math.abs((nr.left + nr.right) / 2 - (canvasInfo.px + canvasInfo.pw / 2)) < 2,
+     Math.round((nr.left + nr.right) / 2) + " vs " + Math.round(canvasInfo.px + canvasInfo.pw / 2));
+  ok("...and vertically",
+     Math.abs((nr.top + nr.bottom) / 2 - (canvasInfo.py + canvasInfo.ph / 2)) < 2,
+     Math.round((nr.top + nr.bottom) / 2) + " vs " + Math.round(canvasInfo.py + canvasInfo.ph / 2));
+  const btns = [...nudge.querySelectorAll("button")];
+  ok("the calibration panel carries move AND size controls", btns.length === 7, btns.length + " buttons");
+  ok("every control is inside the rect the shell hit-tests", btns.every((b) => {
+    const r = b.getBoundingClientRect();
+    return r.left >= nr.left - 1 && r.right <= nr.right + 1 && r.top >= nr.top - 1 && r.bottom <= nr.bottom + 1;
+  }));
+
+  // Readouts. With no shell the round-trip resolves to nothing and the page keeps its own value,
+  // so this exercises the stepping and clamping rather than persistence.
+  const readScale = () => document.getElementById("nudgeScale").textContent;
+  const readOff = () => document.getElementById("nudgeVal").textContent;
+  ok("it opens at no calibration", readOff() === "0, 0" && readScale() === "100%", readOff() + " / " + readScale());
+  nudge.querySelector('[data-nz="5"]').click();
+  await sleep(30);
+  ok("+ grows the canvas 5% at a time", readScale() === "105%", readScale());
+  nudge.querySelector('[data-nx="10"]').click();
+  await sleep(30);
+  ok("an arrow nudges 10px", readOff() === "10, 0", readOff());
+  for (let i = 0; i < 45; i++) nudge.querySelector('[data-nz="5"]').click();
+  await sleep(60);
+  ok("scale clamps at 300%", readScale() === "300%", readScale());
+  for (let i = 0; i < 60; i++) nudge.querySelector('[data-nz="-5"]').click();
+  await sleep(60);
+  ok("...and at 50%", readScale() === "50%", readScale());
+  document.getElementById("nudgeReset").click();
+  await sleep(30);
+  ok("Reset returns both to neutral", readOff() === "0, 0" && readScale() === "100%", readOff() + " / " + readScale());
   return out;
 })()`;
 
@@ -1685,7 +1950,15 @@ app.whenReady().then(async () => {
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
+    fails += await run("widget settings close when idle", WCFGIDLE, null, "wcfgidle=250");
+    // ?arrange: the calibration panel lives INSIDE the arrange scrim, so a suite that doesn't open
+    // arrange mode measures a display:none control — every size assertion then passes on 0 == 0.
+    // The stub preload is needed as well: the whole arrange-chrome block is behind
+    // `if (window.overlayApi)`, so with no shell the control renders but nothing is wired to it.
+    fails += await run("canvas calibration (mixed-DPI)", CALIBRATE,
+      path.join(__dirname, "widget-dom-stub-preload.cjs"), "arrange");
     fails += await run("patch notes fit the monitor", PATCHNOTES, null);
+    fails += await run("patch notes are grouped and labelled", PATCHGROUPS, null);
     fails += await run("setup nudge", SETUPNUDGE, null);
     fails += await run("background service down", SVCDOWN, null);
     fails += await run("chrome over the native view", VIEWMASK, null);

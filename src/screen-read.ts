@@ -427,6 +427,23 @@ function pickBest(
   return picks.length === 1 ? picks[0].e : null;
 }
 
+/** Drop the kiosk's size/grade prefix — "IND/2/B BroadSpec" -> "BroadSpec".
+ *
+ *  The Fabrication Kiosk prints a manufacturer/size/grade tag ahead of the item name; the
+ *  DATASET never does. Measured against the shipped catalog: **0 of 1572 names carry this
+ *  shape**, so stripping it can't damage a real name, and leaving it on was fatal — the tag's
+ *  tokens dominate the whole-word overlap ("IND 2 B BROADSPEC" vs "BROADSPEC" scores 0.25
+ *  against a 0.6 floor), so `IND/2/B BROADSPEC` resolved to NOTHING and the capture reported
+ *  "couldn't identify this item". That is punkhiji's report: radars and components that would
+ *  never capture, while the same items captured fine for players whose kiosk showed no tag.
+ *
+ *  🔑 Stripping is enough on its own — the base name then hits the EXACT pass, which also
+ *  settles the variants ("BroadSpec" vs "BroadSpec-Go"/"-Max" differ once normalised, so there
+ *  is no ambiguity to resolve and no need to consult the category breadcrumb). */
+export function stripSizeGrade(raw: string): string {
+  return raw.replace(/^[A-Za-z]{2,6}\/\d\/[A-Za-z0-9]{1,3}\s+/, "");
+}
+
 /** Resolve an OCR'd name to a catalog item: exact-normalized, then whole-word overlap,
  *  then a character-bigram fallback for glitched tags — both tie-safe (an ambiguous read
  *  returns none, never a guess) and variant-aware (picks S1/S2/S3 by the OCR's digits). */
@@ -434,7 +451,7 @@ export function resolveName(
   raw: string,
   catalog: CatalogEntry[],
 ): { name: string | null; item: string | null; match: "exact" | "fuzzy" | "none" } {
-  const n = normName(raw);
+  const n = normName(stripSizeGrade(raw));
   if (!n) return { name: null, item: null, match: "none" };
   // OCR routinely confuses 0<->O (a size-0 "S0 Helix" reads as "SO HELIX") and 1<->I/| (the
   // QuantumDrive "XL-1" reads as "XL-I", "S1" as "SI"). Fold each digit to its look-alike letter
