@@ -1,4 +1,64 @@
 {
+  "0.1.40": {
+    "date": "2026-08-08T20:46:47Z",
+    "notes": [
+      {
+        "kind": "new",
+        "label": "The scan readout, where you can see it",
+        "text": "The number the scanner read now shows in two places — to the left of the scan box and above it — instead of one spot underneath, and it is about twice the size. The box is wide and the signature can sit anywhere along it, so a single readout was often nowhere near what you were looking at. Both copies always show the same number, and each one moves itself out of the way if it would run off the edge of your screen."
+      },
+      {
+        "kind": "improved",
+        "label": "The mining scanner is around eight times faster",
+        "text": "A scan used to take about four and a half seconds to come back, and often longer, because every check read your entire screen and ran text recognition over all of it before it even looked at the number. Now, once it has found a signature, it looks only at the small patch of screen where that number actually sits. A reading comes back in a little over half a second. Picking up a brand-new rock is quicker too."
+      },
+      {
+        "kind": "improved",
+        "label": "It reads the number correctly now",
+        "text": "The scanner used two different text engines, and the one doing most of the work was the one getting it wrong — in testing it did not read a single mining signature correctly, producing things like 2006 where the screen clearly showed 2,000. The better engine is in charge now, and a nonsense value from the other one is thrown away instead of being announced."
+      },
+      {
+        "kind": "improved",
+        "label": "The scan marker is found on any ship",
+        "text": "Confirming that you are really scanning means spotting the small map-pin drawn next to the number. That check used to depend on the pin's colour — but the pin is drawn in your ship's HUD colour, which changes with the manufacturer, and on some ships it is nearly white. It no longer looks at colour at all. It looks for a small solid bright mark of roughly the right shape, which holds true whatever your HUD looks like."
+      },
+      {
+        "kind": "improved",
+        "label": "Signatures that could be two things now say so",
+        "text": "A couple of readings are genuinely ambiguous. 16,000 is either a five-rock Savrilium cluster or eight panels of salvage, and 18,000 is either Bexalite or nine panels. The scanner used to pick a side and sound certain about it. Now it leads with the likelier answer and admits the doubt: \"Probably debris. Could be Bexalite. Your call.\" If it is a rock you have targeted it still leads with the rock — \"That might be Savrilium. I'm not certain. Worth flying over.\""
+      },
+      {
+        "kind": "fixed",
+        "label": "A finished mission would not go away",
+        "text": "Complete a contract and the tracker could keep showing it as unfinished, sometimes for the rest of your session. It was re-reading the mission title still sitting on your screen after the contract ended and registering it all over again as a new one."
+      },
+      {
+        "kind": "fixed",
+        "label": "The wrong blueprint list",
+        "text": "Several different contracts share a name. When the tracker could not tell which one you were on it merged all of their reward lists together — so a mission with eight blueprints you already owned showed as \"14 of 18\", including four you could never get from it. It now uses the exact contract the game reports."
+      },
+      {
+        "kind": "fixed",
+        "label": "Missions coming back from hours ago",
+        "text": "A contract you finished earlier could reappear as though it were live, even after you had gone back out to the menu and returned. Leaving the game now properly clears the missions from that session."
+      },
+      {
+        "kind": "fixed",
+        "label": "Half of all mining scans were failing silently",
+        "text": "Every check wrote a screenshot to the same temporary file, which collided with the previous check still reading it. Around half of them failed outright and produced nothing at all — no reading, no call-out, and no error to explain it. That is most of what \"it just sits there\" was."
+      },
+      {
+        "kind": "fixed",
+        "label": "Saving settings no longer does unnecessary work",
+        "text": "Changing anything — even a widget's text size — used to re-fetch every loadout URL, restart the game-log watcher mid-session, and re-upload your whole collection to the site. It now only does the work the change actually needs. Thanks to Rytharr for finding this one."
+      },
+      {
+        "kind": "fixed",
+        "label": "Better recovery from misread digits",
+        "text": "The scanner could already correct a single 6 mistaken for an 8. It now handles two in the same number, recovering about ten more real misreadings without introducing any new ambiguity. Thanks to Rytharr for the fix and the measurements behind it."
+      }
+    ]
+  },
   "0.1.39": {
     "date": "2026-08-05T21:06:56Z",
     "notes": [
