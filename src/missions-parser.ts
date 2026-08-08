@@ -60,16 +60,29 @@ export type MissionEvent =
   /** A party member's map marker streamed in/out. This is the ONLY live party signal the log
    *  gives — it tells you HOW MANY people are in your party (and nearby), never who. */
   | { kind: "partyMarker"; ts: string | null; markerId: string; entityId: string; present: boolean }
-  /** A party member's marker detaching names the player it belonged to. It's the one line that
+  /** A party member's marker detaching names the player it belonged to. It's the one thing that
    *  ties a marker to a HANDLE — but it only fires when they despawn, so names arrive late (or
    *  not at all). Harvested purely to offer name suggestions for the manual party roster. */
-  | { kind: "partyMemberName"; ts: string | null; markerId: string; name: string };
+  | { kind: "partyMemberName"; ts: string | null; markerId: string; name: string }
+  /** Joined (or moved to) a PU shard. `shard` is the full matchmaking id
+   *  ("pub_use1b_12326004_040"): env _ region/AZ _ cluster _ instance. Null = left the PU
+   *  (the frontend runs on the sentinel "local_shard", which is not a place people meet).
+   *  Drives the chat channels: region = segment 2, shard = the whole id. */
+  | { kind: "shard"; ts: string | null; shard: string | null };
 
 const UUID = "[0-9a-fA-F-]{36}";
 
 /** Strip the runtime instance suffix ("_0", "_12") so it matches the dataset debug_name. */
 export function contractKeyOf(contract: string): string {
   return contract.replace(/_\d+$/, "");
+}
+
+/** "pub_use1b_12326004_040" → "use1b" (the region/AZ — what players call "the server").
+ *  Null for the frontend sentinel or anything that doesn't look like a shard id. */
+export function regionOfShard(shard: string | null): string | null {
+  if (!shard || shard === "local_shard") return null;
+  const seg = shard.split("_");
+  return seg.length >= 3 ? seg[1] : null;
 }
 
 function normalizeMissionTitle(title: string | null): string | null {
@@ -209,6 +222,24 @@ export function parseMissionEvent(e: LogEvent): MissionEvent | null {
       const ct = (m.match(/CompletionType\[(\w+)\]/)?.[1] ?? "").toUpperCase();
       const state = ct.startsWith("ABANDON") ? "ABANDONED" : ct.startsWith("COMPLETE") ? "COMPLETED" : ct || "ENDED";
       return { kind: "end", ts: e.timestamp, missionId: mid[1], state };
+    }
+
+    // Matchmaking placed us on a PU shard: "<Join PU> address[…] port[…]
+    // shard[pub_use1b_12326004_040] locationId[…]". The one line that names the shard at join
+    // time (verified live 4.9.0, 2026-08-08).
+    case "Join PU": {
+      const sh = m.match(/shard\[([\w-]+)\]/);
+      if (!sh) return null;
+      return { kind: "shard", ts: e.timestamp, shard: sh[1] === "local_shard" ? null : sh[1] };
+    }
+
+    // Belt-and-braces for a mid-session move: "<Update Shard Id> New Shard Id:
+    // pub_use1b_12326004_040. Old Shard Id". Returning to the menu updates to "local_shard",
+    // which reports as shard null (left the PU).
+    case "Update Shard Id": {
+      const sh = m.match(/New Shard Id:\s*([\w-]+)/);
+      if (!sh) return null;
+      return { kind: "shard", ts: e.timestamp, shard: sh[1] === "local_shard" ? null : sh[1] };
     }
 
     // Context (re)established. map="megamap" = the persistent universe (ignore Arena

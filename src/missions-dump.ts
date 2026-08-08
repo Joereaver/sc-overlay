@@ -51,6 +51,8 @@ const fmt = (e: MissionEvent): string => {
       return `PARTY    marker ${e.markerId} ${e.present ? "in" : "out"} (entity ${e.entityId})`;
     case "partyMemberName":
       return `PARTY    marker ${e.markerId} = «${e.name}»`;
+    case "shard":
+      return `SHARD    ${e.shard ?? "(left PU)"}`;
   }
 };
 

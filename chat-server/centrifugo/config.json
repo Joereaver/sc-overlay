@@ -1,0 +1,18 @@
+{
+  "client": {
+    "insecure": true,
+    "allowed_origins": ["http://localhost:8778", "http://127.0.0.1:8778"]
+  },
+  "http_server": {
+    "port": 8799
+  },
+  "channel": {
+    "without_namespace": {
+      "allow_subscribe_for_client": true,
+      "allow_publish_for_subscriber": true,
+      "presence": true,
+      "history_size": 50,
+      "history_ttl": "24h"
+    }
+  }
+}

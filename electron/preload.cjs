@@ -89,6 +89,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   // Battaglia grind tracker: shell-owned visibility, same as the widgets above.
   setBattaglia: (on) => ipcRenderer.send("app:set-battaglia", !!on),
   onBattagliaVisible: (cb) => ipcRenderer.on("overlay:battaglia-visible", (_e, s) => cb(s)),
+  // Social chat: shell-owned visibility; its send field reuses the keyboard-grab above.
+  setChat: (on) => ipcRenderer.send("app:set-chat", !!on),
+  onChatVisible: (cb) => ipcRenderer.on("overlay:chat-visible", (_e, s) => cb(s)),
   // Settings as a canvas widget (the standalone window still exists — see openSettings above).
   setConfig: (on) => ipcRenderer.send("app:set-config", !!on),
   onConfigVisible: (cb) => ipcRenderer.on("overlay:config-visible", (_e, s) => cb(s)),

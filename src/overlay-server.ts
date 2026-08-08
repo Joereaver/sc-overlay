@@ -12,6 +12,7 @@ import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
 import { collectLogPaths } from "./log-paths.js";
 import { MiningTracker } from "./mining.js";
+import { ChatClient } from "./chat.js";
 import { MiningEconomyStore } from "./mining-economy.js";
 import { MissionFeedbackStore } from "./mission-feedback.js";
 import { FabClaims } from "./fab-claim.js";
@@ -267,6 +268,22 @@ interface Config {
    *  instead of keeping the ship's manufacturer skin. Affects theme="auto" AND the /api/ship
    *  signal. Default false = stay on the last ship's manufacturer until you board another. */
   revertThemeOnFoot: boolean;
+  /** Remembers whether the Chat widget was left open — and is also the CONNECTION gate:
+   *  chat holds no socket unless the widget is open (Sub's lightweight rule). */
+  chatOpen: boolean;
+  /** Which chat backend the sidecar connects to. Two exist for the 2026-08 A/B test:
+   *  "custom" (chat-server/server.mjs — full 3-tier channels) or "centrifugo" (one global
+   *  room). The loser gets deleted after the A/B. */
+  chatBackend: "custom" | "centrifugo";
+  /** WebSocket URL of the custom chat server. Local default for the A/B; production points
+   *  at the subliminal.gg deployment. */
+  chatServerUrl: string;
+  /** WebSocket URL of the Centrifugo instance (its /connection/websocket endpoint). */
+  chatCentrifugoUrl: string;
+  /** Dev-mode chat identity for the A/B. Production identity comes from the sync token —
+   *  the site resolves it to the RSI-VERIFIED handle, and unverified accounts get no chat
+   *  (Sub's rule: chat identities must be bannable). */
+  chatHandle: string;
   /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
    *  wizard is finished; the wizard never auto-opens again once true. */
   setupDone: boolean;
@@ -345,6 +362,11 @@ const DEFAULTS: Config = {
   overlayTwist: 0, // flat by default; the user can dial in a skew angle in the hub
   overlayScale: 100,
   revertThemeOnFoot: false,
+  chatOpen: false,
+  chatBackend: "custom",
+  chatServerUrl: "ws://127.0.0.1:8788/ws",
+  chatCentrifugoUrl: "ws://127.0.0.1:8799/connection/websocket",
+  chatHandle: "",
   setupDone: false,
   setupSettingsReviewed: false,
   setupShareResolved: false,
@@ -842,6 +864,34 @@ setTimeout(() => void flushMissionFeedback(), 15_000);
 // Monotonic per-process counter so two runs of the same dev scenario are two distinct
 // completions rather than one the tracker de-duplicates by missionId.
 let replaySeq = 0;
+// ── Social chat — the sidecar holds ONE backend connection; widgets ride the SSE below.
+const chat = new ChatClient();
+const chatClients = new Set<ServerResponse>();
+chat.on("sse", (frame: unknown) => {
+  const data = `data: ${JSON.stringify(frame)}\n\n`;
+  for (const res of chatClients) res.write(data);
+});
+/** (Re)arm chat from config. The widget being open is the connection gate — closed widget,
+ *  zero sockets. Without any identity (no dev handle, no sync token) there is nothing to
+ *  connect AS, so stay off and let the widget show its verify prompt. */
+function chatConfigure(): void {
+  const active = config.chatOpen && !!(config.chatHandle || config.syncToken);
+  chat.configure({
+    backend: config.chatBackend,
+    url: config.chatBackend === "custom" ? config.chatServerUrl : config.chatCentrifugoUrl,
+    handle: config.chatHandle,
+    token: config.syncToken,
+  }, active);
+}
+
+/** The parser events chat cares about: shard join/hop feeds the region+shard channels,
+ *  and leaving the PU (quit/menu) drops them. Runs on the seed pass too, so a mid-session
+ *  app start knows the current shard without waiting for a hop. */
+function applyChatSignals(ev: import("./missions-parser.js").MissionEvent): void {
+  if (ev.kind === "shard") chat.applyShard(ev.shard);
+  else if (ev.kind === "sessionEnd") chat.applyShard(null);
+}
+
 const miningClients = new Set<ServerResponse>();
 function miningSend(msg: unknown): void {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
@@ -985,7 +1035,7 @@ function seedTrackerFromLog(): void {
       if (!line) continue;
       tracker.detectPatch(line);
       const ev = parseMissionEvent(parseLine(line));
-      if (ev) { tracker.apply(ev); party.apply(ev); }
+      if (ev) { tracker.apply(ev); party.apply(ev); applyChatSignals(ev); }
       const chan = shipChannelEvent(line);
       if (chan) {
         if (chan.action === "enter" && chan.manufacturer) { seedMfr = chan.manufacturer; seedShip = chan.ship; }
@@ -1010,7 +1060,7 @@ function startWatcher(): void {
     // Feed the mission/blueprint tracker on every line (independent of ship auto-switch).
     tracker.detectPatch(e.raw);
     const me = parseMissionEvent(e);
-    if (me) { tracker.apply(me); party.apply(me); }
+    if (me) { tracker.apply(me); party.apply(me); applyChatSignals(me); }
 
     // Theme auto-switch: track the manufacturer of the ship we're in; re-broadcast so the
     // overlay retints live when theme="auto". Independent of the erkul loadout autoSwitch.
@@ -1542,6 +1592,37 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
+  // ── Social chat: live stream + snapshot + send ──
+  if (url === "/chat/events") {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    res.write("\n");
+    chatClients.add(res);
+    res.write(`data: ${JSON.stringify({ type: "state", view: chat.view() })}\n\n`);
+    req.on("close", () => chatClients.delete(res));
+    return;
+  }
+  if (url === "/api/chat" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    // The widget's gate state rides along: it must know WHY chat is off (no identity vs.
+    // widget-off vs. backend down) to show the right prompt.
+    res.end(JSON.stringify({ ...chat.view(), open: config.chatOpen, hasIdentity: !!(config.chatHandle || config.syncToken), handle: config.chatHandle }));
+    return;
+  }
+  // Sending speaks AS the user's chat identity — same capability class as the identity
+  // itself, so like /api/twitch/* it must not answer the LAN (OBS sources only read).
+  if (url === "/api/chat/send" && req.method === "POST") {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, message: "Chat can only be sent from this machine." }));
+      return;
+    }
+    const body = await readBody(req);
+    const out = chat.send(String(body.ch ?? ""), String(body.text ?? ""));
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(out));
+    return;
+  }
+
   // Mining Assistant: live state stream + snapshot + controls.
   if (url === "/mining/events") {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
@@ -1750,6 +1831,25 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       }
     }
     if (typeof body.bindingChartOpen === "boolean") config.bindingChartOpen = body.bindingChartOpen;
+    if (typeof body.chatOpen === "boolean") config.chatOpen = body.chatOpen;
+    if (body.chatBackend === "custom" || body.chatBackend === "centrifugo") config.chatBackend = body.chatBackend;
+    // ws/wss only — these strings become outbound WebSocket dials.
+    const wsUrl = (v: unknown, fallback: string): string => {
+      if (typeof v !== "string") return fallback;
+      const raw = v.trim();
+      if (!raw) return fallback;
+      try {
+        const u = new URL(raw);
+        return u.protocol === "ws:" || u.protocol === "wss:" ? u.toString() : fallback;
+      } catch { return fallback; }
+    };
+    if (body.chatServerUrl !== undefined) config.chatServerUrl = wsUrl(body.chatServerUrl, config.chatServerUrl);
+    if (body.chatCentrifugoUrl !== undefined) config.chatCentrifugoUrl = wsUrl(body.chatCentrifugoUrl, config.chatCentrifugoUrl);
+    // RSI handle shape; "" is a real value (no dev identity → chat stays gated).
+    if (typeof body.chatHandle === "string") {
+      const h = body.chatHandle.trim();
+      if (!h || /^[A-Za-z0-9._-]{3,30}$/.test(h)) config.chatHandle = h;
+    }
     if (typeof body.miningTone === "string") config.miningTone = body.miningTone;
     // GPU accel is read by electron/main.cjs at startup; persist here, restart applies it.
     if (typeof body.hwAccel === "boolean") config.hwAccel = body.hwAccel;
@@ -1815,6 +1915,8 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     startWatcher();
     // Re-arm sync with the new settings and reconcile the full collection.
     if (sync.configure(config.syncToken, config.syncEnabled)) syncFull();
+    // Re-arm chat (widget toggled, backend switched, identity changed). No-op when unchanged.
+    chatConfigure();
     // A changed token → re-resolve subscriber entitlement now (don't wait for the 20-min tick).
     void pollEntitlement();
     // If log-sharing was just turned on, upload the current session now.
@@ -2394,4 +2496,7 @@ server.listen(PORT, async () => {
   await reindex();
   if (config.activeUrl) await setActive(config.activeUrl, "startup");
   startWatcher();
+  // Arm chat AFTER the seed pass so the current shard (read from the log) rides the first
+  // connection's loc frame instead of arriving as a later correction.
+  chatConfigure();
 });

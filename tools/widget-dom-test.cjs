@@ -60,7 +60,7 @@ const GROUPING = `(async () => {
   // 11 = the 9 canvas widgets + the Blueprint panel (a local, non-iframe widget) + Settings.
   // Bump this deliberately when a widget is added — it is the one assertion that notices a
   // registry entry going missing, which would otherwise just look like a widget quietly absent.
-  ok("registry has 11 widgets (incl. the Blueprint panel and Settings)", typeof WIDGETS !== "undefined" && WIDGETS.length === 11, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
+  ok("registry has 12 widgets (incl. the Blueprint panel and Settings)", typeof WIDGETS !== "undefined" && WIDGETS.length === 12, typeof WIDGETS !== "undefined" ? WIDGETS.length : "unreachable");
   ok("starts ungrouped", GROUPS.length === 0, GROUPS.length);
   const party = WBY.party, mining = WBY.mining, notepad = WBY.notepad;
   ok("test widgets shown", shown(party) && shown(mining) && shown(notepad));
