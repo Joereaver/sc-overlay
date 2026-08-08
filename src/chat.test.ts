@@ -128,9 +128,17 @@ async function testCentrifugo(): Promise<void> {
     await until(b, (f) => f.type === "state" && f.view.channels.some((c: any) => c.ch === "global"), "B subscribed");
 
     const heard = until(b, (f) => f.type === "msg" && f.msg.text === "hello via centrifugo", "B hears A via centrifugo");
+    // 🔑 Centrifugo does NOT deliver a publication back to its publisher, so send() echoes
+    // locally — the sender must see their OWN message exactly once (the live bug of 2026-08-08
+    // was zero; a nonce-dedupe failure would make it two).
+    const selfEcho = until(a, (f) => f.type === "msg" && f.msg.text === "hello via centrifugo", "A sees own message");
     assert.equal(a.send("global", "hello via centrifugo").ok, true);
     const got = await heard;
     assert.equal(got.msg.from.handle, "SubTest");
+    await selfEcho;
+    await wait(500); // any server echo would arrive by now; the dedupe must have eaten it
+    const selfCount = a.view().channels.find((c) => c.ch === "global")!.msgs.filter((m) => m.text === "hello via centrifugo").length;
+    assert.equal(selfCount, 1, "sender sees own message exactly once");
     // The shallow arm really is shallow: no region/shard rooms.
     assert.equal(a.send("region:use1b", "nope").ok, false, "centrifugo arm only has global");
 

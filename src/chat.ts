@@ -259,9 +259,15 @@ export class ChatClient extends EventEmitter {
   }
 
   private centrifugoSeq = 0;
+  /** Nonces of OUR recent centrifugo publishes. Centrifugo does not deliver a publication back
+   *  to the connection that published it (measured on the live instance, 2026-08-08 — everyone
+   *  else heard the message, the sender never did), so send() echoes locally; this set is the
+   *  guard that keeps the message single if a server echo ever DOES arrive. */
+  private sentNonces = new Set<string>();
   private centrifugoMsg(pub: any): ChatMsg | null {
     const d = pub?.data;
     if (!d || typeof d.text !== "string") return null;
+    if (typeof d.n === "string" && this.sentNonces.has(d.n)) return null; // our own, already echoed
     return {
       ch: "global",
       id: pub.offset ?? `c${++this.centrifugoSeq}`,
@@ -310,10 +316,16 @@ export class ChatClient extends EventEmitter {
       this.wsSend({ t: "msg", ch, text: t });
     } else {
       if (ch !== "global") return { ok: false, message: "The Centrifugo A/B build only has Global chat." };
+      const at = new Date().toISOString();
+      const n = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      this.sentNonces.add(n);
+      if (this.sentNonces.size > 50) this.sentNonces.delete(this.sentNonces.values().next().value!);
       this.wsSend({
         id: 100 + ++this.centrifugoSeq,
-        publish: { channel: "sc-global", data: { handle: this.you?.handle, verified: this.you?.verified === true, text: t, at: new Date().toISOString() } },
+        publish: { channel: "sc-global", data: { handle: this.you?.handle, verified: this.you?.verified === true, text: t, at, n } },
       });
+      // Local echo — the server won't reflect it to us (see sentNonces above).
+      this.pushMsg({ ch: "global", id: `local-${n}`, from: this.you ?? { handle: "?", verified: false }, text: t, at });
     }
     return { ok: true };
   }
