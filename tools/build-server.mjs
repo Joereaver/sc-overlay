@@ -18,10 +18,19 @@ execSync(`bun build src/overlay-server.ts --compile --outfile ${out}/sc-overlay-
   stdio: "inherit",
 });
 
+// Per-changelist datasets stay in the repo for dev, but only `latest` ships: the newest
+// per-changelist pair is byte-identical to the .latest files (checked 0.1.41 — cmp says so),
+// and old generations (4.8.x) are unreachable on live servers. A player on an unbundled
+// changelist resolves exact → remote fetch (subliminal.gg/sc) → latest, same as today.
+// Shipping all generations cost 25.5 MB of the 32 MB data dir.
+const OLD_DATASET = /^blueprint(?:s|-detail)\.\d+\.json$/;
 for (const dir of ["overlay", "data"]) {
   // Never ship overlay/config.json — it's the developer's personal config (erkul
   // URLs + sync token). The server seeds from DEFAULTS and persists to %APPDATA%.
-  cpSync(dir, `${out}/${dir}`, { recursive: true, filter: (src) => basename(src) !== "config.json" });
+  cpSync(dir, `${out}/${dir}`, {
+    recursive: true,
+    filter: (src) => basename(src) !== "config.json" && !OLD_DATASET.test(basename(src)),
+  });
   console.log(`copied ${dir}/ -> ${out}/${dir}/`);
 }
 console.log("server bundle ->", out);
