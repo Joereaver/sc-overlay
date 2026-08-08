@@ -1,4 +1,29 @@
 {
+  "0.1.41": {
+    "date": "2026-08-09T00:00:00Z",
+    "notes": [
+      {
+        "kind": "new",
+        "label": "Player chat — Global, your server, your shard",
+        "text": "The overlay now has an in-game chat with three channels that manage themselves: Global (everyone running SC Overlay), your server region (US East 1B, EU West 1A, and so on), and your shard — the actual instance you are flying in, meaning everyone in that channel can genuinely meet you in the verse. The app reads which shard you land on from the game's own log and moves you between channels automatically as you play. Turn it on from the hub or the tray: it's the new Chat widget. Chat is for verified RSI accounts only — connect your subliminal.gg account and verify your handle on your profile, and you're in. That rule is what keeps the place moderated: everyone chatting is accountable for their handle."
+      },
+      {
+        "kind": "improved",
+        "label": "A much smaller, much lighter app",
+        "text": "This update is a full optimization pass with no visible change: the download is 40 MB smaller (135 MB, down from 175 MB), the app on disk shrank by about a quarter, and the background service that does the tracking now uses about a quarter of the memory it used to — roughly 350 MB less while the app is running. The screen-watcher that notices when the game is focused no longer needs its own helper process either."
+      },
+      {
+        "kind": "fixed",
+        "label": "Opening the tray menu during an update download quit the app",
+        "text": "If you right-clicked the tray icon to watch an update download, the app could close on the spot — the menu was being rebuilt underneath its own open popup once a second. The download itself was always fine and resumed on relaunch, which made it look stranger than it was. The tray tooltip still shows live progress on hover; the menu simply leaves itself alone until the download finishes."
+      },
+      {
+        "kind": "fixed",
+        "label": "Unlock Alerts offered to claim blueprints you already had",
+        "text": "Every ordinary \"Blueprint Received\" toast was carrying an \"Add to my collection\" button and a countdown that belonged only to fabricator claims. The prompt now appears only when there is actually something to claim."
+      }
+    ]
+  },
   "0.1.40": {
     "date": "2026-08-08T20:46:47Z",
     "notes": [

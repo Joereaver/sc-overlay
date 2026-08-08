@@ -1492,11 +1492,14 @@ function setupUpdater() {
     if (!updateDownload) updateDownload = { version: "", percent: 0, bps: 0 };
     const pct = Math.floor(p.percent);
     updateDownload.bps = p.bytesPerSecond;
+    // ONLY the tooltip updates during a download. setContextMenu() here QUIT the app for
+    // anyone who opened the tray to watch progress: replacing the Menu object while its
+    // native popup is open tears it down and the process exits cleanly — no WER, no log
+    // (shipped 0.1.39–0.1.40; Sub diagnosed it). The menu itself still rebuilds on
+    // update-downloaded and on error, when no popup can be up. Never rebuild a tray
+    // context menu on a high-frequency event.
     if (tray) tray.setToolTip(`SC Overlay — downloading update ${pct}%`);
-    if (pct !== updateDownload.percent) {
-      updateDownload.percent = pct;
-      refreshTray();
-    }
+    updateDownload.percent = pct;
   });
   autoUpdater.on("update-not-available", () => {
     if (!manualCheck) return;

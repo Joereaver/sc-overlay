@@ -42,6 +42,9 @@
      player has to act, and the accent border is what says so at a glance. */
   #card.claiming { border-color: var(--warn, #e8b44a); }
   .claim { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+  /* The author display:flex above beats the UA's [hidden]{display:none} — without this guard
+     the claim prompt rode along on every ordinary receipt toast (shipped 0.1.38–0.1.40). */
+  .claim[hidden] { display: none; }
   .claim button {
     font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
     padding: 4px 11px; border-radius: 7px; color: #1a1400;
