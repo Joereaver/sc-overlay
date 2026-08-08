@@ -19,7 +19,7 @@ import { FabClaims } from "./fab-claim.js";
 import { SCENARIOS, replayLines, replayMissionId } from "./dev-replay.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
-import { loadCatalog, ocrImage, hasScanHud, classifyScreen, type CatalogEntry, type OcrResult, type ScanRegion } from "./screen-read.js";
+import { loadCatalog, ocrImage, hasScanHud, classifyScreen, bestSignatureLine, glyphSearchBox, type CatalogEntry, type OcrResult, type ScanRegion } from "./screen-read.js";
 import { maybeShareLog } from "./log-share.js";
 
 const overlayDir = assetDir(import.meta.url, "overlay");
@@ -119,6 +119,12 @@ interface Config {
   /** Mining Assistant: arms the capture loop to read the Refinement Center (job timers)
    *  and the mining scanner signature. Opt-in; read by electron/capture.cjs each poll. */
   miningAssistant: boolean;
+  /** DEV BUILDS ONLY — writes the bitmaps the mining OCR is handed to <userDir>/debug-frames,
+   *  served at GET /api/mining/debug-frame. Those bitmaps are screenshots of the user's desktop,
+   *  and this app's position on screen reading is that it never happens unless you ask for it — so
+   *  this is gated on SC_DEV here AND on app.isPackaged in main.cjs, rather than trusted to a
+   *  config flag a release could ship or a stale config.json could arm. Off by default either way. */
+  miningDebug: boolean;
   /** Where the signature number is hunted, as fractions of the frame. Null = the default band.
    *  Set by dragging the "scan read area" box (Mining Scanner cog) — the only way to cope with a
    *  HUD that doesn't sit where we assume. */
@@ -309,6 +315,7 @@ const DEFAULTS: Config = {
   missionOcr: false,
   fabClaim: false,
   miningAssistant: false,
+  miningDebug: false,
   scanRegion: null,
   miningAutoShow: false,
   miningOpen: false,
@@ -654,6 +661,44 @@ async function setActive(url: string, reason: string): Promise<boolean> {
 const tracker = new MissionTracker({ dataDir, remoteBaseUrl: "https://subliminal.gg/sc" });
 // Name->UUID catalog for the screen-read OCR endpoint; loaded lazily on first use.
 let screenCatalog: CatalogEntry[] | null = null;
+
+/** Rolling diagnostic buffer of what the mining scanner SAW, served at GET /api/mining/recent.
+ *  In memory only and capped — a debug aid, never a record. It exists because the detailed
+ *  `[mining]` log line is only written once a signature has parsed, so the interesting case —
+ *  a frame where nothing parsed — left no trace at all. */
+interface MiningReadNote {
+  at: number;
+  /** Which OCR pass produced this: the full-frame Windows OCR, pre-computed lines, or the
+   *  magnified RapidOCR crop. Tells a Windows-OCR miss apart from a RapidOCR one. */
+  pass: string;
+  kind: string;
+  signature: number | null;
+  scanHud: boolean;
+  sawText: string;
+}
+const MINING_READ_RING = 60;
+const recentMiningReads: MiningReadNote[] = [];
+let lastHeartbeat: { at: number; rate: number | null; lastTickMs: number | null; fastForMs: number | null } | null = null;
+/** Per-stage tick timings from the capture loop (see the heartbeat handler). */
+const TICK_RING = 80;
+const recentTicks: Record<string, unknown>[] = [];
+
+function noteMiningRead(n: Omit<MiningReadNote, "at">): void {
+  recentMiningReads.push({ at: Date.now(), ...n });
+  if (recentMiningReads.length > MINING_READ_RING) recentMiningReads.shift();
+}
+
+/** A short sample of the text the OCR returned, for telling "saw nothing" apart from "saw the
+ *  number and mangled it". Bounded in both directions — line count and total length. */
+function readTextSample(body: Record<string, unknown>): string {
+  const lines = body.lines;
+  if (!Array.isArray(lines)) return "";
+  return lines
+    .map((l: unknown) => (l && typeof l === "object" ? String((l as { text?: unknown }).text ?? "") : ""))
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, 400);
+}
 const missionClients = new Set<ServerResponse>();
 // ── Overlay theme (manufacturer) ─────────────────────────────────────────────
 // The ship manufacturer we last detected in the log (for theme: "auto"). Drake and Anvil have
@@ -1564,7 +1609,34 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // needs to know the player is scanning, so it can keep polling fast instead of idling.
     let scanHud = false;
     if (!screenCatalog) screenCatalog = loadCatalog(dataDir);
-    if (Array.isArray(body.lines)) {
+    if (body.miningCrop === true && Array.isArray(body.lines)) {
+      // RapidOCR re-read of a TIGHT CROP already limited to the configured mining scan region —
+      // every line here is already "in the box" by construction (that's what the crop IS), so this
+      // skips classifyScreen's scanRegion filtering, which is written for a full-frame read, and
+      // looks for the best signature-shaped candidate directly. Same reasoning as the fabricator's
+      // RapidOCR second pass: Windows OCR mangles this small, translucent-backgrounded, stylized
+      // text often enough that most scans never produced a candidate to classify at all.
+      const ocr: OcrResult = { w: Number(body.w) || 0, h: Number(body.h) || 0, lines: body.lines };
+      const best = bestSignatureLine(ocr.lines, ocr.w / 2);
+      // 🔑 glyphSearchBox MUST be computed in FULL-FRAME coordinates, not crop-relative ones.
+      // It clamps the pin's search box to stay inside "the frame" — but the crop is only ~150px
+      // wide while the pin sits ~20-40px further left than the number, so a crop-relative call
+      // clamped against the CROP's own edge instead of the screen's, silently shifting the search
+      // box right into territory that isn't where the pin actually is. Translate the candidate line
+      // to its true on-screen position first (capture.cjs sends the crop's offset + the real frame
+      // size alongside the lines) so the clamp — and everything downstream that samples `shot`,
+      // the UNCROPPED bitmap — uses the real screen bounds.
+      const offX = Number(body.offsetX) || 0, offY = Number(body.offsetY) || 0;
+      const frameW = Number(body.frameW) || ocr.w, frameH = Number(body.frameH) || ocr.h;
+      result = best
+        ? (() => {
+            const onScreen = { ...best.l, x: best.l.x + offX, y: best.l.y + offY };
+            return { kind: "mineable", signature: best.sig, raw: best.l.text.trim(),
+              pin: glyphSearchBox(onScreen, frameW, frameH),
+              text: { x: onScreen.x, y: onScreen.y, w: onScreen.w, h: onScreen.h } };
+          })()
+        : { kind: "none" };
+    } else if (Array.isArray(body.lines)) {
       // Pre-computed OCR from the main process (RapidOCR reads the fabricator name off a right-
       // panel crop). Classify directly — skip the WinRT OCR entirely for this call.
       const ocr: OcrResult = { w: Number(body.w) || 0, h: Number(body.h) || 0, lines: body.lines };
@@ -1578,6 +1650,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // Routing applies to BOTH sources. Mining reads feed its tracker (same process); the
     // mission/fabricator reads are routed by capture.cjs off the returned result.
     const rd = result as { kind?: string; signature?: number; name?: string; items?: string[] };
+    // 🔑 DIAGNOSTIC RING — the only record of a read that found NOTHING. /api/mining/scan is the
+    // detailed log, but the caller only posts there once a signature has parsed, so a frame that
+    // yielded no number is invisible everywhere: nothing logged, nothing broadcast, no readout
+    // shown. That is exactly the failure being chased (Sub, 2026-08-08: Torite sat on screen for
+    // ~10s, "it didn't display what number it was looking at"). Held in memory and served over
+    // HTTP on purpose — sidecar.log is not readable from every environment that needs to debug
+    // this, and a diagnostic nobody can retrieve is the same as no diagnostic.
+    noteMiningRead({
+      pass: body.miningCrop === true ? "rapidocr-crop" : Array.isArray(body.lines) ? "lines" : "winocr-full",
+      kind: rd.kind ?? "none",
+      signature: typeof rd.signature === "number" ? rd.signature : null,
+      scanHud,
+      // What the OCR actually saw, so a miss can be told apart from a mangle. Capped hard — this
+      // is a rolling debug buffer, not a transcript.
+      sawText: readTextSample(body),
+    });
     if (rd.kind === "refinery") mining.applyRefineryRead(result as never);
     // A mineable is NOT applied here any more. The number alone doesn't prove a scan happened —
     // that's what put "Debris" in the player's ear while they weren't scanning. The caller has
@@ -1631,6 +1719,44 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     res.write(`data: ${JSON.stringify({ kind: "state", view: mining.view() })}\n\n`);
     res.write(`data: ${JSON.stringify(miningAppearance())}\n\n`); // theme + skew + scale
     req.on("close", () => miningClients.delete(res));
+    return;
+  }
+  // Diagnostic frames written by the capture loop when config.miningDebug is on. Listing is a
+  // plain GET; a specific frame comes back as a PNG. Loopback-only — these are screenshots of the
+  // user's desktop, and the sidecar binds every interface for OBS browser sources.
+  if (url.startsWith("/api/mining/debug-frame") && req.method === "GET") {
+    if (process.env.SC_DEV !== "1" || !fromThisMachine(req)) { res.writeHead(403); res.end(); return; }
+    const dir = join(userDir, "debug-frames");
+    const want = new URL(req.url ?? "/", "http://localhost").searchParams.get("file");
+    if (!want) {
+      let files: string[] = [];
+      try { files = readdirSync(dir).filter((f) => f.endsWith(".png")).sort(); } catch { /* not created yet */ }
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ enabled: config.miningDebug, dir, files }));
+      return;
+    }
+    // Basename only — never let a query string walk out of the debug directory.
+    const safe = basename(want);
+    if (!safe.endsWith(".png")) { res.writeHead(400); res.end(); return; }
+    try {
+      const buf = readFileSync(join(dir, safe));
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      res.end(buf);
+    } catch { res.writeHead(404); res.end(); }
+    return;
+  }
+
+  // The diagnostic ring (see noteMiningRead). Read-only, in-memory, no persistence — it answers
+  // "what did the scanner actually see in the last minute, and how fast was it looking".
+  if (url === "/api/mining/recent" && req.method === "GET") {
+    const now = Date.now();
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      now,
+      heartbeat: lastHeartbeat,
+      ticks: recentTicks,
+      reads: recentMiningReads.map((r) => ({ ...r, agoMs: now - r.at })),
+    }));
     return;
   }
   if (url === "/api/mining" && req.method === "GET") {
@@ -1767,8 +1893,20 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Config write.
   if (url === "/api/config" && req.method === "POST") {
     const body = await readBody(req);
-    if (Array.isArray(body.urls)) config.urls = body.urls.filter((u: unknown) => typeof u === "string" && u);
-    if (typeof body.logPath === "string") config.logPath = body.logPath;
+    // Which concerns this particular save actually touched — every widget shares this one route
+    // (a font-scale tweak in the notepad posts here just like the settings page does), so the
+    // expensive work below (reindex, watcher restart, sync) must be scoped to what the request
+    // actually carried. Un-scoped, EVERY save — however small — re-ran a network fetch per loadout
+    // URL, tore down and rebuilt the log watcher, and re-pushed the whole collection to
+    // subliminal.gg, regardless of which field changed.
+    const touchedUrls = Array.isArray(body.urls);
+    const touchedLogPath = typeof body.logPath === "string";
+    const touchedSync = typeof body.syncEnabled === "boolean"
+      || (typeof body.syncToken === "string" && body.syncToken.trim().length > 0)
+      || body.clearToken === true;
+    const touchedShareLogs = typeof body.shareLogs === "boolean";
+    if (touchedUrls) config.urls = body.urls.filter((u: unknown) => typeof u === "string" && u);
+    if (touchedLogPath) config.logPath = body.logPath;
     if (typeof body.autoSwitch === "boolean") config.autoSwitch = body.autoSwitch;
     // Apply the checkbox first, then let a freshly-pasted token force sync ON — pasting a
     // token IS the intent to sync, so it can't be left silently disabled. The token is only
@@ -1804,6 +1942,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       const ch = body.twitchChannel.trim();
       if (!ch || /^[A-Za-z0-9_]{2,40}$/.test(ch)) config.twitchChannel = ch.toLowerCase();
     }
+    // Dev builds only — see the note on the Config field. A packaged sidecar refuses to arm it at
+    // all, so neither a stale config.json nor anything on the LAN can switch desktop capture on.
+    if (typeof body.miningDebug === "boolean") config.miningDebug = body.miningDebug && process.env.SC_DEV === "1";
     if (typeof body.twitchChatOpen === "boolean") config.twitchChatOpen = body.twitchChatOpen;
     if (typeof body.twitchChatFontScale === "number" && isFinite(body.twitchChatFontScale))
       config.twitchChatFontScale = Math.max(0.8, Math.min(2, body.twitchChatFontScale));
@@ -1911,16 +2052,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     broadcastMissions();
     // The Mining Assistant window shares the same appearance (theme + skew + scale).
     miningSend(miningAppearance());
-    await reindex();
-    startWatcher();
+    // Scoped to what actually changed (see touchedUrls etc. above) — a save that never touched
+    // these fields has no reason to refetch every loadout URL, tear down the log watcher mid-
+    // session, or push a sync/entitlement round-trip to subliminal.gg.
+    if (touchedUrls) await reindex();
+    if (touchedLogPath) startWatcher();
     // Re-arm sync with the new settings and reconcile the full collection.
-    if (sync.configure(config.syncToken, config.syncEnabled)) syncFull();
-    // Re-arm chat (widget toggled, backend switched, identity changed). No-op when unchanged.
+    if (touchedSync) {
+      if (sync.configure(config.syncToken, config.syncEnabled)) syncFull();
+      // A changed token → re-resolve subscriber entitlement now (don't wait for the 20-min tick).
+      void pollEntitlement();
+    }
+    // Re-arm chat (widget toggled, backend switched, identity changed). Internally compares
+    // its config and only tears the socket down on a REAL change, so it needs no touched* gate.
     chatConfigure();
-    // A changed token → re-resolve subscriber entitlement now (don't wait for the 20-min tick).
-    void pollEntitlement();
     // If log-sharing was just turned on, upload the current session now.
-    void maybeShareLog(config, APP_VERSION, sharedLogStatePath);
+    if (touchedShareLogs) void maybeShareLog(config, APP_VERSION, sharedLogStatePath);
     // Push prefs (e.g. the time-format toggle) to any open overlay immediately.
     broadcastMissions();
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -2288,6 +2435,35 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Let the overlay WINDOW write a line into sidecar.log. It's a detached GUI process with no
   // console, so this is the only way anything it observes becomes readable — see the comment on
   // mrNote() in missions.html. Same dev+loopback gate as the replay below.
+  // Diagnostic liveness ping from the capture loop (electron/capture.cjs), throttled client-side to
+  // ~15s, for an intermittent mining-loop hang that isn't root-caused yet. sidecar.log carries no
+  // per-line timestamps otherwise, which made a real hang indistinguishable from "not at the
+  // scanner" — this settles that question directly from the log. Safe to remove once the hang is
+  // understood; harmless to leave in until then.
+  if (url === "/api/heartbeat" && req.method === "POST") {
+    const body = await readBody(req);
+    console.log(`[mining-heartbeat] ${new Date().toISOString()} rate=${body?.rate}ms lastTick=${body?.lastTickMs}ms fastFor=${body?.fastUntil}ms`);
+    // Also kept in memory so the cadence is retrievable over HTTP, not only from sidecar.log.
+    lastHeartbeat = {
+      at: Date.now(),
+      rate: Number.isFinite(Number(body?.rate)) ? Number(body?.rate) : null,
+      lastTickMs: Number.isFinite(Number(body?.lastTickMs)) ? Number(body?.lastTickMs) : null,
+      fastForMs: Number.isFinite(Number(body?.fastUntil)) ? Number(body?.fastUntil) : null,
+    };
+    // Per-stage tick timings, batched by the capture loop so measuring adds no round-trips of its
+    // own. This is what decides whether the tick cost is fixable and WHERE — the loop's fast rate
+    // is floored at lastTickMs * 1.5, so an expensive stage silently caps how fast scanning can go.
+    if (Array.isArray(body?.ticks)) {
+      for (const t of body.ticks as Record<string, unknown>[]) {
+        if (t && typeof t === "object") recentTicks.push({ at: Date.now(), ...t });
+      }
+      while (recentTicks.length > TICK_RING) recentTicks.shift();
+    }
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   if (url === "/api/dev/note" && req.method === "GET") {
     if (process.env.SC_DEV === "1" && fromThisMachine(req)) {
       console.log(`[overlay] ${new URL(req.url ?? "/", "http://localhost").searchParams.get("msg") ?? ""}`);

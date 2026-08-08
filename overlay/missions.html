@@ -662,11 +662,26 @@
      which rendered at 31–46px and read as enormous. Matching the height of noise was never the
      point; being legible is. Hidden until a read arrives, and it expires, because a stale number
      under a live HUD is worse than none. */
-  #scanBox .sb-read { display: none; position: absolute; left: 0; right: 0; top: calc(100% + 5px);
-    justify-content: center; pointer-events: none; }
-  #scanBox.read-above .sb-read { top: auto; bottom: calc(100% + 5px); }
+  /* TWO copies, LEFT and TOP (Sub, 2026-08-08). The box is wide and the number can sit anywhere
+     along it, so a single readout is often far from whatever you are actually looking at. Both
+     show the same value; whichever is nearer your eye does the work. */
+  #scanBox .sb-read { display: none; position: absolute; pointer-events: none; align-items: center; }
+  /* Top: centred on the box's upper edge. */
+  #scanBox .sb-read.at-top { left: 0; right: 0; bottom: calc(100% + 6px); justify-content: center; }
+  /* Left: outside the left edge, vertically centred, right-aligned so it grows AWAY from the box
+     and never creeps over the region being read. */
+  #scanBox .sb-read.at-left { right: calc(100% + 10px); top: 0; bottom: 0; justify-content: flex-end;
+    white-space: nowrap; }
   #scanBox.has-read .sb-read { display: flex; }
-  #scanBox .sb-read-val { font-family: var(--mono); font-size: 15px; font-weight: 700; line-height: 1;
+  /* Near the top of the screen the upper copy would be off-frame — drop that one under the box.
+     The left copy is unaffected, which is part of why having two is worth it. */
+  #scanBox.read-below .sb-read.at-top { bottom: auto; top: calc(100% + 6px); }
+  /* Hard against the left edge there is no room outside the box; tuck it just inside instead. */
+  #scanBox.read-inset .sb-read.at-left { right: auto; left: 8px; justify-content: flex-start; }
+  /* 🔑 Still a FIXED size, not derived from the OCR bbox — see the note above; a refused read is
+     usually big HUD lettering and sizing to it rendered at 31-46px. Larger than the original 15px
+     because Sub reads this against the real signature mid-flight, and it lost that contest. */
+  #scanBox .sb-read-val { font-family: var(--mono); font-size: 26px; font-weight: 700; line-height: 1;
     color: var(--gold); text-shadow: 0 0 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.8); }
   /* A read the app threw away, told apart without adding a word about it. */
   #scanBox.refused .sb-read-val { color: var(--cyan-dim); text-decoration: line-through; }
@@ -1425,7 +1440,8 @@
     <span class="sb-reset" id="sbReset" title="Put the read area back to its default position and size">Reset</span>
     <!-- The number the OCR read, to compare against the real one on screen. Present for EVERY read,
          including the ones the app refused — those are the ones that explain a mistake. -->
-    <span class="sb-read" id="sbRead"><span class="sb-read-val" id="sbReadVal"></span></span>
+    <span class="sb-read at-top" id="sbRead"><span class="sb-read-val" id="sbReadVal"></span></span>
+    <span class="sb-read at-left"><span class="sb-read-val" id="sbReadVal2"></span></span>
     <span class="sb-grip" title="Drag to resize"></span>
   </div>
 
@@ -3209,11 +3225,17 @@
   function showScanRead(info) {
     const el = document.getElementById("scanBox"); if (!el || !info) return;
     const n = Number(info.signature);
-    document.getElementById("sbReadVal").textContent =
-      Number.isFinite(n) ? n.toLocaleString() : String(info.raw || "?").trim();
-    // Sits under the box, so a box dragged to the bottom of the screen would put it off-screen.
+    const text = Number.isFinite(n) ? n.toLocaleString() : String(info.raw || "?").trim();
+    // Both copies carry the same value — one string, set twice, so they can never disagree.
+    for (const id of ["sbReadVal", "sbReadVal2"]) {
+      const v = document.getElementById(id); if (v) v.textContent = text;
+    }
+    // Each copy is flipped independently, against the edge that would actually clip IT. The top
+    // one drops below the box near the top of the screen; the left one tucks inside near the left.
+    // 🔑 Measured off the real rect, not assumed — the box is user-dragged and can sit anywhere.
     const ci = scanDisplay(), r = el.getBoundingClientRect();
-    el.classList.toggle("read-above", r.bottom + 26 > ci.py + ci.ph);
+    el.classList.toggle("read-below", r.top - 34 < ci.py);
+    el.classList.toggle("read-inset", r.left - 10 < ci.px);
     // Struck through = the read was NOT USED. 🔑 Off `used`, never `announced`: the loop re-reads the
     // same rock every poll, and those repeats announce nothing while being perfectly valid — driving
     // this off `announced` struck out the live number a second after it appeared.

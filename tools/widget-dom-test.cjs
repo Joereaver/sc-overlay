@@ -647,16 +647,26 @@ const MININGSAY = `(async () => {
   targetSet.clear();
   say(scan("ore-or-debris", 16000, [rock("Savrilium", 5)], true));
   await sleep(30);
+  // Sub, 2026-08-08: lead with the LIKELIER reading and say the doubt out loud. Both real
+  // collisions are a rare ore at x5 against an ordinary panel count, so off-target leads with
+  // debris — "Probably debris. Could be <ore>. Your call." The ore name still rides in the middle,
+  // which is why this is three clips rather than two.
   ok("an ambiguous value is announced even in targets-only mode",
-     said && said.slugs && said.slugs[0] === "c_debrisor" && said.slugs[1] === "n_savrilium",
+     said && said.slugs && said.slugs[0] === "c_probablydebris" && said.slugs[1] === "n_savrilium"
+       && said.slugs[2] === "c_yourcall",
      JSON.stringify(said && said.slugs));
   ok("...and the panel flags it as maybe-debris",
      !!document.getElementById("scanNow").querySelector(".maybe"));
   targetSet.add("Savrilium");
   say(scan("ore-or-debris", 16000, [rock("Savrilium", 5)], true));
   await sleep(30);
-  ok("...and on a TARGET the prefix is hopeful, not dismissive",
-     said && said.slugs && said.slugs[0] === "c_thiscouldbe", JSON.stringify(said && said.slugs));
+  // 🔑 The old assertion here demanded the prefix be "hopeful". That requirement is GONE — Sub
+  // did not want the app implying it knows. A target still LEADS with the rock (never buried under
+  // "debris"), but hedged: "That might be <ore>. I'm not certain. Worth flying over."
+  ok("...and a TARGET leads with the rock, hedged rather than promised",
+     said && said.slugs && said.slugs[0] === "c_mightbe" && said.slugs[1] === "n_savrilium"
+       && said.slugs[2] === "c_notcertain",
+     JSON.stringify(said && said.slugs));
   ok("...with the target chime", chimed);
 
   // debris and unknown
@@ -688,7 +698,11 @@ const MININGSAY = `(async () => {
   targetSet.add("Bexalite");
   say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
   await sleep(30);
-  ok("...but NEVER a target", said && said.slugs && said.slugs[0] === "c_thiscouldbe",
+  // 18,000 is the OTHER real collision (Bexalite x5, Rare, vs nine panels). The "call out debris &
+  // unknown" switch governs everything that isn't the ore you came for — but a target is never
+  // suppressed by it, hedged phrasing or not.
+  ok("...but NEVER a target", said && said.slugs && said.slugs[0] === "c_mightbe"
+       && said.slugs[1] === "n_bexalite",
      JSON.stringify(said && said.slugs));
   localStorage.setItem("miningDebris", "on");
   targetSet.clear();
@@ -1132,13 +1146,29 @@ const SCANBOX = `(async () => {
   await sleep(60);
   ok("the size does NOT follow the OCR bbox", parseFloat(getComputedStyle(val).fontSize) === fsBig,
      fsBig + "px both times");
-  ok("...and stays modest", fsBig <= 18, fsBig + "px");
-  // Centered on the box, and below it — the middle of the box is where the real signature sits.
+  // Sub, 2026-08-08: bigger. The old ceiling was 18px, set when the fear was a readout sized off a
+  // refused read's big HUD lettering — that fear is handled by it being FIXED, not by it being
+  // small. This still has to be a constant, so the assertion is on the range, not on the absence
+  // of size.
+  ok("...and is legible without following the bbox", fsBig >= 20 && fsBig <= 40, fsBig + "px");
+  // TWO copies now — left and top. Both carry the same number so whichever is nearer the player's
+  // eye does the work; a wide box put the single old readout far from what they were looking at.
+  const val2 = document.getElementById("sbReadVal2");
+  ok("there is a second copy of the readout", !!val2);
+  ok("...showing the SAME number", val2 && val2.textContent === val.textContent,
+     JSON.stringify(val2 && val2.textContent));
+  const rTop = read.getBoundingClientRect(), rBox = box.getBoundingClientRect();
+  const rLeft = val2.parentElement.getBoundingClientRect();
   const cBox = (b) => (b.left + b.right) / 2;
-  ok("it is centered on the box", Math.abs(cBox(read.getBoundingClientRect()) - cBox(box.getBoundingClientRect())) <= 1,
-     Math.round(cBox(read.getBoundingClientRect())) + " vs " + Math.round(cBox(box.getBoundingClientRect())));
-  ok("...and sits OUTSIDE it, below", read.getBoundingClientRect().top >= box.getBoundingClientRect().bottom - 1,
-     Math.round(read.getBoundingClientRect().top) + " vs " + Math.round(box.getBoundingClientRect().bottom));
+  ok("the top copy is centered on the box", Math.abs(cBox(rTop) - cBox(rBox)) <= 1,
+     Math.round(cBox(rTop)) + " vs " + Math.round(cBox(rBox)));
+  ok("...and sits OUTSIDE it, above", rTop.bottom <= rBox.top + 1,
+     Math.round(rTop.bottom) + " vs " + Math.round(rBox.top));
+  ok("the left copy sits OUTSIDE the box, to its left", rLeft.right <= rBox.left + 1,
+     Math.round(rLeft.right) + " vs " + Math.round(rBox.left));
+  ok("...and is vertically within the box's span",
+     rLeft.top >= rBox.top - 1 && rLeft.bottom <= rBox.bottom + 1,
+     Math.round(rLeft.top) + "-" + Math.round(rLeft.bottom));
   // A refused read is the diagnostic case: it must appear, and be tellable apart without words.
   showScanRead({ signature: 30000, raw: "3O,OOO", box: null, verdict: null, announced: false, used: false,
                  why: "ignored (above 25,800, the largest signature the game can show — misread)" });
