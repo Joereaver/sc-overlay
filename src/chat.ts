@@ -3,12 +3,12 @@
 // close with the canvas, so a widget-owned socket would drop scrollback and presence every
 // time. The widget talks to this module over the existing SSE + POST pattern.
 //
-// Two backends, A/B-tested (Sub, 2026-08-08):
-//   "custom"      chat-server/server.mjs — full protocol: 3-tier channels, history, bans.
-//   "centrifugo"  a self-hosted Centrifugo instance — deliberately SHALLOW (one global room)
-//                 per Sub's "don't get too deep" instruction. Live messages only.
+// Backend: chat-server/server.mjs (self-hosted) — 3-tier channels, history, bans. A Centrifugo
+// arm was A/B-tested on 2026-08-08 and retired the same day (Sub's call: same product work
+// either way, one more service to run, and it needed a local-echo workaround — see git history
+// for the adapter).
 //
-// The channel hierarchy (custom backend):
+// The channel hierarchy:
 //   global                 everyone on the app
 //   region:use1b           "the server" in player speak — the region/AZ from the shard id
 //   shard:pub_use1b_…_040  the actual universe instance — people you can meet
@@ -33,10 +33,9 @@ export interface ChatMsg {
 export type ChatStatus = "off" | "connecting" | "connected" | "error";
 
 export interface ChatOptions {
-  backend: "custom" | "centrifugo";
-  url: string;          // ws:// or wss:// endpoint of the chosen backend
+  url: string;          // ws:// or wss:// endpoint of the chat server
   handle: string;       // dev-mode identity; production auth is the sync token
-  token: string;        // overlay sync token (site-mode auth on the custom server)
+  token: string;        // overlay sync token (site-mode auth on the chat server)
 }
 
 interface ChannelState {
@@ -139,19 +138,13 @@ export class ChatClient extends EventEmitter {
     this.closingDeliberately = false;
     ws.onopen = () => {
       if (id !== this.cfgId) return;
-      if (this.opts!.backend === "custom") {
-        this.wsSend({ t: "hello", token: this.opts!.token, handle: this.opts!.handle });
-      } else {
-        // Centrifugo connect frame (JSON protocol). Insecure/dev mode needs no token.
-        this.wsSend({ id: 1, connect: { name: "sc-overlay" } });
-      }
+      this.wsSend({ t: "hello", token: this.opts!.token, handle: this.opts!.handle });
     };
     ws.onmessage = (e) => {
       if (id !== this.cfgId) return;
       let f: any;
       try { f = JSON.parse(String(e.data)); } catch { return; }
-      if (this.opts!.backend === "custom") this.onCustomFrame(f);
-      else this.onCentrifugoFrame(f);
+      this.onFrame(f);
     };
     ws.onclose = () => {
       if (id !== this.cfgId) return;
@@ -176,13 +169,13 @@ export class ChatClient extends EventEmitter {
   }
 
   private sendLoc(): void {
-    if (this.status !== "connected" || this.opts?.backend !== "custom") return;
+    if (this.status !== "connected") return;
     this.wsSend({ t: "loc", region: regionOfShard(this.shard), shard: this.shard });
   }
 
-  // ── Custom backend (chat-server/server.mjs protocol) ──────────────────────
+  // ── The chat-server protocol (chat-server/server.mjs) ─────────────────────
 
-  private onCustomFrame(f: any): void {
+  private onFrame(f: any): void {
     switch (f.t) {
       case "welcome":
         this.status = "connected";
@@ -222,61 +215,6 @@ export class ChatClient extends EventEmitter {
     }
   }
 
-  // ── Centrifugo backend — ONE global room, live messages only (the A/B scope) ──
-  // Minimal JSON client protocol: {id,connect}/{id,subscribe}/{id,publish} requests,
-  // {push:{channel,pub:{data}}} deliveries, and {} pings we must echo back.
-
-  private onCentrifugoFrame(f: any): void {
-    // Server ping is an EMPTY frame; echo it or the server drops us after a timeout.
-    if (f && typeof f === "object" && Object.keys(f).length === 0) { this.wsSend({}); return; }
-    if (f.id === 1 && f.connect) {
-      this.status = "connected";
-      this.retry = 0;
-      // No server-side identity in insecure mode: the client stamps its own handle. Fine for
-      // a local A/B; a production pick of this backend gets JWTs minted by the site instead.
-      this.you = { handle: this.opts?.handle || "anon", verified: true };
-      this.wsSend({ id: 2, subscribe: { channel: "sc-global" } });
-      return;
-    }
-    if (f.id === 2 && f.subscribe) {
-      const c = this.ensureChannel("global");
-      const pubs = f.subscribe.publications;
-      if (Array.isArray(pubs)) {
-        c.msgs = pubs.map((p: any) => this.centrifugoMsg(p)).filter(Boolean).slice(-HISTORY_KEEP) as ChatMsg[];
-      }
-      this.pushState();
-      return;
-    }
-    if (f.push?.pub) {
-      const msg = this.centrifugoMsg(f.push.pub);
-      if (msg) this.pushMsg(msg);
-      return;
-    }
-    if (f.error) {
-      this.lastError = `centrifugo: ${f.error.message ?? f.error.code}`;
-      this.emit("sse", { type: "notice", level: "error", text: this.lastError });
-    }
-  }
-
-  private centrifugoSeq = 0;
-  /** Nonces of OUR recent centrifugo publishes. Centrifugo does not deliver a publication back
-   *  to the connection that published it (measured on the live instance, 2026-08-08 — everyone
-   *  else heard the message, the sender never did), so send() echoes locally; this set is the
-   *  guard that keeps the message single if a server echo ever DOES arrive. */
-  private sentNonces = new Set<string>();
-  private centrifugoMsg(pub: any): ChatMsg | null {
-    const d = pub?.data;
-    if (!d || typeof d.text !== "string") return null;
-    if (typeof d.n === "string" && this.sentNonces.has(d.n)) return null; // our own, already echoed
-    return {
-      ch: "global",
-      id: pub.offset ?? `c${++this.centrifugoSeq}`,
-      from: { handle: String(d.handle ?? "anon"), verified: d.verified === true },
-      text: d.text,
-      at: String(d.at ?? new Date().toISOString()),
-    };
-  }
-
   // ── Shared state plumbing ─────────────────────────────────────────────────
 
   private ensureChannel(ch: string): ChannelState {
@@ -312,21 +250,7 @@ export class ChatClient extends EventEmitter {
     if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
     const t = text.trim();
     if (!t) return { ok: false, message: "Empty message." };
-    if (this.opts?.backend === "custom") {
-      this.wsSend({ t: "msg", ch, text: t });
-    } else {
-      if (ch !== "global") return { ok: false, message: "The Centrifugo A/B build only has Global chat." };
-      const at = new Date().toISOString();
-      const n = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      this.sentNonces.add(n);
-      if (this.sentNonces.size > 50) this.sentNonces.delete(this.sentNonces.values().next().value!);
-      this.wsSend({
-        id: 100 + ++this.centrifugoSeq,
-        publish: { channel: "sc-global", data: { handle: this.you?.handle, verified: this.you?.verified === true, text: t, at, n } },
-      });
-      // Local echo — the server won't reflect it to us (see sentNonces above).
-      this.pushMsg({ ch: "global", id: `local-${n}`, from: this.you ?? { handle: "?", verified: false }, text: t, at });
-    }
+    this.wsSend({ t: "msg", ch, text: t });
     return { ok: true };
   }
 
@@ -337,7 +261,6 @@ export class ChatClient extends EventEmitter {
       .sort((a, b) => order[a.kind] - order[b.kind] || a.ch.localeCompare(b.ch))
       .map((c) => ({ ch: c.ch, kind: c.kind, label: c.label, count: c.count, msgs: c.msgs }));
     return {
-      backend: this.opts?.backend ?? "custom",
       status: this.status,
       error: this.lastError,
       you: this.you,

@@ -33,7 +33,6 @@
     "test:logshare": "tsx src/log-share.test.ts",
     "test:chat": "node chat-server/server.test.mjs && tsx src/chat.test.ts",
     "chat-server": "node chat-server/server.mjs",
-    "chat-centrifugo": "centrifugo -c chat-server/centrifugo/config.json",
     "dev:fresh": "node tools/dev-fresh.mjs"
   },
   "dependencies": {

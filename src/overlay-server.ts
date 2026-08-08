@@ -277,15 +277,9 @@ interface Config {
   /** Remembers whether the Chat widget was left open — and is also the CONNECTION gate:
    *  chat holds no socket unless the widget is open (Sub's lightweight rule). */
   chatOpen: boolean;
-  /** Which chat backend the sidecar connects to. Two exist for the 2026-08 A/B test:
-   *  "custom" (chat-server/server.mjs — full 3-tier channels) or "centrifugo" (one global
-   *  room). The loser gets deleted after the A/B. */
-  chatBackend: "custom" | "centrifugo";
-  /** WebSocket URL of the custom chat server. Local default for the A/B; production points
-   *  at the subliminal.gg deployment. */
+  /** WebSocket URL of the chat server (chat-server/server.mjs protocol). Defaults to the
+   *  subliminal.gg deployment; point it at ws://127.0.0.1:8788/ws for local dev. */
   chatServerUrl: string;
-  /** WebSocket URL of the Centrifugo instance (its /connection/websocket endpoint). */
-  chatCentrifugoUrl: string;
   /** Dev-mode chat identity for the A/B. Production identity comes from the sync token —
    *  the site resolves it to the RSI-VERIFIED handle, and unverified accounts get no chat
    *  (Sub's rule: chat identities must be bannable). */
@@ -370,9 +364,7 @@ const DEFAULTS: Config = {
   overlayScale: 100,
   revertThemeOnFoot: false,
   chatOpen: false,
-  chatBackend: "custom",
   chatServerUrl: "ws://127.0.0.1:8788/ws",
-  chatCentrifugoUrl: "ws://127.0.0.1:8799/connection/websocket",
   chatHandle: "",
   setupDone: false,
   setupSettingsReviewed: false,
@@ -922,8 +914,7 @@ chat.on("sse", (frame: unknown) => {
 function chatConfigure(): void {
   const active = config.chatOpen && !!(config.chatHandle || config.syncToken);
   chat.configure({
-    backend: config.chatBackend,
-    url: config.chatBackend === "custom" ? config.chatServerUrl : config.chatCentrifugoUrl,
+    url: config.chatServerUrl,
     handle: config.chatHandle,
     token: config.syncToken,
   }, active);
@@ -1973,8 +1964,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     }
     if (typeof body.bindingChartOpen === "boolean") config.bindingChartOpen = body.bindingChartOpen;
     if (typeof body.chatOpen === "boolean") config.chatOpen = body.chatOpen;
-    if (body.chatBackend === "custom" || body.chatBackend === "centrifugo") config.chatBackend = body.chatBackend;
-    // ws/wss only — these strings become outbound WebSocket dials.
+    // ws/wss only — this string becomes an outbound WebSocket dial.
     const wsUrl = (v: unknown, fallback: string): string => {
       if (typeof v !== "string") return fallback;
       const raw = v.trim();
@@ -1985,7 +1975,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       } catch { return fallback; }
     };
     if (body.chatServerUrl !== undefined) config.chatServerUrl = wsUrl(body.chatServerUrl, config.chatServerUrl);
-    if (body.chatCentrifugoUrl !== undefined) config.chatCentrifugoUrl = wsUrl(body.chatCentrifugoUrl, config.chatCentrifugoUrl);
     // RSI handle shape; "" is a real value (no dev identity → chat stays gated).
     if (typeof body.chatHandle === "string") {
       const h = body.chatHandle.trim();
