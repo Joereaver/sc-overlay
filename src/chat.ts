@@ -93,6 +93,10 @@ export class ChatClient extends EventEmitter {
     if (changed || active !== this.active) {
       this.active = active;
       this.teardown();
+      // A DIFFERENT backend/identity is a different world — its channels and scrollback don't
+      // carry over (a dead "Shard" tab with another server's history is worse than none).
+      // Merely closing the widget (active=false, opts unchanged) keeps history on purpose.
+      if (changed) this.channels.clear();
       if (this.active) this.connect();
       else { this.status = "off"; this.pushState(); }
     }
