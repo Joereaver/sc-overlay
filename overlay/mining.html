@@ -907,8 +907,18 @@
     // Aslarite ×5 — naming matches[0] announced the wrong one at a player targeting Aslarite).
     const name = (sc.matches.find((m) => targetSet.has(m.name)) || sc.matches[0]).name;
     if (v === "ore-or-debris") {
-      if (isTarget) speakClips(["c_thiscouldbe", nameSlug(name)], "This could be " + name);
-      else { flash(); speakClips(["c_debrisor", nameSlug(name)], "Debris, or " + name); }
+      // 🔑 HEDGED, NOT HOPEFUL (Sub, 2026-08-08). There are exactly TWO ore/debris collisions in the
+      // real table — 16,000 (Savrilium ×5, Legendary) and 18,000 (Bexalite ×5, Rare) — and in both
+      // the ore is a rare rock at a five-cluster while the alternative is an ordinary 8 or 9 salvage
+      // panels. Debris is far likelier, so it leads. But "This could be <ore>" promised something the
+      // app cannot know, and "Debris, or <ore>" gave two readings equal weight; both left the player
+      // to discover the doubt themselves. These say which way it leans, admit the uncertainty out
+      // loud, and hand the decision back. A TARGET still leads with the rock — someone hunting
+      // Savrilium must not have it buried under "debris" — it just stops sounding like a promise.
+      if (isTarget) speakClips(["c_mightbe", nameSlug(name), "c_notcertain"],
+                               "That might be " + name + ". I'm not certain. Worth flying over.");
+      else { flash(); speakClips(["c_probablydebris", nameSlug(name), "c_yourcall"],
+                                 "Probably debris. Could be " + name + ". Your call."); }
       return;
     }
     const mode = localStorage.getItem("miningSpeakMode") || "target";
