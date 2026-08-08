@@ -364,7 +364,9 @@ const DEFAULTS: Config = {
   overlayScale: 100,
   revertThemeOnFoot: false,
   chatOpen: false,
-  chatServerUrl: "ws://127.0.0.1:8788/ws",
+  // Production chat (Coolify VPS, CHAT_AUTH=site — identities come from the sync token's
+  // verified RSI handle). Local dev server: ws://127.0.0.1:8788/ws + a chatHandle.
+  chatServerUrl: "wss://chat.subliminal.gg/ws",
   chatHandle: "",
   setupDone: false,
   setupSettingsReviewed: false,
@@ -1683,8 +1685,19 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   if (url === "/api/chat" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     // The widget's gate state rides along: it must know WHY chat is off (no identity vs.
-    // widget-off vs. backend down) to show the right prompt.
-    res.end(JSON.stringify({ ...chat.view(), open: config.chatOpen, hasIdentity: !!(config.chatHandle || config.syncToken), handle: config.chatHandle }));
+    // widget-off vs. backend down) to show the right prompt. hasToken decides which gate
+    // copy fits — production identity is the sync token's verified handle; the typed
+    // chatHandle only means anything against a local dev chat server.
+    res.end(JSON.stringify({
+      ...chat.view(),
+      open: config.chatOpen,
+      hasIdentity: !!(config.chatHandle || config.syncToken),
+      hasToken: !!config.syncToken,
+      handle: config.chatHandle,
+      // Pointing anywhere but production means a dev server, whose auth accepts a typed
+      // handle — the widget only reveals its dev-identity row then.
+      devServer: !config.chatServerUrl.startsWith("wss://chat.subliminal.gg"),
+    }));
     return;
   }
   // Sending speaks AS the user's chat identity — same capability class as the identity

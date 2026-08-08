@@ -108,15 +108,18 @@ async function verifyIdentity(hello) {
     return { handle, verified: true };
   }
   // site mode: the token is the overlay's existing sync token; the endpoint answers
-  // { handle: "RSIHandle", verified: true|false } and 401s an unknown token.
+  // { handle: "RSIHandle", verified: true|false } and 401s an unknown token. A KNOWN
+  // token with no verified handle is a distinct case — the user needs to hear "go
+  // verify", not "who are you".
   const token = String(hello.token ?? "");
   if (!token) return null;
   try {
     const res = await fetch(AUTH_URL, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return null;
     const d = await res.json();
-    if (!HANDLE_RE.test(String(d?.handle ?? ""))) return null;
-    return { handle: String(d.handle), verified: d.verified === true };
+    const handle = String(d?.handle ?? "");
+    if (d?.verified !== true || !HANDLE_RE.test(handle)) return { handle: "", verified: false };
+    return { handle, verified: true };
   } catch { return null; }
 }
 

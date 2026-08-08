@@ -94,6 +94,9 @@
   #handleInput:focus { border-color: var(--cyan); }
   .row { display: flex; gap: 8px; align-items: center; }
   .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
+  /* Belt for the widget-page hidden trap: any class rule that sets display would silently
+     defeat a bare [hidden] (see the Unlock Alerts claim-row bug). */
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -114,12 +117,15 @@
     <div id="gate">
       <div class="lbl">Chat identity</div>
       <div class="hint">Chat is for <b>verified RSI accounts</b> — that's what keeps it moderated.
-        During the test build, enter the RSI handle you fly under. The release build will use your
-        verified subliminal.gg account instead.</div>
-      <input id="handleInput" type="text" placeholder="Your RSI handle" maxlength="30" spellcheck="false" autocomplete="off" />
-      <div class="row">
-        <button id="gateTypeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type mode</button>
-        <button id="gateSaveBtn" class="hbtn" type="button">Join chat</button>
+        Connect your subliminal.gg account in <b>Setup</b>, then verify your RSI handle on your
+        profile at <b>subliminal.gg/blueprints</b>. Chat unlocks on its own once you're verified.</div>
+      <div id="devIdRow" hidden>
+        <div class="lbl" style="margin-top:6px">Dev identity (local server only)</div>
+        <input id="handleInput" type="text" placeholder="Your RSI handle" maxlength="30" spellcheck="false" autocomplete="off" />
+        <div class="row" style="margin-top:8px">
+          <button id="gateTypeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type mode</button>
+          <button id="gateSaveBtn" class="hbtn" type="button">Join chat</button>
+        </div>
       </div>
     </div>
   </div>
@@ -241,6 +247,7 @@
     const p = $("panel");
     p.classList.toggle("on", view?.status === "connected");
     p.classList.toggle("gated", view ? !view.hasIdentity : false);
+    $("devIdRow").hidden = !view?.devServer;
     // If the active channel disappeared (left the shard), fall back to global.
     if (view && !view.channels.some((c) => c.ch === activeCh)) activeCh = "global";
     renderTabs();
