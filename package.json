@@ -37,6 +37,7 @@
   "dependencies": {
     "@gutenye/ocr-node": "^1.4.8",
     "electron-updater": "^6.3.9",
+    "koffi": "^3.1.4",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
@@ -68,7 +69,9 @@
       "**/node_modules/uiohook-napi/**",
       "**/node_modules/onnxruntime-node/**",
       "**/node_modules/@gutenye/**",
-      "**/node_modules/@techstark/**"
+      "**/node_modules/@techstark/**",
+      "**/node_modules/koffi/**",
+      "**/node_modules/@koromix/**"
     ],
     "npmRebuild": false,
     "extraResources": [
