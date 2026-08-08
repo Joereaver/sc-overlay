@@ -1717,6 +1717,13 @@ if (!app.requestSingleInstanceLock()) {
     startFabCapture({
       port: PORT,
       configDir: path.join(process.env.APPDATA || process.env.HOME || ".", "sc-blueprint-tracker"),
+      // 🔑 Passed in, never read from config alone. `miningDebug` writes SCREENSHOTS OF THE USER'S
+      // DESKTOP to disk, and this app's whole position on screen reading is that it does not happen
+      // unless you ask for it. A config flag would ship that capability to everyone — off by
+      // default and with no UI, but present, and a stale `true` left in a config.json would arm it
+      // on a packaged build. Same gate as the dev-replay endpoint: non-packaged only, decided here
+      // where `app.isPackaged` is authoritative, so a release physically cannot turn it on.
+      devTools: !app.isPackaged,
       onStatus: (s) => { try { overlay?.webContents.send("overlay:ocr", s); } catch { /* window gone */ } },
     });
   });
