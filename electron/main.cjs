@@ -279,19 +279,23 @@ function startServer() {
   const out = sidecarLogStream();
   const stdio = out === "ignore" ? "ignore" : ["ignore", out, out];
   if (app.isPackaged) {
-    // Prod: the bun-compiled server binary shipped as an extraResource (no Node/tsx
-    // on the user's machine). cwd = its dir so assetDir finds overlay/ + data/.
-    const exe = path.join(process.resourcesPath, "server", "sc-overlay-server.exe");
-    // 🔑 `windowsHide` is NOT optional here. The bun-compiled sidecar is a CONSOLE-subsystem
-    // executable, and this app is a GUI process with no console of its own — so without
-    // CREATE_NO_WINDOW, Windows hands the child a brand new console, which appears as a terminal
-    // window sitting on the user's desktop for as long as the app runs (0.1.35 shipped exactly that;
-    // on a machine whose default terminal is Windows Terminal it opens as a WT window titled
-    // "…\sc-overlay-server.exe"). Every OTHER spawn in this codebase already sets it; this one was
-    // missed, and it only became visible when the sidecar stopped being spawned stdio:"ignore".
-    // Inject the authoritative app version — the bun sidecar can't read package.json.
-    server = spawn(exe, {
-      cwd: path.dirname(exe), env: { ...process.env, APP_VERSION, SC_INSTANCE: INSTANCE_ID }, stdio, windowsHide: true,
+    // Prod: the esbuild-bundled server shipped as an extraResource, run by OUR OWN exe
+    // with ELECTRON_RUN_AS_NODE (plain Node mode — no BrowserWindow, no second app).
+    // It replaced a 112 MB bun-compiled standalone exe in 0.1.41: the machine already
+    // ships a Node runtime inside Electron, so the sidecar borrows it instead of
+    // carrying its own. cwd = the bundle's dir so assetDir finds overlay/ + data/.
+    const serverJs = path.join(process.resourcesPath, "server", "server.mjs");
+    // 🔑 `windowsHide` stays NOT optional here. The bun-era sidecar was a CONSOLE-subsystem
+    // executable and 0.1.35 shipped a persistent terminal window on every desktop by omitting
+    // it (emergency 0.1.36). Electron-run-as-node is GUI-subsystem so no console should appear
+    // either way — but the flag costs nothing and this exact spawn is where the regression
+    // lived, so it does not come off on an argument from subsystem flags.
+    // Inject the authoritative app version — the bundled sidecar can't read package.json.
+    server = spawn(process.execPath, [serverJs], {
+      cwd: path.dirname(serverJs),
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", APP_VERSION, SC_INSTANCE: INSTANCE_ID },
+      stdio,
+      windowsHide: true,
     });
   } else {
     // Dev: run the TS server via tsx. Same flag, same reason — `shell:true` means cmd.exe, which is
@@ -1378,7 +1382,11 @@ function restartAsAdmin() {
       `W 'started; waiting for old instance (pid ${process.pid}) to exit'`,
       `Wait-Process -Id ${process.pid} -Timeout 10 -ErrorAction SilentlyContinue`,
       `W 'old instance gone (or 10s timeout); sweeping leftover sidecar'`,
+      // The sidecar is our own exe running server.mjs as node (0.1.41+); match the command line,
+      // never the bare name — every overlay window is also named 'SC Overlay'. The old bun-exe
+      // name sweep stays one more release: an orphan from 0.1.40 can survive into this update.
       `Get-Process -Name 'sc-overlay-server' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue`,
+      `Get-CimInstance Win32_Process -Filter "Name='SC Overlay.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*server.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
       `try {`,
       `  W 'requesting elevated relaunch (UAC): ${exe.replace(/'/g, "''")}'`,
       `  Start-Process -FilePath ${q(exe)}${argList} -WorkingDirectory ${q(wd)} -Verb RunAs -ErrorAction Stop`,
