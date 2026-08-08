@@ -125,6 +125,7 @@ let scFeedVisible = false; // is the in-canvas SC Feed notifier armed (it only S
 let unlockAlertVisible = true;
 let partyVisible = false; // is the in-canvas Party split widget currently shown
 let battagliaVisible = false; // is the in-canvas Battaglia grind tracker currently shown
+let chatVisible = false; // is the in-canvas social Chat widget shown (also gates the sidecar's chat socket)
 // Settings as a canvas WIDGET. Named ...Widget... throughout to keep it distinct from
 // `configWin`, the standalone settings WINDOW — both exist, same page, two host modes.
 let configWidgetVisible = false;
@@ -675,6 +676,7 @@ function createOverlay() {
     sendUnlockAlertVisible({ on: unlockAlertVisible, initial: true });
     sendPartyVisible({ on: partyVisible, initial: true });
     sendBattagliaVisible({ on: battagliaVisible, initial: true });
+    sendChatVisible({ on: chatVisible, initial: true });
     sendConfigWidgetVisible({ on: configWidgetVisible, initial: true });
     sendWebViewVisible({ on: webViewVisible, initial: true });
     sendBindingChartVisible({ on: bindingChartVisible, initial: true });
@@ -895,7 +897,7 @@ function sendMiningVisible(state) {
 }
 // Push widget on/off state to the in-overlay hub checkboxes (kept in sync with the tray).
 function pushWidgetStates() {
-  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }); }
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:widget-states", { mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, chat: chatVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }); }
   catch { /* renderer gone */ }
 }
 // The Notepad widget is a plain in-canvas iframe (no auto-show / SSE), so its visibility is a
@@ -972,6 +974,21 @@ function setPartyVisible(on) {
   refreshTray();
 }
 function toggleParty() { setPartyVisible(!partyVisible); }
+// Social Chat widget — plain in-canvas iframe, same shell-owned visibility as the Notepad.
+// chatOpen doubles as the SIDECAR's connection gate: closed widget = no chat socket at all,
+// so this postConfig is also what connects/disconnects chat (see chatConfigure, overlay-server).
+function sendChatVisible(state) {
+  try { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:chat-visible", state); }
+  catch { /* renderer gone */ }
+}
+function setChatVisible(on) {
+  chatVisible = !!on;
+  sendChatVisible({ on: chatVisible });
+  postConfig({ chatOpen: chatVisible }); // remember open/closed for next launch + gate the socket
+  pushWidgetStates();
+  refreshTray();
+}
+function toggleChat() { setChatVisible(!chatVisible); }
 // Battaglia grind tracker - same shell-owned visibility as the widgets above. Retires when the
 // giver does (4.10): drop this block, its config flag, and overlay/battaglia.html.
 function sendBattagliaVisible(state) {
@@ -1543,6 +1560,7 @@ function refreshTray() {
       { label: "Unlock Alerts", type: "checkbox", checked: unlockAlertVisible, click: toggleUnlockAlert },
       { label: "Loot Split", type: "checkbox", checked: partyVisible, click: toggleParty },
       { label: "Event Tracker", type: "checkbox", checked: battagliaVisible, click: toggleBattaglia },
+      { label: "Chat", type: "checkbox", checked: chatVisible, click: toggleChat },
       { label: "Web Page", type: "checkbox", checked: webViewVisible, click: toggleWebView },
       { label: "Infographic Viewer", type: "checkbox", checked: bindingChartVisible, click: toggleBindingChart },
       { type: "separator" },
@@ -1708,6 +1726,7 @@ if (!app.requestSingleInstanceLock()) {
       unlockAlertVisible = c.unlockAlertOpen !== false; // default ON — it replaced an existing toast
       partyVisible = c.partyOpen === true;
       battagliaVisible = c.battagliaOpen === true;
+      chatVisible = c.chatOpen === true;
       webViewVisible = c.webViewOpen === true;
       bindingChartVisible = c.bindingChartOpen === true;
     } catch { /* default off */ }
@@ -1979,7 +1998,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     return { x: canvasOffset.x, y: canvasOffset.y, scale: canvasScale };
   });
-  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }));
+  ipcMain.handle("app:widget-states", () => ({ mining: miningVisible, notepad: notepadVisible, twitchChat: twitchChatVisible, scFeed: scFeedVisible, unlockAlert: unlockAlertVisible, party: partyVisible, battaglia: battagliaVisible, chat: chatVisible, webView: webViewVisible, bindingChart: bindingChartVisible, config: configWidgetVisible }));
   ipcMain.on("app:set-mining", (_e, on) => {
     if (on) { miningAutoSuppress = 0; setMiningVisible(true); }
     else setMiningVisible(false, { manual: true });
@@ -1990,6 +2009,7 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on("app:set-unlockalert", (_e, on) => setUnlockAlertVisible(!!on));
   ipcMain.on("app:set-party", (_e, on) => setPartyVisible(!!on));
   ipcMain.on("app:set-battaglia", (_e, on) => setBattagliaVisible(!!on));
+  ipcMain.on("app:set-chat", (_e, on) => setChatVisible(!!on));
   ipcMain.on("app:set-config", (_e, on) => setConfigWidgetVisible(!!on));
   // SC Feed alert tone picker, mirroring mining:pick-tone (renderers can't open OS dialogs).
   ipcMain.handle("scfeed:pick-tone", async () => {

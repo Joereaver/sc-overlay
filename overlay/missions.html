@@ -1461,6 +1461,7 @@
     <div class="hub-row tog"><label><input type="checkbox" id="wgUnlockAlert" /> Unlock Alerts</label><button type="button" class="hub-reset" data-w="unlockAlert" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgParty" /> Loot Split</label><button type="button" class="hub-reset" data-w="party" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgBattaglia" /> Event Tracker</label><button type="button" class="hub-reset" data-w="battaglia" title="Recentre this widget on screen">↺</button></div>
+    <div class="hub-row tog"><label><input type="checkbox" id="wgChat" /> Chat</label><button type="button" class="hub-reset" data-w="chat" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgWebView" /> Web Page</label><button type="button" class="hub-reset" data-w="webView" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-row tog"><label><input type="checkbox" id="wgBindingChart" /> Infographic Viewer</label><button type="button" class="hub-reset" data-w="bindingChart" title="Recentre this widget on screen">↺</button></div>
     <div class="hub-sec">Global appearance</div>
@@ -2786,6 +2787,16 @@
       def: { x: 40, y: 560 }, size: { w: 360, h: 470, minW: 300, maxW: 760, minH: 240, maxH: 900 },
     },
     {
+      // Player-to-player chat (Global / Server / Shard tabs). The SIDECAR owns the connection
+      // and history (src/chat.ts) — this page only renders and posts, so closing or regrouping
+      // it drops nothing. No socket exists unless this widget is open (chatOpen is the gate).
+      key: "chat", page: "chat.html", title: "Chat",
+      def: { x: 900, y: 420 }, size: { w: 360, h: 460, minW: 280, maxW: 900, minH: 240, maxH: 1100 },
+      focusFn: "__chatFocus",
+      // Don't strand the keyboard grab: hiding mid-typing would leave the interact key suspended.
+      onHide: (w) => { try { frameWin(w)?.__chatExitTyping?.(); } catch { /* iframe gone */ } },
+    },
+    {
       key: "webView", page: "webview.html", title: "Web Page",
       def: { x: 480, y: 120 }, size: { w: 420, h: 520, minW: 260, maxW: 6000, minH: 200, maxH: 3000 },
       focusFn: "__webViewFocus",
@@ -3991,7 +4002,7 @@
         $("hubTheme").value = c.theme || "mobiglas";
       }).catch(() => { /* fall back to whatever's in the inputs */ });
       $("wgBlueprint").checked = WBY.blueprint.s.visible !== false;
-      window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
+      window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgChat").checked = !!s.chat; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
       window.overlayApi.setModal?.(true); window.overlayApi.hover?.(true);
     }
     gc.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); setHub(!hub.classList.contains("open")); });
@@ -4066,10 +4077,11 @@
     $("wgUnlockAlert").addEventListener("change", () => window.overlayApi.setUnlockAlert($("wgUnlockAlert").checked));
     $("wgParty").addEventListener("change", () => window.overlayApi.setParty($("wgParty").checked));
     $("wgBattaglia").addEventListener("change", () => window.overlayApi.setBattaglia($("wgBattaglia").checked));
+    $("wgChat").addEventListener("change", () => window.overlayApi.setChat($("wgChat").checked));
     $("wgWebView").addEventListener("change", () => window.overlayApi.setWebView($("wgWebView").checked));
     $("wgBindingChart").addEventListener("change", () => window.overlayApi.setBindingChart($("wgBindingChart").checked));
     // Stay in sync if a widget is toggled elsewhere (tray) while the hub is open.
-    window.overlayApi.onWidgetStates?.((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
+    window.overlayApi.onWidgetStates?.((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgChat").checked = !!s.chat; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
     // Global appearance — persisted config (also broadcasts to OBS sources).
     $("hubTheme").addEventListener("change", () => setPref({ theme: $("hubTheme").value }));
     // Layout

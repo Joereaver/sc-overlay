@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chat</title>
+<script>/* AMD compatibility: apply the lite skin BEFORE first paint (no flash) when the shell asks for it. */
+  if (new URLSearchParams(location.search).has("lite")) document.documentElement.classList.add("amd-lite");
+  /* Apply ?theme= before first paint (no flash). The parent canvas keeps this in sync live (same-origin). */
+  { const q = new URLSearchParams(location.search); const r = document.documentElement;
+    const t = q.get("theme"); if (t) r.setAttribute("data-theme", t); }</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/widget-theme.css" />
+<style>
+  /* Player-to-player chat, EVE-style: Global / Server (region) / Shard tabs that follow the
+     Game.log. The page renders whatever the SIDECAR knows — the connection, history and channel
+     membership all live in the sidecar (src/chat.ts), so regrouping or closing this iframe
+     costs nothing. This page only draws state and posts sends. */
+  * { box-sizing: border-box; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), 0.28) transparent; }
+  html, body { margin: 0; height: 100%; background: transparent; }
+  body { font-family: var(--sans); color: var(--cyan-text); overflow: hidden; }
+
+  #panel {
+    display: flex; flex-direction: column;
+    width: 360px; height: 460px; margin: 20px auto;
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+    -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(var(--accent-rgb), 0.05);
+    position: relative;
+  }
+  html.amd-lite #panel { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--panel-solid) !important; }
+  body.embedded { overflow: visible; background: transparent; }
+  body.embedded #panel { width: 100%; height: 100%; margin: 0; }
+
+  /* Header: connection dot + the three-tier channel tabs. */
+  .head { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px;
+    border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 40px; }
+  .dia { width: 7px; height: 7px; flex: none; background: var(--faint); transform: rotate(45deg); transition: background 0.3s; }
+  #panel.on .dia { background: var(--cyan-bright); box-shadow: 0 0 8px var(--cyan); }
+  #tabs { flex: 1; display: flex; gap: 4px; min-width: 0; }
+  .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.08); border: 1px solid var(--divider);
+    border-radius: 6px; padding: 4px 8px; cursor: pointer; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 40%; position: relative; }
+  .tab:hover { background: rgba(var(--accent-rgb), 0.18); }
+  .tab.active { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
+  .tab.dead { opacity: 0.4; cursor: default; }
+  .tab .n { margin-left: 4px; font-weight: 600; color: var(--gold); }
+  .tab .unread { position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--gold); box-shadow: 0 0 6px var(--gold); }
+
+  #log { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; z-index: 4;
+    padding: 6px 0; font-size: 12.5px; line-height: 1.5; }
+  .msg { padding: 3px 12px; word-wrap: break-word; overflow-wrap: anywhere; }
+  .msg:hover { background: rgba(var(--accent-rgb), 0.05); }
+  .msg .nm { font-weight: 700; }
+  .msg .vf { display: inline-block; font-size: 8px; font-weight: 800; vertical-align: 2px; margin-left: 2px;
+    color: var(--green, #38d980); }
+  .msg .sep { color: var(--faint); margin-right: 3px; }
+  .msg .tx { color: var(--cyan-text); }
+  .msg .ts { float: right; margin-left: 6px; font-size: 9.5px; color: var(--faint); }
+  .sys { padding: 3px 12px; font-size: 11px; color: var(--faint); font-style: italic; }
+
+  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider);
+    position: relative; z-index: 4; }
+  #sendInput { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px; color: var(--cyan-bright);
+    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
+    padding: 6px 8px; outline: none; }
+  #sendInput:focus { border-color: var(--cyan); }
+  #sendInput::placeholder { color: var(--faint); }
+  .hbtn { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+  .hbtn:hover { background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
+  .hbtn.sm { padding: 4px 7px; font-size: 10px; }
+  .hbtn.active { background: rgba(var(--accent-rgb), 0.28); border-color: var(--cyan); }
+
+  /* Identity gate. Chat needs someone bannable on the other end (Sub's rule: RSI-verified
+     accounts only). The A/B build takes a plain handle; production replaces this pane with
+     the site's verification flow. */
+  #gate { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
+    gap: 10px; padding: 22px 18px; overflow-y: auto;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)); z-index: 5; }
+  #panel.gated #gate { display: flex; }
+  #gate .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
+  #gate .hint { font-size: 11px; line-height: 1.6; color: var(--cyan-dim); }
+  #handleInput { font-family: var(--sans); font-size: 14px; font-weight: 600; color: var(--cyan-bright);
+    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: 7px;
+    padding: 9px 10px; outline: none; width: 100%; }
+  #handleInput:focus { border-color: var(--cyan); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
+  /* Belt for the widget-page hidden trap: any class rule that sets display would silently
+     defeat a bare [hidden] (see the Unlock Alerts claim-row bug). */
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="panel" class="wpanel">
+    <div class="head">
+      <span class="dia"></span>
+      <div id="tabs"></div>
+    </div>
+
+    <div id="log"></div>
+
+    <div id="sendbar">
+      <input id="sendInput" type="text" placeholder="Say something…" maxlength="400" autocomplete="off" spellcheck="false" />
+      <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
+      <button id="sendBtn" class="hbtn sm" type="button">Send</button>
+    </div>
+
+    <div id="gate">
+      <div class="lbl">Chat identity</div>
+      <div class="hint">Chat is for <b>verified RSI accounts</b> — that's what keeps it moderated.
+        Connect your subliminal.gg account in <b>Setup</b>, then verify your RSI handle on your
+        profile at <b>subliminal.gg/blueprints</b>. Chat unlocks on its own once you're verified.</div>
+      <div id="devIdRow" hidden>
+        <div class="lbl" style="margin-top:6px">Dev identity (local server only)</div>
+        <input id="handleInput" type="text" placeholder="Your RSI handle" maxlength="30" spellcheck="false" autocomplete="off" />
+        <div class="row" style="margin-top:8px">
+          <button id="gateTypeBtn" class="hbtn" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎ Type mode</button>
+          <button id="gateSaveBtn" class="hbtn" type="button">Join chat</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const EMBEDDED = new URLSearchParams(location.search).has("embedded");
+  if (EMBEDDED) document.body.classList.add("embedded");
+  const host = () => (EMBEDDED && window.parent) ? window.parent.__chatHost : null;
+
+  const MAX_ROWS = 250;
+  // The three-tier hierarchy in display order. Region/shard tabs render even while you're not
+  // on a shard (dimmed) — an empty slot that explains itself beats one that comes and goes.
+  const TIERS = ["global", "region", "shard"];
+
+  let view = null;        // last full state from the sidecar
+  let activeCh = "global";
+  let unread = new Set(); // channels with messages arrived while another tab was up
+  let es = null;
+
+  // ── rendering ────────────────────────────────────────────────────────────────
+  const atBottom = () => {
+    const el = $("log");
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+  function append(node) {
+    const el = $("log");
+    const stick = atBottom();
+    el.appendChild(node);
+    while (el.childElementCount > MAX_ROWS) el.removeChild(el.firstChild);
+    if (stick) el.scrollTop = el.scrollHeight;
+  }
+  function sys(text) {
+    const d = document.createElement("div");
+    d.className = "sys";
+    d.textContent = text;
+    append(d);
+  }
+  // A stable per-handle colour (same trick as every chat client): hash → hue, fixed S/L that
+  // stay readable on the dark glass in every skin.
+  function handleColor(handle) {
+    let h = 0;
+    for (const c of handle) h = (h * 31 + c.codePointAt(0)) % 360;
+    return `hsl(${h} 65% 70%)`;
+  }
+  function msgRow(m) {
+    const row = document.createElement("div");
+    row.className = "msg";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = m.from?.handle ?? "?";
+    nm.style.color = handleColor(m.from?.handle ?? "?");
+    row.appendChild(nm);
+    if (m.from?.verified) {
+      const v = document.createElement("span");
+      v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
+      row.appendChild(v);
+    }
+    const sep = document.createElement("span");
+    sep.className = "sep"; sep.textContent = ":";
+    row.appendChild(sep);
+    const tx = document.createElement("span");
+    tx.className = "tx"; tx.textContent = m.text; // textContent — markup stays inert
+    row.appendChild(tx);
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
+    row.prepend(ts);
+    return row;
+  }
+
+  function chanFor(tier) {
+    return view?.channels?.find((c) => c.kind === tier) ?? null;
+  }
+  function renderTabs() {
+    const tabs = $("tabs");
+    tabs.textContent = "";
+    for (const tier of TIERS) {
+      const c = chanFor(tier);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "tab";
+      const label = c ? c.label
+        : tier === "global" ? "Global"
+        : tier === "region" ? (view?.regionLabel ?? "Server")
+        : (view?.shardLabel ?? "Shard");
+      b.textContent = label;
+      if (c) {
+        if (typeof c.count === "number") {
+          const n = document.createElement("span");
+          n.className = "n"; n.textContent = String(c.count);
+          b.appendChild(n);
+        }
+        if (unread.has(c.ch)) {
+          const u = document.createElement("span");
+          u.className = "unread";
+          b.appendChild(u);
+        }
+        b.classList.toggle("active", c.ch === activeCh);
+        b.addEventListener("click", () => { activeCh = c.ch; unread.delete(c.ch); renderTabs(); renderLog(); });
+      } else {
+        b.classList.add("dead");
+        b.title = tier === "region" ? "Joins automatically when you enter the PU" : "Joins automatically when you land on a shard";
+      }
+      tabs.appendChild(b);
+    }
+  }
+  function renderLog() {
+    $("log").textContent = "";
+    const c = view?.channels?.find((x) => x.ch === activeCh);
+    if (!c) {
+      if (view?.status === "connected") sys("Nothing here yet.");
+      return;
+    }
+    for (const m of c.msgs) append(msgRow(m));
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+  function renderAll() {
+    const p = $("panel");
+    p.classList.toggle("on", view?.status === "connected");
+    p.classList.toggle("gated", view ? !view.hasIdentity : false);
+    $("devIdRow").hidden = !view?.devServer;
+    // If the active channel disappeared (left the shard), fall back to global.
+    if (view && !view.channels.some((c) => c.ch === activeCh)) activeCh = "global";
+    renderTabs();
+    renderLog();
+    if (view?.status === "error" && view.error) sys(view.error);
+    else if (view?.status === "connecting") sys("Connecting…");
+    else if (view && view.status === "off" && view.hasIdentity) sys("Chat is off. Open the Chat widget on the overlay to connect.");
+  }
+
+  // ── live stream from the sidecar ─────────────────────────────────────────────
+  function listen() {
+    if (es) es.close();
+    es = new EventSource("/chat/events");
+    es.onmessage = (e) => {
+      let f;
+      try { f = JSON.parse(e.data); } catch { return; }
+      if (f.type === "state") { view = { ...(view ?? {}), ...f.view }; renderAll(); }
+      else if (f.type === "msg") {
+        const c = view?.channels?.find((x) => x.ch === f.msg.ch);
+        if (c) { c.msgs.push(f.msg); if (c.msgs.length > MAX_ROWS) c.msgs.splice(0, c.msgs.length - MAX_ROWS); }
+        if (f.msg.ch === activeCh) append(msgRow(f.msg));
+        else { unread.add(f.msg.ch); renderTabs(); }
+      }
+      else if (f.type === "presence") {
+        const c = view?.channels?.find((x) => x.ch === f.ch);
+        if (c) { c.count = f.count; renderTabs(); }
+      }
+      else if (f.type === "notice") sys(f.text);
+    };
+    es.onerror = () => { /* EventSource retries on its own */ };
+  }
+  async function load() {
+    try {
+      view = await (await fetch("/api/chat", { cache: "no-store" })).json();
+    } catch {
+      view = null;
+      sys("Couldn't reach the overlay service.");
+    }
+    renderAll();
+    listen();
+  }
+
+  // ── sending ──────────────────────────────────────────────────────────────────
+  async function send() {
+    const el = $("sendInput");
+    const text = el.value.trim();
+    if (!text) return;
+    const c = view?.channels?.find((x) => x.ch === activeCh);
+    if (!c) { sys("Not in a channel yet."); return; }
+    el.value = "";
+    try {
+      const r = await fetch("/api/chat/send", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ch: activeCh, text }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.ok) { sys(d?.message || "Couldn't send that."); el.value = text; }
+    } catch {
+      sys("Couldn't reach the overlay service.");
+      el.value = text;
+    }
+  }
+
+  // ── identity gate (A/B build: plain handle → config; release: site verification) ──
+  async function saveHandle() {
+    const h = $("handleInput").value.trim();
+    if (!/^[A-Za-z0-9._-]{3,30}$/.test(h)) { $("handleInput").focus(); return; }
+    if (typing) setTyping(false);
+    try {
+      await fetch("/api/config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatHandle: h }),
+      });
+    } catch { sys("Couldn't reach the overlay service."); return; }
+    // The sidecar re-arms chat on that POST; refresh the snapshot so the gate drops now.
+    load();
+  }
+
+  // ── typing mode (shared shell keyboard grab, same as Journal / Twitch Chat) ──
+  let typing = false;
+  function setTyping(on) {
+    typing = !!on;
+    for (const b of [$("typeBtn"), $("gateTypeBtn")]) b.classList.toggle("active", typing);
+    $("gateTypeBtn").textContent = typing ? "✓ Done" : "✎ Type mode";
+    if (typing) { if (host()) host().editStart(); else focusField(); }
+    else { if (host()) host().editEnd(); const a = document.activeElement; if (a && a.blur) a.blur(); }
+  }
+  function focusField() {
+    ($("panel").classList.contains("gated") ? $("handleInput") : $("sendInput")).focus();
+  }
+  window.__chatFocus = () => { if (typing) focusField(); };
+  window.__chatExitTyping = () => { if (typing) setTyping(false); };
+
+  $("sendBtn").addEventListener("click", send);
+  $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
+  $("typeBtn").addEventListener("click", () => setTyping(!typing));
+  $("gateTypeBtn").addEventListener("click", () => setTyping(!typing));
+  $("gateSaveBtn").addEventListener("click", saveHandle);
+  $("handleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveHandle(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && typing) { e.preventDefault(); setTyping(false); } });
+
+  // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.
+  document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
+
+  load();
+  try { host()?.ready?.(); } catch { /* not embedded */ }
+</script>
+</body>
+</html>
