@@ -1313,6 +1313,8 @@
   /* "inferred" qualifier on the rank readout — it's a lower bound, not exact rep. */
   .mi-row .mi-hint { font-size: 8.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--cyan-dim); }
+  /* "+2" after a truncated "Pick up at" list — dimmed so the place names stay dominant. */
+  .mi-row .mi-more { font-size: 9px; font-weight: 700; color: var(--cyan-dim); }
   .mi-sec { margin: 8px 0 2px; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: var(--cyan-dim); }
   .mi-rep { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
@@ -2078,7 +2080,10 @@
     const giver = v.giver, type = v.missionType;
     const rg = v.reputationGained || [], rl = v.reputationLost || [];
     const payTxt = payoutText(v.payout);
-    if (!giver && !type && !rg.length && !rl.length && !payTxt) return "";
+    // Where the contract is OFFERED. Station-first from the dataset, capped for width —
+    // a player wants two or three places they can fly to, not a gazetteer.
+    const where = (v.whereToGet || []).slice(0, 4);
+    if (!giver && !type && !rg.length && !rl.length && !payTxt && !where.length) return "";
     const open = !!forceOpen || infoOpen;
     let body = "";
     if (open) {
@@ -2090,6 +2095,16 @@
       // pull FixedReward — then it appears here automatically.
       if (payTxt) rows.push('<div class="mi-row"><span class="mi-k">Reward</span><span class="mi-v pos">' + escapeHtml(payTxt) + "</span></div>");
       if (giver) rows.push('<div class="mi-row"><span class="mi-k">Faction</span><span class="mi-v">' + escapeHtml(giver) + "</span></div>");
+      // 🔑 "Pick up at" is only shown once the VARIANT is resolved. Same-title variants are
+      // offered in different regions drawing from DIFFERENT pools, so before the tracker
+      // knows which one you took, naming places would send you somewhere that cannot drop
+      // what this panel lists. view() returns an empty list while ambiguous for that reason.
+      if (where.length) {
+        rows.push('<div class="mi-row"><span class="mi-k">Pick up at</span><span class="mi-v">' +
+          escapeHtml(where.join(" · ")) +
+          ((v.whereToGet || []).length > where.length ? ' <span class="mi-more">+' + ((v.whereToGet || []).length - where.length) + "</span>" : "") +
+          "</span></div>");
+      }
       // Reputation gained/lost. A single entry that just repeats the giver shown above becomes
       // a clean "Reputation gained: +N rep" row (no redundant name); multiple entries — or rep
       // with a DIFFERENT faction — keep the labeled section with per-faction names.

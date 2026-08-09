@@ -142,6 +142,17 @@ export interface DatasetMission {
    *  Empty/absent for the many missions the game data carries no rep for. */
   reputationGained?: RepEntry[];
   reputationLost?: RepEntry[];
+  /** Every place this variant touches (offer sites + objective sites), resolved to
+   *  starmap names. Null when the game data places it nowhere (~51% of missions).
+   *  Load-bearing, not display: same-title variants can draw from DIFFERENT pools, and
+   *  matching the log's objective text against these names is what picks the right one. */
+  places?: string[] | null;
+  /** Objective-site names only — the subset that says where the WORK is. */
+  objective?: string[] | null;
+  /** Short, station-first list of places the contract is OFFERED at — the display
+   *  counterpart to `places`, which is deliberately unfiltered for matching and runs to
+   *  30+ asteroid-cluster names on some variants. Absent on older datasets. */
+  where?: string[] | null;
   /** Reputation RANK this mission requires (0,1,2…); null/absent = no rank gate (intro
    *  + story missions). The game only offers it once you've reached that rank, so
    *  accepting it proves you're at least there — that's how we infer standing. */
@@ -268,6 +279,13 @@ export interface TrackedView {
    *  unrecoverable, so it reads low, never high). `noData` until a completion is seen. */
   repBar: RepBar | null;
   missionType: string | null;
+  /** Short station-first list of places this contract is OFFERED at, so the widget can
+   *  answer "where do I go to get this?". Empty when the game data places it nowhere
+   *  (~59% of missions) — and empty is the honest answer, not a guess.
+   *  🔑 Only meaningful once the variant is resolved: same-title variants are offered in
+   *  DIFFERENT regions with different pools, so an ambiguous mission's list would mix
+   *  places that lead to different rewards. `view()` omits it while ambiguous. */
+  whereToGet: string[];
   /** Reputation gained (+) / lost (−) on completion, biggest first (may be empty). */
   reputationGained: RepEntry[];
   reputationLost: RepEntry[];
@@ -430,6 +448,60 @@ interface MissionHistoryEntry {
 /** "Geist Armor Arms" matches an observed "Geist Armor Arms Whiteout" (variant suffix). */
 function norm(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+const ROMAN = ["", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"];
+
+/** The runtime objective text and the starmap disagree on how to name a planet: the log
+ *  says "Pyro 5a Abandoned Outpost", the starmap says "Pyro V" (moons carry proper names
+ *  like "Adir", not letters). So a literal match on "Pyro 5a" finds nothing.
+ *
+ *  Rewrite "<Word> <digit><optional moon letter>" to the Roman-numeral planet form and
+ *  keep the original too, so both notations can match. The trailing letter is dropped on
+ *  purpose — the dataset lists the PARENT planet, and "Pyro V" is the discriminating
+ *  token; nothing is lost because a moon's real name would already match literally. */
+function placeAliases(text: string): string {
+  const t = norm(text);
+  return (
+    t +
+    " " +
+    t.replace(/\b([a-z]+)\s*(\d{1,2})[a-z]?\b/g, (whole, word: string, num: string) => {
+      const r = ROMAN[parseInt(num, 10)];
+      return r ? `${whole} ${word} ${r}` : whole;
+    })
+  );
+}
+
+/** Pick the ONE mission variant whose place names the objective text names.
+ *
+ *  Scores each candidate by the LONGEST of its place names found in the text, because
+ *  specificity is what discriminates: RegionC and RegionD both list "Pyro", and only the
+ *  longer "Pyro V" / "Terminus" tells them apart. A tie, or no hit at all, returns null —
+ *  the caller then keeps the merged view rather than guessing, since a confidently wrong
+ *  variant is worse than an honestly ambiguous one.
+ *
+ *  🔑 "Pyro" alone is never enough. Short names are matched on a word boundary so
+ *  "Adir" cannot hit inside another word. */
+function narrowByPlace(
+  text: string,
+  candidates: { key: string; places: string[] }[],
+): string | null {
+  const hay = placeAliases(text);
+  let best: { key: string; len: number } | null = null;
+  let tied = false;
+  for (const c of candidates) {
+    let len = 0;
+    for (const p of c.places) {
+      const n = norm(p);
+      if (n.length < 3) continue;
+      const re = new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      if (re.test(hay) && n.length > len) len = n.length;
+    }
+    if (len === 0) continue;
+    if (!best || len > best.len) { best = { key: c.key, len }; tied = false; }
+    else if (len === best.len) tied = true;
+  }
+  return best && !tied ? best.key : null;
 }
 
 /** SC ship-component blueprints are logged with a classification designation the
@@ -957,6 +1029,75 @@ export class MissionTracker extends EventEmitter {
         }
         this.missions.set(ev.missionId, info);
         this.noteRank(ev.missionId);
+        this.emit("change");
+        break;
+      }
+      // The objective text names WHERE the mission sends you, and that is the only log
+      // signal that separates same-title variants drawing from DIFFERENT pools.
+      //
+      // Why this matters concretely: "Kill the king" has RegionA variants on a 10-blueprint
+      // pool and RegionC/D variants on a different 8-blueprint pool. Resolving by title
+      // alone, the app merged both into a fictional 18 and told Sub he had 4 left to win
+      // while the variant he was actually running was 8/8 and could never drop anything.
+      // He farmed a dead pool for a week. "Go to Pyro 5a Abandoned Outpost" → Pyro V →
+      // RegionC, unambiguously.
+      //
+      // Only ever NARROWS an already-ambiguous title guess: a real marker (contractKey) is
+      // authoritative and left alone, and a text that doesn't resolve to exactly one
+      // candidate changes nothing.
+      case "newObjective": {
+        if (!ev.missionId || !this.dataset) break;
+        const info = this.missions.get(ev.missionId);
+        if (!info || !info.ambiguous || !info.acceptKeys || info.acceptKeys.length < 2) break;
+        const candidates = info.acceptKeys
+          .map((key) => ({ key, places: this.dataset!.missions[key]?.places ?? [] }))
+          .filter((c) => c.places.length > 0);
+        if (candidates.length < 2) break;
+        const picked = narrowByPlace(ev.text, candidates);
+        if (!picked) break;
+        info.contractKey = picked;
+        info.acceptKeys = [picked];
+        info.ambiguous = false;
+        this.missions.set(ev.missionId, info);
+        this.noteRank(ev.missionId);
+        this.emit("change");
+        break;
+      }
+      // Routing to a region-scoped encounter set names the region OUTRIGHT
+      // ("destination RegionB_1base_ab_pyro…"), and that token is literally what
+      // separates HH_Pyro_RegionB_… from HH_Pyro_RegionC_…. Stronger than matching place
+      // NAMES: no numeral translation, no shared-name ties. It is the signal that would
+      // have resolved 2026-08-09's "Deep space hit", whose objective text was a bare
+      // "Go to Asteroid Base" with no place in it at all.
+      //
+      // ⚠️ The line carries NO MissionId, so this is correlation, not attribution. Two
+      // guards keep it honest:
+      //   1. Only ACTIVE, still-ambiguous missions are considered.
+      //   2. It must resolve to EXACTLY ONE mission and EXACTLY ONE of its variants. If
+      //      two ambiguous missions could both take this region, nothing happens — a
+      //      wrong pool is worse than an admittedly unknown one.
+      case "routeRegion": {
+        if (!this.dataset) break;
+        // 🔑 Boundary-anchored, NOT a plain substring. The dataset has 16 keys containing
+        // "Regional" and 20 containing "RegionLink", so a bare includes("regiona") would
+        // match "Regional" and pick a completely unrelated variant. The token must not be
+        // followed by another letter or digit.
+        const token = new RegExp(`region${ev.region.replace(/[^a-z0-9]/gi, "")}(?![a-z0-9])`, "i");
+        const hits: { missionId: string; key: string }[] = [];
+        for (const [missionId, info] of this.missions) {
+          if (!info.ambiguous || !info.acceptKeys || info.acceptKeys.length < 2) continue;
+          if (this.endedMissionIds.has(missionId)) continue;
+          const matching = info.acceptKeys.filter((k) => token.test(k));
+          if (matching.length === 1) hits.push({ missionId, key: matching[0] });
+        }
+        if (hits.length !== 1) break;
+        const { missionId, key } = hits[0];
+        const info = this.missions.get(missionId)!;
+        info.contractKey = key;
+        info.acceptKeys = [key];
+        info.ambiguous = false;
+        this.missions.set(missionId, info);
+        this.noteRank(missionId);
         this.emit("change");
         break;
       }
@@ -2372,6 +2513,10 @@ export class MissionTracker extends EventEmitter {
       inferredRank: mission?.giver ? this.inferredRank.get(mission.giver) ?? null : null,
       repBar: this.computeRepBar(mission),
       missionType: mission?.missionType ?? null,
+      // Suppressed while ambiguous on purpose: the candidates are offered in different
+      // regions that draw from DIFFERENT pools, so listing all their places would point
+      // the player at somewhere that cannot drop what the panel is showing.
+      whereToGet: ambiguous ? [] : mission?.where ?? [],
       reputationGained: mission?.reputationGained ?? [],
       reputationLost: mission?.reputationLost ?? [],
       eventTrack,
