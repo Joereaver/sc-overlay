@@ -1474,6 +1474,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Crafting detail (recipe / dismantle / craft time / stats / manufacturer) for one
   // blueprint, looked up by ?item=<uuid> or ?name=<blueprint name>. Powers the overlay's
   // recipe view on demand (kept OUT of the mission-view payload so the SSE stays lean).
+  // Name suggestions for the chat widget's /bp and /item autocomplete. Local dataset only —
+  // typing a blueprint name mid-flight must not wait on the network.
+  // Every blueprint name distinctive enough to link on sight, so the chat widget can turn
+  // "DebBolt3" into a link with nobody typing a command. Fetched ONCE per widget load and
+  // cached — it changes only when the dataset does.
+  if (url === "/api/blueprint-names" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ names: tracker.autoLinkNames() }));
+    return;
+  }
+  if (url === "/api/blueprint-search" && req.method === "GET") {
+    const q = new URL(req.url ?? "", "http://x").searchParams.get("q") ?? "";
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ names: tracker.searchBlueprintNames(q) }));
+    return;
+  }
   if (url === "/api/blueprint-detail" && req.method === "GET") {
     const q = new URL(req.url ?? "", "http://x").searchParams;
     const key = (q.get("item") || q.get("name") || "").trim();

@@ -124,15 +124,18 @@
     color: var(--cyan-text); background: none; border: 0; border-radius: 5px; padding: 6px 8px; cursor: pointer; }
   #ctx button:hover { background: rgba(var(--accent-rgb), 0.18); color: var(--cyan-bright); }
 
-  /* Slash-command hint strip above the input. */
+  /* One suggestion list, three jobs: commands (/), people (@) and blueprint names. Sub asked
+     for autocomplete because "I don't know exactly what to type" — so nothing here should ever
+     require knowing a name in advance. ↑↓ to move, Tab/Enter to accept, Esc to dismiss. */
   #slash { position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; display: none;
-    z-index: 6; padding: 5px; border: 1px solid var(--border); border-radius: 8px;
-    background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+    z-index: 6; padding: 5px; border: 1px solid var(--border); border-radius: 8px; max-height: 190px;
+    overflow-y: auto; background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
   #slash.open { display: block; }
   #slash .sc-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 7px; border-radius: 5px; cursor: pointer; font-size: 11.5px; }
   #slash .sc-row:hover, #slash .sc-row.on { background: rgba(var(--accent-rgb), 0.18); }
   #slash .sc-cmd { font-family: var(--mono); color: var(--cyan-bright); font-weight: 700; }
-  #slash .sc-hint { color: var(--faint); font-size: 10.5px; }
+  #slash .sc-name { color: var(--cyan-text); font-weight: 600; }
+  #slash .sc-hint { color: var(--faint); font-size: 10.5px; margin-left: auto; }
 
   #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); position: relative; }
 
@@ -341,6 +344,42 @@
     if (host()?.openUrl) host().openUrl(url);
     else window.open(url, "_blank", "noopener");
   }
+  // Blueprint names recognised on sight — no command needed (Sub, 2026-08-09). The list and the
+  // "is it distinctive enough" judgement are the sidecar's (see autoLinkNames); this just
+  // matches them. One regex, built once, longest-name-first so the longer of two overlapping
+  // names wins. Word boundaries on both ends, so "Bolt" inside "Deadbolt" never matches.
+  let bpRe = null;
+  let bpCanon = new Map();   // matched text (lowercase) → the canonical blueprint name
+  async function loadAutoLinks() {
+    try {
+      const d = await (await fetch("/api/blueprint-names")).json();
+      const rows = (d.names ?? []).filter((r) => r && r.match);
+      if (!rows.length) return;
+      bpCanon = new Map(rows.map((r) => [r.match.toLowerCase(), r.name]));
+      const esc = rows.map((r) => r.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      bpRe = new RegExp("(?<![\\w-])(" + esc.join("|") + ")(?![\\w-])", "gi");
+    } catch { /* no dataset yet — chat still works, just without auto-links */ }
+  }
+  /** Append `text`, turning any known blueprint name inside it into a link. */
+  function appendLinkified(frag, text) {
+    if (!bpRe) { frag.appendChild(document.createTextNode(text)); return; }
+    bpRe.lastIndex = 0;
+    let last = 0, m;
+    while ((m = bpRe.exec(text))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const a = document.createElement("span");
+      a.className = "lk";
+      a.textContent = m[0];                                   // show what they typed…
+      const canon = bpCanon.get(m[0].toLowerCase()) ?? m[0];   // …but link the real name
+      a.title = canon === m[0] ? "Open this blueprint on subliminal.gg" : "Open “" + canon + "” on subliminal.gg";
+      const url = bpUrl(canon);
+      a.addEventListener("click", () => openLink(url));
+      frag.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+  }
+
   function renderBody(text) {
     const frag = document.createDocumentFragment();
     const me = (view?.you?.handle ?? "").toLowerCase();
@@ -360,7 +399,9 @@
     }
     if (idx < text.length) parts.push({ text: text.slice(idx) });
     for (const p of parts) {
-      if (p.text !== undefined) { frag.appendChild(document.createTextNode(p.text)); continue; }
+      // Plain text is where auto-linking happens; an explicit [bp:…] token or an @mention is
+      // already something, and must not be re-scanned into something else.
+      if (p.text !== undefined) { appendLinkified(frag, p.text); continue; }
       if (p.kind === "at") {
         const s = document.createElement("span");
         const isMe = p.name.toLowerCase() === me;
@@ -630,7 +671,7 @@
         // you are looking at it, and never for your own messages.
         const me = (view?.you?.handle ?? "").toLowerCase();
         const namesMe = me && new RegExp("@" + me.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&") + "\\b", "i").test(f.msg.text);
-        if (namesMe && (f.msg.from?.handle ?? "").toLowerCase() !== me) announceMention(f.msg.from?.handle ?? "Someone");
+        if (namesMe && (f.msg.from?.handle ?? "").toLowerCase() !== me) announceMention(f.msg.from?.handle ?? "Someone", f.msg.ch);
         if (f.msg.ch === activeCh) append(msgRow(f.msg));
         else { unread.add(f.msg.ch); renderTabs(); renderChannels(); }
       }
@@ -716,20 +757,43 @@
   // The clip is `c_mentioned.ogg`; if it is not bundled yet the browser voice reads the same
   // line, so the feature works today and simply gets better when the clip lands — the same
   // fallback the mining call-outs use for a missing clip.
-  let mentionAudio = null;
-  async function announceMention(from) {
+  // Two clips, stitched: "You have been mentioned in" + the CHANNEL. Same shape as the mining
+  // call-outs (a sentence clip plus a name clip) — see references/ocr.md.
+  // 🔑 The region is named but its DIGITS are not (Sub: "you don't have to mention the number"),
+  // and the shard is just "your shard" — you can only be in one at a time, so the number tells
+  // you nothing you don't already know. The region families are the ones actually seen in 480
+  // shared logs: US East, EU West, Asia-Pacific East, Asia-Pacific SE (plus the rest of CIG's
+  // scheme, in case a region appears that nobody has shared a log from yet).
+  const play = (src) => new Promise((res) => {
+    const a = new Audio(src);
+    a.onended = res; a.onerror = res;
+    a.play().catch(res);
+  });
+  function channelClip(ch) {
+    const c = chanOf(ch);
+    if (!c) return "n_ch_global";
+    if (c.kind === "global") return "n_ch_global";
+    if (c.kind === "shard") return "n_ch_shard";
+    if (c.kind === "org") return "n_ch_org";
+    if (c.kind === "custom") return "n_ch_custom";
+    // region: name the family, never the digits
+    const fam = (view?.region ?? "").toLowerCase().match(/^([a-z]+?)\d/);
+    return fam ? "n_ch_" + fam[1] : "n_ch_region";
+  }
+  async function announceMention(from, ch) {
+    const clip = channelClip(ch);
     try {
-      const r = await fetch("/tts/c_mentioned.ogg", { cache: "force-cache" });
+      const r = await fetch("/tts/" + clip + ".ogg", { method: "HEAD" });
       if (r.ok) {
-        mentionAudio = mentionAudio || new Audio("/tts/c_mentioned.ogg");
-        mentionAudio.currentTime = 0;
-        await mentionAudio.play();
+        await play("/tts/c_mentionedin.ogg");
+        await play("/tts/" + clip + ".ogg");
         return;
       }
     } catch { /* fall through to the browser voice */ }
     try {
-      const u = new SpeechSynthesisUtterance("Message received. " + from + " is addressing you.");
-      u.rate = 0.9; u.pitch = 0.7;   // HAL is slow and low; this is the nearest a system voice gets
+      const where = chanOf(ch)?.label ?? "chat";
+      const u = new SpeechSynthesisUtterance("You have been mentioned in " + where);
+      u.rate = 0.9; u.pitch = 0.7;   // HAL is slow and low; the nearest a system voice gets
       speechSynthesis.speak(u);
     } catch { /* no speech engine — the gold highlight still marks it */ }
   }
@@ -759,29 +823,112 @@
     if (!out) { sys(c.cmd + " needs something after it - " + c.cmd + " " + c.args); return null; }
     return out;
   }
-  function renderSlash(text) {
+  // ── autocomplete ─────────────────────────────────────────────────────────
+  // Sub's ask: "I don't know exactly what to type." So every place a NAME is expected — a
+  // person after @, a blueprint after /bp, an item after /item — suggests as you type, and the
+  // command list itself completes. `sugg` is the current list; `suggAt` is where in the input
+  // the replacement starts, so accepting rewrites only the token being typed.
+  let sugg = [];
+  let suggIx = 0;
+  let suggAt = 0;
+  let bpTimer = null;
+
+  function closeSugg() { $("slash").classList.remove("open"); sugg = []; }
+
+  function drawSugg(rows, startAt) {
     const box = $("slash");
-    if (!text.startsWith("/") || text.includes(" ")) { box.classList.remove("open"); return; }
-    const matches = COMMANDS.filter((c) => c.cmd.startsWith(text.toLowerCase()));
+    sugg = rows; suggAt = startAt; suggIx = 0;
     box.textContent = "";
-    if (!matches.length) { box.classList.remove("open"); return; }
-    for (const c of matches) {
+    if (!rows.length) { box.classList.remove("open"); return; }
+    rows.forEach((row, i) => {
       const r = document.createElement("div");
-      r.className = "sc-row";
+      r.className = "sc-row" + (i === 0 ? " on" : "");
       const a = document.createElement("span");
-      a.className = "sc-cmd"; a.textContent = c.cmd + (c.args ? " " + c.args : "");
-      const b = document.createElement("span");
-      b.className = "sc-hint"; b.textContent = c.hint;
-      r.append(a, b);
-      r.addEventListener("click", () => {
-        $("sendInput").value = c.cmd + (c.args ? " " : "");
-        box.classList.remove("open");
-        if (typing) $("sendInput").focus(); else setTyping(true, "send");
-      });
+      a.className = row.mono ? "sc-cmd" : "sc-name";
+      a.textContent = row.label;
+      r.appendChild(a);
+      if (row.hint) {
+        const b = document.createElement("span");
+        b.className = "sc-hint"; b.textContent = row.hint;
+        r.appendChild(b);
+      }
+      r.addEventListener("mousedown", (e) => { e.preventDefault(); acceptSugg(i); });
       box.appendChild(r);
-    }
+    });
     box.classList.add("open");
     try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
+  function moveSugg(by) {
+    if (!sugg.length) return;
+    suggIx = (suggIx + by + sugg.length) % sugg.length;
+    [...$("slash").children].forEach((el, i) => el.classList.toggle("on", i === suggIx));
+    $("slash").children[suggIx]?.scrollIntoView({ block: "nearest" });
+  }
+
+  function acceptSugg(i) {
+    const row = sugg[i ?? suggIx];
+    if (!row) return;
+    const el = $("sendInput");
+    el.value = el.value.slice(0, suggAt) + row.insert;
+    closeSugg();
+    if (typing) el.focus(); else setTyping(true, "send");
+    // A command still needs its argument, so re-run the pass to offer the next thing.
+    renderSlash(el.value);
+  }
+
+  /** Who is in the channel you are looking at — the only people worth suggesting. */
+  const channelHandles = () => (chanOf(activeCh)?.members ?? []).map((m) => m.handle);
+
+  function renderSlash(text) {
+    const caretToken = (re) => {
+      const m = text.match(re);
+      return m ? { frag: m[1] ?? "", at: m.index ?? 0 } : null;
+    };
+    // 1. a command being typed (only at the very start, before any space)
+    if (/^\/\S*$/.test(text)) {
+      const matches = COMMANDS.filter((c) => c.cmd.startsWith(text.toLowerCase()));
+      drawSugg(matches.map((c) => ({
+        label: c.cmd + (c.args ? " " + c.args : ""), hint: c.hint, mono: true,
+        insert: c.cmd + (c.args ? " " : ""),
+      })), 0);
+      return;
+    }
+    // 2. a blueprint / item name after /bp or /item — asked of the local dataset
+    const bp = text.match(/^\/(bp|item)\s+(.*)$/i);
+    if (bp) {
+      const frag = bp[2];
+      const start = text.length - frag.length;
+      clearTimeout(bpTimer);
+      if (frag.trim().length < 2) { closeSugg(); return; }
+      bpTimer = setTimeout(async () => {
+        try {
+          const d = await (await fetch("/api/blueprint-search?q=" + encodeURIComponent(frag))).json();
+          const names = d.names ?? [];
+          if (!names.length) { closeSugg(); return; }
+          drawSugg(names.map((n) => ({
+            label: n, mono: false,
+            hint: bp[1].toLowerCase() === "bp" ? "subliminal.gg" : "starcitizen.tools",
+            insert: n,
+          })), start);
+        } catch { closeSugg(); }
+      }, 120);   // debounce: this fires on every keystroke
+      return;
+    }
+    // 3. someone's name after @ — from the members actually in this channel
+    const at = text.match(/(?:^|\s)@([A-Za-z0-9._-]*)$/);
+    if (at) {
+      const frag = (at[1] ?? "").toLowerCase();
+      const start = text.length - frag.length - 1;   // include the "@"
+      const pool = channelHandles().filter((h) => h.toLowerCase() !== (view?.you?.handle ?? "").toLowerCase());
+      const hits = pool.filter((h) => h.toLowerCase().startsWith(frag)).slice(0, 8);
+      if (!hits.length) { closeSugg(); return; }
+      drawSugg(hits.map((h) => ({
+        label: h, mono: false, hint: isFriend(h) ? "friend" : "", insert: "@" + h + " ",
+      })), start);
+      return;
+    }
+    closeSugg();
   }
 
   // ── actions ──────────────────────────────────────────────────────────────
@@ -850,7 +997,16 @@
   window.__chatExitTyping = () => { if (typing) setTyping(false); };
 
   $("sendBtn").addEventListener("click", send);
-  $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
+  $("sendInput").addEventListener("keydown", (e) => {
+    // While suggestions are up the arrows/Tab/Enter drive THEM — Enter only sends once the
+    // list is dismissed, so accepting a name can never fire the message by accident.
+    if (sugg.length && $("slash").classList.contains("open")) {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveSugg(1); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); moveSugg(-1); return; }
+      if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); acceptSugg(); return; }
+    }
+    if (e.key === "Enter") { e.preventDefault(); send(); }
+  });
   $("sendInput").addEventListener("input", () => renderSlash($("sendInput").value));
   $("emojiBtn").addEventListener("click", () => setEmojiPop(!$("emojiPop").classList.contains("open")));
   $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
@@ -896,6 +1052,7 @@
 
   applyRails();
   buildEmojiPicker();
+  loadAutoLinks();
   load();
   try { host()?.ready?.(); } catch { /* not embedded */ }
 </script>

@@ -2833,6 +2833,10 @@
       // widget; the rails collapse from its header when the user wants it narrow.
       def: { x: 760, y: 400 }, size: { w: 820, h: 480, minW: 280, maxW: 1600, minH: 240, maxH: 1200 },
       focusFn: "__chatFocus",
+      // 🔑 Without this the blueprint/wiki/profile links fell back to window.open, which inside
+      // the canvas is an Electron popup, not the user's browser. Every widget that links OUT
+      // needs openUrl re-exposed — the base bridge does not carry it.
+      host: () => ({ openUrl: (u) => window.overlayApi?.openUrl?.(u) }),
       // Don't strand the keyboard grab: hiding mid-typing would leave the interact key suspended.
       onHide: (w) => { try { frameWin(w)?.__chatExitTyping?.(); } catch { /* iframe gone */ } },
     },

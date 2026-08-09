@@ -2116,6 +2116,91 @@ export class MissionTracker extends EventEmitter {
    *  looked up in the detail dataset. Returns null when the detail file isn't loaded or
    *  the blueprint has no recipe on record. Reachable by the overlay via the server's
    *  /api/blueprint-detail endpoint. */
+  /** Blueprint names DISTINCTIVE enough to link on sight in chat, without anyone asking for it
+   *  (Sub, 2026-08-09: "nobody typing those letters in that order means anything else").
+   *
+   *  🔑 The whole risk is over-linking. Of 1,572 blueprint names, 301 are a single word and 24
+   *  are under five characters — among them `Bolt`, `Echo`, `Nova`, `INK`, `PIN` and `HEX`,
+   *  which are ordinary chat words. Turning those into links would make the feature feel broken
+   *  and would put a wrong link in front of the reader. So a name auto-links only when it cannot
+   *  plausibly be ordinary English:
+   *    · more than one word          ("Geist Armor Arms")      — always distinctive
+   *    · or contains a digit         ("DebBolt3", "10-Series") — Sub's own example
+   *    · or is camelCase             ("AbsoluteZero")          — a capital after the first letter
+   *    · or is >= 6 letters and not a common word ("Agrippa")
+   *  Anything shorter or word-like is still reachable through /bp, which is explicit. */
+  autoLinkNames(): { match: string; name: string }[] {
+    const idx = this.dataset?.index;
+    if (!idx) return [];
+    // Words that ARE blueprint names but are also things people say. Kept small on purpose —
+    // it only has to cover names that survive the shape rules above.
+    const COMMON = new Set([
+      "bolt", "echo", "nova", "endo", "eos", "kama", "ink", "pin", "hex", "bloc", "agni",
+      "ezra", "salvo", "surge", "spirit", "flash", "frost", "ghost", "hammer", "shield",
+      "cooler", "armor", "helmet", "light", "medium", "heavy", "core", "arms", "legs",
+      "power", "quantum", "radar", "scraper", "storm", "sentry", "shard", "global",
+    ]);
+    // 🔑 People do not type names the way the game files spell them. The real item is
+    // "Deadbolt III Cannon"; Sub reached for "DebBolt3" from memory, and a player will type
+    // "Deadbolt 3". So each name also matches with its ROMAN numeral written as a digit, and
+    // without the trailing category word ("… Cannon"). Both aliases still resolve to the one
+    // canonical name, so the link is never ambiguous.
+    const ROMAN: Record<string, string> = { i: "1", ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9", x: "10" };
+    const TRAILING = /\s+(Cannon|Repeater|Scattergun|Helmet|Core|Arms|Legs|Undersuit|Backpack|Module|Rifle|Pistol|SMG|Shotgun|LMG|Sniper)$/i;
+    const out: { match: string; name: string }[] = [];
+    const seen = new Set<string>();
+    const push = (match: string, name: string) => {
+      const l = match.toLowerCase();
+      if (!match || match.length < 4 || seen.has(l) || COMMON.has(l)) return;
+      seen.add(l);
+      out.push({ match, name });
+    };
+    for (const e of idx) {
+      const n = (e.name ?? "").trim();
+      if (!n || n.length < 4) continue;
+      const multiWord = /\s/.test(n);
+      const hasDigit = /\d/.test(n);
+      const camel = /^[A-Za-z][a-z]+[A-Z]/.test(n);
+      const longEnough = /^[A-Za-z'’-]{6,}$/.test(n);
+      if (!(multiWord || hasDigit || camel || longEnough)) continue;
+      push(n, n);
+      // "Deadbolt III Cannon" → also match "Deadbolt 3 Cannon" and "Deadbolt 3".
+      const arabic = n.replace(/\b([ivx]+)\b/gi, (w) => ROMAN[w.toLowerCase()] ?? w);
+      if (arabic !== n) push(arabic, n);
+      for (const variant of [n, arabic]) {
+        const stem = variant.replace(TRAILING, "");
+        // Only when the stem still carries something distinctive of its own — a bare
+        // "Deadbolt" could be any mark, and a link that picks one silently is worse than none.
+        if (stem !== variant && /\d/.test(stem)) push(stem, n);
+      }
+    }
+    // Longest first, so "Geist Armor Arms" wins over "Geist Armor" when both match.
+    return out.sort((a, b) => b.match.length - a.match.length);
+  }
+
+  /** Blueprint names matching a typed fragment, for the chat widget's /bp autocomplete.
+   *  Reads `dataset.index` — the global name→uuid index of EVERY blueprint in the game, not
+   *  just the ones in mission pools, which is what makes it usable as a lookup rather than a
+   *  list of what you happen to be running. Prefix matches rank above contains-matches, so
+   *  typing "geist" offers "Geist Armor…" before "…Geist variant". */
+  searchBlueprintNames(q: string, limit = 8): string[] {
+    const needle = q.trim().toLowerCase();
+    if (!needle || !this.dataset?.index) return [];
+    const seen = new Set<string>();
+    const starts: string[] = [];
+    const has: string[] = [];
+    for (const e of this.dataset.index) {
+      const name = e.name;
+      if (!name) continue;
+      const l = name.toLowerCase();
+      if (seen.has(l)) continue;
+      if (l.startsWith(needle)) { seen.add(l); starts.push(name); }
+      else if (l.includes(needle)) { seen.add(l); has.push(name); }
+      if (starts.length >= limit) break;
+    }
+    return [...starts, ...has].slice(0, limit);
+  }
+
   blueprintDetail(nameOrUuid: string): BlueprintDetail | null {
     if (!nameOrUuid) return null;
     // A UUID-shaped argument is looked up directly; otherwise resolve the name → UUID(s).

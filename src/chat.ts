@@ -55,16 +55,34 @@ interface ChannelState {
 const HISTORY_KEEP = 200;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
-/** "use1b" → "US East 1B" — the label players recognise. Unknown codes pass through raw. */
+/** "use1b" → "US East 1B" — the label players recognise. Unknown codes pass through raw.
+ *  🔑 The prefix list is MEASURED, not guessed: across 480 shared logs from 42 players the
+ *  live regions are use1b (29 players), euw1b (21), ape1a (7) and apse2a (6). `ape` was
+ *  missing from the first version, so 7 players' server channel read "APE1A". Longest
+ *  prefixes are tried first — `apse` must win over `aps`. */
+const REGION_NAMES: Record<string, string> = {
+  use: "US East", usw: "US West", usc: "US Central",
+  eue: "EU East", euw: "EU West",
+  ape: "Asia-Pacific East", apse: "Asia-Pacific SE", apne: "Asia-Pacific NE",
+  apsw: "Asia-Pacific SW", aps: "Asia-Pacific S", apn: "Asia-Pacific N",
+  au: "Australia", ause: "Australia SE",
+};
 export function regionLabel(region: string | null): string {
   if (!region) return "Server";
-  const m = region.toLowerCase().match(/^(use|usw|eue|euw|apse|apne|aps|apn)(\d+)([a-z])$/);
+  const r = region.toLowerCase();
+  const m = r.match(/^([a-z]+?)(\d+)([a-z]?)$/);
   if (!m) return region.toUpperCase();
-  const NAMES: Record<string, string> = {
-    use: "US East", usw: "US West", eue: "EU East", euw: "EU West",
-    apse: "Asia SE", apne: "Asia NE", aps: "Asia S", apn: "Asia N",
-  };
-  return `${NAMES[m[1]] ?? m[1].toUpperCase()} ${m[2]}${m[3].toUpperCase()}`;
+  const name = REGION_NAMES[m[1]];
+  if (!name) return region.toUpperCase();
+  return `${name} ${m[2]}${m[3].toUpperCase()}`;
+}
+
+/** The region FAMILY behind a channel key, for the spoken call-out — "use1b" → "use". The
+ *  voice names the region but not the digits (Sub: "you don't have to mention the number"). */
+export function regionFamily(region: string | null): string | null {
+  const r = (region ?? "").toLowerCase();
+  const m = r.match(/^([a-z]+?)\d/);
+  return m && REGION_NAMES[m[1]] ? m[1] : null;
 }
 
 /** "pub_use1b_12326004_040" → "Shard 040". */
