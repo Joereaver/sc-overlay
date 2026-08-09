@@ -1868,6 +1868,194 @@ const COGHIDE = `(async () => {
 // It must: prefer the fabricator capture over the clay render, fall back when there's no capture,
 // never re-announce a receipt it has already shown, ignore stale ones an SSE reconnect replays,
 // and queue a burst instead of flickering. Local URLs stand in for the two image endpoints.
+// Chat's outbound links and the slash menu. Two things Sub reported on 2026-08-09: a blueprint
+// link and a starcitizen.tools item lookup rendered identically (only the tooltip differed), and
+// the command menu never appeared mid-sentence so the inline commands were undiscoverable.
+const CHATLINKS = `(async () => {
+  const out = [];
+  const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await sleep(300);
+
+  // ── link kind tags ──────────────────────────────────────────────────────
+  const render = (t) => { const d = document.createElement("div"); d.className = "msg";
+    d.appendChild(renderBody(t).frag); return d; };
+  const tagOf = (t) => { const e = render(t).querySelector(".lkk"); return e ? e.textContent : null; };
+
+  ok("a blueprint token is tagged BP", tagOf("[bp:Deadbolt III Cannon|abc-123]") === "BP",
+     tagOf("[bp:Deadbolt III Cannon|abc-123]"));
+  ok("an item token is tagged ITEM", tagOf("[item:Deadbolt III Cannon]") === "ITEM",
+     tagOf("[item:Deadbolt III Cannon]"));
+  ok("a mission token is tagged MISSION", tagOf("[mission:Deep space hit|HH_Pyro_RegionB]") === "MISSION",
+     tagOf("[mission:Deep space hit|HH_Pyro_RegionB]"));
+  // The whole bug: the SAME name as a blueprint and as an item must not look the same.
+  ok("the same name reads differently as a blueprint and as an item",
+     tagOf("[bp:Deadbolt III Cannon|abc-123]") !== tagOf("[item:Deadbolt III Cannon]"));
+
+  const bpNode = render("[bp:Deadbolt III Cannon|abc-123]").querySelector(".lnk");
+  ok("the link still shows the plain name, not the token",
+     bpNode.querySelector(".lkt").textContent === "Deadbolt III Cannon",
+     bpNode.querySelector(".lkt").textContent);
+  ok("the tag and the text are SIBLINGS", bpNode.querySelector(".lkk .lkt") === null);
+  // text-decoration draws through descendants and a child cannot cancel it, so a tag nested
+  // inside the underlined span would be underlined too. Measure, don't assume.
+  const deco = (el) => getComputedStyle(el).textDecorationLine;
+  document.body.appendChild(bpNode.parentNode ? bpNode.parentNode : bpNode);
+  ok("the name is underlined", deco(bpNode.querySelector(".lkt")).indexOf("underline") >= 0,
+     deco(bpNode.querySelector(".lkt")));
+  ok("the tag is NOT underlined", deco(bpNode.querySelector(".lkk")).indexOf("underline") < 0,
+     deco(bpNode.querySelector(".lkk")));
+
+  // A mention next to a token must still render as a mention, not get swallowed by it.
+  const mixed = render("hey @Rytharr want to run [mission:Deep space hit|HH_Pyro_RegionB]");
+  ok("a mention beside a token survives", mixed.querySelector(".at") !== null);
+  ok("...and the token beside it still links", mixed.querySelector(".lnk") !== null);
+
+  // ── the slash menu, mid-message ─────────────────────────────────────────
+  const box = document.getElementById("slash");
+  const input = document.getElementById("sendInput");
+  const openCmds = () => [...box.children].map((r) => r.querySelector(".sc-cmd").textContent.split(" ")[0]);
+  const type = (v) => { input.value = v; renderSlash(v); };
+
+  type("/");
+  ok("a lone slash at the start opens the menu", box.classList.contains("open"));
+  ok("...offering every command", openCmds().indexOf("/me") >= 0 && openCmds().indexOf("/bp") >= 0,
+     openCmds().join(" "));
+
+  // This is the reported bug: the menu was anchored to the start of the message.
+  type("hey Bob, want to run /");
+  ok("a slash MID-MESSAGE opens the menu too", box.classList.contains("open"));
+  ok("...offering the inline link commands",
+     openCmds().indexOf("/bp") >= 0 && openCmds().indexOf("/mission") >= 0, openCmds().join(" "));
+  // /me rewrites the WHOLE message, so accepting it after the first word would mangle what is
+  // already typed. It is start-only on purpose.
+  ok("...but NOT the whole-message commands",
+     openCmds().indexOf("/me") < 0 && openCmds().indexOf("/shrug") < 0, openCmds().join(" "));
+
+  type("hey Bob, want to run /mis");
+  ok("a partial command mid-message filters", openCmds().join(" ") === "/mission", openCmds().join(" "));
+  acceptSugg(0);
+  ok("accepting it keeps the text before the slash",
+     input.value === "hey Bob, want to run /mission ", JSON.stringify(input.value));
+
+  // A slash inside a word is just a slash - "km/h" must not pop a menu.
+  type("we were doing 400 km/h");
+  ok("a slash inside a word opens nothing", !box.classList.contains("open"), input.value);
+  type("plain text with no slash");
+  ok("ordinary text opens nothing", !box.classList.contains("open"));
+
+  // ── creating a room: activity + privacy ─────────────────────────────────
+  // Drive off a stubbed view: the harness has no chat connection, and these are pure UI rules.
+  const CATS = [
+    { slug: "org-ops", label: "Org Operations" },
+    { slug: "mining", label: "Mining" },
+    { slug: "social", label: "Social / Other" },
+  ];
+  view = {
+    status: "connected", you: { handle: "IMC-Subliminal", verified: true },
+    channels: [], directory: [], categories: CATS, dmThreads: [], hasIdentity: true,
+  };
+
+  setCreatePop(true);
+  ok("the create panel opens", document.getElementById("createPop").classList.contains("open"));
+  const opts = [...document.getElementById("cpCat").options].map((o) => o.value);
+  ok("the activity dropdown is built from the SERVER list",
+     opts.join(",") === "org-ops,mining,social", opts.join(","));
+  ok("...defaulting to Social / Other", document.getElementById("cpCat").value === "social");
+  const privOpts = [...document.getElementById("cpPriv").options].map((o) => o.value);
+  ok("privacy offers public and private", privOpts.join(",") === "public,private", privOpts.join(","));
+  ok("...defaulting to public", document.getElementById("cpPriv").value === "public");
+
+  document.getElementById("cpPriv").value = "private";
+  updateCreateHint();
+  const hintPriv = document.getElementById("cpHint").textContent;
+  ok("the private hint explains how people get in",
+     hintPriv.indexOf("code") >= 0 && hintPriv.indexOf("invite") >= 0, hintPriv);
+  document.getElementById("cpPriv").value = "public";
+  document.getElementById("cpCat").value = "mining";
+  updateCreateHint();
+  ok("the public hint names the activity it will be listed under",
+     document.getElementById("cpHint").textContent.indexOf("Mining") >= 0,
+     document.getElementById("cpHint").textContent);
+  setCreatePop(false);
+  ok("it closes again", !document.getElementById("createPop").classList.contains("open"));
+
+  // ── the directory groups by activity ────────────────────────────────────
+  view.directory = [
+    { ch: "custom:a", label: "Halo Run", category: "mining", count: 4 },
+    { ch: "custom:b", label: "Quant Run", category: "mining", count: 1 },
+    { ch: "custom:c", label: "Sunday Ops", category: "org-ops", count: 9 },
+  ];
+  renderChannels();
+  const subs = [...document.querySelectorAll("#chanList .subgrp")].map((e) => e.textContent);
+  ok("rooms you could join are grouped by activity", subs.length === 2, subs.join(" | "));
+  ok("...busiest activity first", subs[0] === "Org Operations", subs.join(" | "));
+
+  // ── the private-room bar ────────────────────────────────────────────────
+  const bar = document.getElementById("roomBar");
+  view.channels = [{ ch: "global", kind: "global", label: "Global", members: [], msgs: [], count: 1 }];
+  activeCh = "global";
+  renderRoomBar();
+  ok("no room bar on an ordinary channel", !bar.classList.contains("show"));
+
+  view.channels.push({ ch: "custom:pub", kind: "custom", label: "Open Room", members: [], msgs: [],
+                       count: 2, privacy: "public", owner: "imc-subliminal" });
+  activeCh = "custom:pub";
+  renderRoomBar();
+  ok("no room bar on a PUBLIC custom room", !bar.classList.contains("show"));
+
+  view.channels.push({ ch: "custom:ops", kind: "custom", label: "Sunday Ops", members: [], msgs: [],
+                       count: 3, privacy: "private", owner: "imc-subliminal", code: "K7M2QD" });
+  activeCh = "custom:ops";
+  renderRoomBar();
+  ok("a private room you own shows the bar", bar.classList.contains("show"));
+  ok("...with the join code", document.getElementById("rbCode").textContent === "K7M2QD",
+     document.getElementById("rbCode").textContent);
+  ok("...and the invite box, because it's yours", bar.classList.contains("owner"));
+
+  // Someone who was let in can pass the code on, but must not be able to invite.
+  view.channels[2].owner = "someoneelse";
+  renderRoomBar();
+  ok("a private room you DON'T own still shows the code", bar.classList.contains("show"));
+  ok("...but hides the invite box", !bar.classList.contains("owner"));
+
+  // The padlock in the channel list marks what isn't in the public directory.
+  view.directory = [];
+  renderChannels();
+  const locked = [...document.querySelectorAll("#chanList .crow")]
+    .filter((r) => r.querySelector(".lock")).map((r) => r.querySelector(".nm").textContent);
+  ok("only the private room gets a padlock", locked.join(",") === "Sunday Ops", locked.join(","));
+
+  // ── DMs ─────────────────────────────────────────────────────────────────
+  ok("a DM key is the ordered lowercase pair", dmChKey("Rytharr") === "dm:imc-subliminal|rytharr",
+     dmChKey("Rytharr"));
+  ok("...and the same both ways round", dmChKey("Rytharr") === dmChKey("RYTHARR"));
+  ok("the other person is read back out of the key",
+     dmOther("dm:imc-subliminal|rytharr") === "rytharr");
+
+  openDm("Rytharr");
+  ok("opening a DM selects it", activeCh === "dm:imc-subliminal|rytharr", activeCh);
+  const dmRows = [...document.querySelectorAll("#chanList .crow .nm")].map((e) => e.textContent);
+  ok("...and it appears in the rail before any message exists", dmRows.indexOf("Rytharr") >= 0,
+     dmRows.join(","));
+  // A pending DM has no server room, so a state re-render must not bounce you back to Global.
+  renderAll();
+  ok("a state refresh keeps you in the unsent conversation",
+     activeCh === "dm:imc-subliminal|rytharr", activeCh);
+
+  openDm("IMC-Subliminal");
+  ok("you can't open a conversation with yourself", activeCh === "dm:imc-subliminal|rytharr", activeCh);
+
+  // Conversations the server knows about but that aren't open tabs.
+  view.dmThreads = [{ other: "zed", lastAt: new Date().toISOString() }];
+  renderChannels();
+  const waiting = [...document.querySelectorAll("#chanList .crow")]
+    .filter((r) => r.querySelector(".dmdot")).map((r) => r.querySelector(".nm").textContent);
+  ok("a conversation waiting for you is listed", waiting.join(",") === "zed", waiting.join(","));
+
+  return out;
+})()`;
+
 const UNLOCK = `(async () => {
   const out = [];
   const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
@@ -1993,6 +2181,7 @@ app.whenReady().then(async () => {
     fails += await run("background service down", SVCDOWN, null);
     fails += await run("chrome over the native view", VIEWMASK, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
+    fails += await run("chat links + slash menu", CHATLINKS, null, null, "chat.html");
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
     // hunting that by bisection wastes a run each time.

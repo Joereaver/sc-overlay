@@ -1777,17 +1777,26 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     res.end(JSON.stringify(out));
     return;
   }
-  // Joining/creating and leaving custom rooms — same loopback rule as sending: these act
-  // with the user's chat identity, so the LAN must not be able to drive them.
-  if ((url === "/api/chat/join" || url === "/api/chat/leave") && req.method === "POST") {
+  // Joining/creating and leaving custom rooms, inviting, and DMs — same loopback rule as
+  // sending: every one of these ACTS with the user's chat identity, so the LAN must not be
+  // able to drive them. (A DM in particular is a message sent as him to a named person.)
+  if ((url === "/api/chat/join" || url === "/api/chat/leave" || url === "/api/chat/invite"
+       || url === "/api/chat/dm" || url === "/api/chat/dmlist") && req.method === "POST") {
     if (!fromThisMachine(req)) {
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: false, message: "Chat channels can only be changed from this machine." }));
       return;
     }
     const body = await readBody(req);
-    const out = url.endsWith("/join")
-      ? chat.join(String(body.name ?? ""), body.mode === "join" || body.mode === "create" ? body.mode : undefined)
+    const out =
+      url.endsWith("/join") ? chat.join(
+        String(body.name ?? ""),
+        body.mode === "join" || body.mode === "create" ? body.mode : undefined,
+        body.category ? String(body.category) : undefined,
+        body.privacy === "private" || body.privacy === "public" ? body.privacy : undefined)
+      : url.endsWith("/invite") ? chat.invite(String(body.ch ?? ""), String(body.handle ?? ""))
+      : url.endsWith("/dmlist") ? chat.dmList()
+      : url.endsWith("/dm") ? chat.dm(String(body.to ?? ""), String(body.text ?? ""))
       : chat.leave(String(body.ch ?? ""));
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify(out));

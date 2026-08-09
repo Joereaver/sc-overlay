@@ -106,11 +106,55 @@
   .msg.mention { background: rgba(var(--accent-rgb), 0.10); box-shadow: inset 3px 0 0 var(--gold); }
   .msg .at { color: var(--cyan-bright); font-weight: 600; }
   .msg.mention .at.me { color: var(--gold); }
-  /* A link out of chat — a blueprint on the site, or an item on starcitizen.tools. */
-  .msg .lk { color: var(--gold); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-  .msg .lk:hover { filter: brightness(1.2); }
+  /* A link out of chat — a blueprint on the site, or an item on starcitizen.tools.
+     🔑 The KIND TAG is load-bearing: a [bp:…] and an [item:…] used to render as the same gold
+     underlined name and only the TOOLTIP said which one you were about to open (Sub,
+     2026-08-09: "they look identical in chat"). The tag is a sibling of the underlined text,
+     never a child — `text-decoration` draws through descendants and a child cannot cancel it,
+     so a tag inside .lkt would be underlined too. */
+  .msg .lnk { cursor: pointer; }
+  .msg .lkt { color: var(--gold); text-decoration: underline; text-underline-offset: 2px; }
+  .msg .lnk:hover .lkt { filter: brightness(1.2); }
+  .msg .lkk { font-size: 8.5px; font-weight: 700; letter-spacing: .04em; padding: 0 3px;
+    margin-right: 3px; border-radius: 3px; vertical-align: 1px;
+    background: rgba(var(--accent-rgb), .20); color: var(--cyan-bright); }
   /* Friends float to the top of the member list and keep a marker. */
   .mrow .fav { flex: none; font-size: 9px; color: var(--gold); }
+
+  /* Create-a-room popover. Anchored to the rail foot and kept INSIDE the panel — anything that
+     hangs outside the widget's own rect is not hit-tested by the shell and cannot be clicked. */
+  #createPop { position: absolute; display: none; z-index: 9; left: 6px; right: 6px; bottom: calc(100% + 6px);
+    padding: 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.55); }
+  #createPop.open { display: block; }
+  #createPop .cp-row { display: grid; grid-template-columns: 56px 1fr; gap: 6px; align-items: center; margin-bottom: 6px; }
+  #createPop label { font-size: 10.5px; color: var(--faint); }
+  #createPop input, #createPop select { width: 100%; box-sizing: border-box; font-family: var(--sans);
+    font-size: 11.5px; color: var(--cyan-bright); background: rgba(0,0,0,.28);
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; }
+  #createPop select { cursor: pointer; }
+  #createPop .cp-hint { font-size: 10px; color: var(--faint); line-height: 1.35; margin: 2px 0 7px; min-height: 26px; }
+  #createPop .cp-btns { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* The private-room bar: the join code, and the owner's invite box. */
+  #roomBar { display: none; align-items: center; gap: 6px; flex: none; padding: 4px 8px;
+    border-bottom: 1px solid var(--border); background: rgba(var(--accent-rgb), .07); }
+  #roomBar.show { display: flex; }
+  #roomBar .rb-lock svg { width: 12px; height: 12px; fill: none; stroke: var(--gold); stroke-width: 1.4; display: block; }
+  #roomBar .rb-lbl { font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+  #roomBar code { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--gold);
+    letter-spacing: .12em; background: rgba(0,0,0,.3); border-radius: 4px; padding: 1px 6px; }
+  #roomBar #rbOwnerOnly { display: none; align-items: center; gap: 4px; margin-left: auto; }
+  #roomBar.owner #rbOwnerOnly { display: flex; }
+  #roomBar input { width: 110px; font-family: var(--sans); font-size: 11px; color: var(--cyan-bright);
+    background: rgba(0,0,0,.28); border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
+
+  /* A channel row for a room you could join, grouped under its activity. */
+  #chanList .subgrp { font-size: 9.5px; color: var(--faint); text-transform: uppercase;
+    letter-spacing: .06em; padding: 4px 8px 2px 14px; opacity: .8; }
+  #chanList .crow .lock { flex: none; font-size: 9px; color: var(--gold); margin-left: 3px; }
+  #chanList .crow .dmdot { flex: none; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--gold); margin-left: 4px; }
 
   /* Right-click menu on a name (member list or message). */
   #ctx { position: absolute; display: none; z-index: 8; min-width: 150px; padding: 4px;
@@ -235,16 +279,49 @@
         <div class="rail-head">Channels</div>
         <div id="chanList" class="rail-body"></div>
         <div class="rail-foot">
-          <input id="chanInput" type="text" placeholder="Channel name…" maxlength="30" spellcheck="false" autocomplete="off" />
+          <input id="chanInput" type="text" placeholder="Channel name or code…" maxlength="30" spellcheck="false" autocomplete="off" />
           <div class="row">
-            <button id="joinBtn" class="hbtn sm" type="button" title="Join an existing channel">Join</button>
+            <button id="joinBtn" class="hbtn sm" type="button" title="Join a channel by name, or a private room by its code">Join</button>
             <button id="createBtn" class="hbtn sm" type="button" title="Create a new channel">Create</button>
+          </div>
+          <!-- Creating a room asks two questions before it exists: what it's FOR, and who can
+               see it. Both are answered here rather than after the fact, because a room that is
+               public for even a moment has already been published to everyone. -->
+          <div id="createPop">
+            <div class="cp-row"><label for="cpName">Name</label>
+              <input id="cpName" type="text" maxlength="30" spellcheck="false" autocomplete="off" placeholder="Sunday Ops" /></div>
+            <div class="cp-row"><label for="cpCat">Activity</label>
+              <select id="cpCat"></select></div>
+            <div class="cp-row"><label for="cpPriv">Privacy</label>
+              <select id="cpPriv">
+                <option value="public">Public — listed for everyone</option>
+                <option value="private">Private — code or invite only</option>
+              </select></div>
+            <div class="cp-hint" id="cpHint"></div>
+            <div class="cp-btns">
+              <button id="cpCancel" class="hbtn sm" type="button">Cancel</button>
+              <button id="cpGo" class="hbtn sm" type="button">Create</button>
+            </div>
           </div>
         </div>
       </div>
 
       <div id="center">
         <div id="tabs"></div>
+        <!-- Only for a PRIVATE room you are inside: the code that admits the next person, and
+             (if it's yours) the invite box. Hidden entirely otherwise. -->
+        <div id="roomBar">
+          <span class="rb-lock" title="Private room" aria-hidden="true">
+            <svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
+          </span>
+          <span class="rb-lbl">Join code</span>
+          <code id="rbCode"></code>
+          <button id="rbCopy" class="hbtn sm" type="button" title="Copy the code">Copy</button>
+          <span id="rbOwnerOnly">
+            <input id="rbInvite" type="text" placeholder="RSI handle…" maxlength="30" spellcheck="false" autocomplete="off" />
+            <button id="rbInviteGo" class="hbtn sm" type="button" title="Let this handle in">Invite</button>
+          </span>
+        </div>
         <div id="log"></div>
         <div id="sendbar">
           <input id="sendInput" type="text" placeholder="Say something…  (try :o7: or :thumbsup:)" maxlength="400" autocomplete="off" spellcheck="false" />
@@ -296,7 +373,30 @@
     { kind: "shard", title: "Shard" },
     { kind: "org", title: "Organisation" },
     { kind: "custom", title: "Your channels" },
+    { kind: "dm", title: "Direct messages" },
   ];
+
+  /* Activity categories come from the SERVER (the welcome frame), so adding one is a server
+     change with no client release. The fallback only matters before the first connect. */
+  const catLabel = (slug) =>
+    (view?.categories ?? []).find((c) => c.slug === slug)?.label ?? "Social / Other";
+
+  /* A DM's channel key is the ordered, lowercased pair — the same rule the server uses, so a
+     tab opened here and the room the server creates are the same room. */
+  function dmChKey(other) {
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    return "dm:" + [me, String(other).toLowerCase()].sort().join("|");
+  }
+  /** Who the other person in a DM is, by key. */
+  function dmOther(ch) {
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    const pair = ch.slice("dm:".length).split("|");
+    return pair.find((h) => h !== me) ?? pair[0] ?? "";
+  }
+  /* A DM you have opened but not yet sent into. The room does not exist server-side until the
+     first message, so the tab is local until then — otherwise clicking "Message" would create
+     an empty room for someone who then changed their mind. */
+  let pendingDm = null;
 
   let view = null;
   let activeCh = "global";
@@ -352,6 +452,28 @@
     if (host()?.openUrl) host().openUrl(url);
     else window.open(url, "_blank", "noopener");
   }
+  // Every link out of chat is built here so the KIND TAG can never go missing on one path and
+  // not another — which is exactly how [bp:…] and [item:…] came to look the same.
+  const KIND_TAG = { bp: "BP", item: "ITEM", mission: "MISSION" };
+  const KIND_TITLE = {
+    bp: "Open this blueprint on subliminal.gg",
+    item: "Look this up on starcitizen.tools",
+    mission: "Open this mission on subliminal.gg",
+  };
+  function linkNode(kind, label, url, title) {
+    const wrap = document.createElement("span");
+    wrap.className = "lnk " + kind;
+    wrap.title = title ?? KIND_TITLE[kind] ?? "";
+    const tag = document.createElement("span");
+    tag.className = "lkk";
+    tag.textContent = KIND_TAG[kind] ?? "";
+    const txt = document.createElement("span");
+    txt.className = "lkt";
+    txt.textContent = label;
+    wrap.append(tag, txt);
+    wrap.addEventListener("click", () => openLink(url));
+    return wrap;
+  }
   // Blueprint names recognised on sight — no command needed (Sub, 2026-08-09). The list and the
   // "is it distinctive enough" judgement are the sidecar's (see autoLinkNames); this just
   // matches them. One regex, built once, longest-name-first so the longer of two overlapping
@@ -375,16 +497,15 @@
     let last = 0, m;
     while ((m = bpRe.exec(text))) {
       if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-      const a = document.createElement("span");
-      a.className = "lk";
-      a.textContent = m[0];                                    // show what they typed…
       const canon = bpCanon.get(m[0].toLowerCase());           // …but link the real item's UUID
-      a.title = !canon || canon.name === m[0]
-        ? "Open this blueprint on subliminal.gg"
-        : "Open “" + canon.name + "” on subliminal.gg";
-      const url = bpUrl(canon?.item ?? m[0]);
-      a.addEventListener("click", () => openLink(url));
-      frag.appendChild(a);
+      frag.appendChild(linkNode(
+        "bp",
+        m[0],                                                  // show what they typed…
+        bpUrl(canon?.item ?? m[0]),
+        !canon || canon.name === m[0]
+          ? "Open this blueprint on subliminal.gg"
+          : "Open “" + canon.name + "” on subliminal.gg",
+      ));
       last = m.index + m[0].length;
     }
     if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
@@ -421,17 +542,10 @@
         frag.appendChild(s);
         continue;
       }
-      const a = document.createElement("span");
-      a.className = "lk";
-      a.textContent = p.name;
       const url = p.kind === "mission" ? missionUrl(p.id ?? p.name)
         : p.kind === "bp" ? bpUrl(p.id ?? bpCanon.get(p.name.toLowerCase())?.item ?? p.name)
         : toolsUrl(p.name);
-      a.title = p.kind === "mission" ? "Open this mission on subliminal.gg"
-        : p.kind === "bp" ? "Open this blueprint on subliminal.gg"
-        : "Look this up on starcitizen.tools";
-      a.addEventListener("click", () => openLink(url));
-      frag.appendChild(a);
+      frag.appendChild(linkNode(p.kind, p.name, url));
     }
     return { frag, mentionedMe };
   }
@@ -504,6 +618,10 @@
       b.addEventListener("click", () => { closeCtx(); fn(); });
       ctx.appendChild(b);
     };
+    // A DM is the natural way to hand someone a join code, so it leads.
+    if (handle.toLowerCase() !== (view?.you?.handle ?? "").toLowerCase()) {
+      add("Send a direct message", () => openDm(handle));
+    }
     add("Mention in chat", () => mention(handle));
     add(isFriend(handle) ? "Remove from friends" : "Add to friends", () => toggleFriend(handle));
     add("Open their profile", () => openLink("https://subliminal.gg/citizens/" + encodeURIComponent(handle)));
@@ -549,7 +667,12 @@
     for (const g of GROUPS) {
       const mine = chans().filter((c) => c.kind === g.kind);
       const avail = g.kind === "custom" ? (view?.directory ?? []) : [];
-      if (!mine.length && !avail.length) continue;
+      // Conversations the server knows about that aren't open as tabs — including any that
+      // arrived while the app was closed, which is the case DMs exist for.
+      const threads = g.kind === "dm" ? (view?.dmThreads ?? []) : [];
+      // A DM opened from the right-click menu has no server room yet, so it lives here.
+      const pending = g.kind === "dm" && pendingDm && !chanOf(dmChKey(pendingDm)) ? [pendingDm] : [];
+      if (!mine.length && !avail.length && !threads.length && !pending.length) continue;
       const h = document.createElement("div");
       h.className = "grp"; h.textContent = g.title;
       list.appendChild(h);
@@ -559,32 +682,87 @@
         const nm = document.createElement("span");
         nm.className = "nm"; nm.textContent = c.label;
         row.appendChild(nm);
+        // A padlock marks a room whose door you are holding — it tells you at a glance that
+        // what you say here isn't in the public directory.
+        if (c.privacy === "private") {
+          const lk = document.createElement("span");
+          lk.className = "lock"; lk.textContent = "🔒"; lk.title = "Private room";
+          row.appendChild(lk);
+        }
         if (typeof c.count === "number") {
           const ct = document.createElement("span");
           ct.className = "ct"; ct.textContent = String(c.count);
           row.appendChild(ct);
         }
         row.addEventListener("click", () => select(c.ch));
-        // Only custom rooms can be left — the rest follow your log and your org.
-        if (c.kind === "custom") {
+        // Custom rooms and DMs can be closed — the rest follow your log and your org.
+        if (c.kind === "custom" || c.kind === "dm") {
           const x = document.createElement("span");
-          x.className = "x"; x.textContent = "✕"; x.title = "Leave this channel";
+          x.className = "x"; x.textContent = "✕";
+          x.title = c.kind === "dm" ? "Close this conversation" : "Leave this channel";
           x.addEventListener("click", (e) => { e.stopPropagation(); leave(c.ch); });
           row.appendChild(x);
         }
         list.appendChild(row);
       }
+      // Rooms you could join, grouped by what people are DOING in them (Sub, 2026-08-09) —
+      // one flat list of names says nothing about whether a room is worth opening.
+      const byCat = new Map();
       for (const d of avail) {
+        const k = d.category ?? "social";
+        if (!byCat.has(k)) byCat.set(k, []);
+        byCat.get(k).push(d);
+      }
+      // Busiest activity first: the rooms with people in them are the ones worth showing.
+      const cats = [...byCat.entries()].sort((a, b) =>
+        b[1].reduce((n, d) => n + (d.count ?? 0), 0) - a[1].reduce((n, d) => n + (d.count ?? 0), 0)
+        || catLabel(a[0]).localeCompare(catLabel(b[0])));
+      for (const [slug, ds] of cats) {
+        const sh = document.createElement("div");
+        sh.className = "subgrp"; sh.textContent = catLabel(slug);
+        list.appendChild(sh);
+        for (const d of ds.sort((a, b) => (b.count ?? 0) - (a.count ?? 0) || a.label.localeCompare(b.label))) {
+          const row = document.createElement("div");
+          row.className = "crow";
+          row.title = "Join " + d.label;
+          const nm = document.createElement("span");
+          nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = d.label;
+          row.appendChild(nm);
+          const ct = document.createElement("span");
+          ct.className = "ct"; ct.textContent = String(d.count ?? 0);
+          row.appendChild(ct);
+          row.addEventListener("click", () => joinNamed(d.label, "join"));
+          list.appendChild(row);
+        }
+      }
+      for (const handle of pending) {
+        const ch = dmChKey(handle);
+        const row = document.createElement("div");
+        row.className = "crow" + (ch === activeCh ? " on" : "");
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.textContent = handle;
+        row.appendChild(nm);
+        row.addEventListener("click", () => select(ch));
+        const x = document.createElement("span");
+        x.className = "x"; x.textContent = "✕"; x.title = "Close this conversation";
+        x.addEventListener("click", (e) => {
+          e.stopPropagation(); pendingDm = null;
+          if (activeCh === ch) select("global"); else renderChannels();
+        });
+        row.appendChild(x);
+        list.appendChild(row);
+      }
+      for (const t of threads) {
         const row = document.createElement("div");
         row.className = "crow";
-        row.title = "Join " + d.label;
+        row.title = "Open your conversation with " + t.other;
         const nm = document.createElement("span");
-        nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = d.label;
+        nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = t.other;
         row.appendChild(nm);
-        const ct = document.createElement("span");
-        ct.className = "ct"; ct.textContent = String(d.count ?? 0);
-        row.appendChild(ct);
-        row.addEventListener("click", () => joinNamed(d.label, "join"));
+        const dot = document.createElement("span");
+        dot.className = "dmdot";
+        row.appendChild(dot);
+        row.addEventListener("click", () => openDm(t.other));
         list.appendChild(row);
       }
     }
@@ -594,6 +772,20 @@
       e.textContent = "No channels yet — they appear as you connect and fly.";
       list.appendChild(e);
     }
+  }
+
+  /* The private-room strip: the join code, and — if the room is yours — the invite box.
+     🔑 It is only ever shown for a room you are ALREADY IN. The code is what admits the next
+     person, so it must never appear anywhere someone outside the room can reach. */
+  function renderRoomBar() {
+    const bar = $("roomBar");
+    const c = chanOf(activeCh);
+    const show = !!c && c.kind === "custom" && c.privacy === "private" && !!c.code;
+    bar.classList.toggle("show", show);
+    if (!show) { bar.classList.remove("owner"); return; }
+    $("rbCode").textContent = c.code;
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    bar.classList.toggle("owner", !!c.owner && c.owner === me);
   }
 
   function renderMembers() {
@@ -650,7 +842,18 @@
   function select(ch) {
     activeCh = ch;
     unread.delete(ch);
-    renderTabs(); renderChannels(); renderMembers(); renderLog();
+    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderLog();
+  }
+
+  /** Open a conversation with someone. Local until the first message — see `pendingDm`. */
+  function openDm(handle) {
+    const h = String(handle ?? "").trim();
+    if (!h) return;
+    if (h.toLowerCase() === (view?.you?.handle ?? "").toLowerCase()) { sys("You can't message yourself."); return; }
+    const ch = dmChKey(h);
+    if (!chanOf(ch)) pendingDm = h;
+    select(ch);
+    $("sendInput").focus();
   }
 
   function applyRails() {
@@ -667,9 +870,16 @@
     $("devIdRow").hidden = !view?.devServer;
     const you = view?.you;
     $("whoami").textContent = you ? you.handle : "";
-    if (view && !chans().some((c) => c.ch === activeCh)) activeCh = chans()[0]?.ch ?? "global";
+    // A pending DM has no server-side room yet, so it is legitimately absent from `channels` —
+    // without this exception, opening one and then any state push would bounce you to Global.
+    const pendingCh = pendingDm ? dmChKey(pendingDm) : null;
+    if (view && activeCh !== pendingCh && !chans().some((c) => c.ch === activeCh)) {
+      activeCh = chans()[0]?.ch ?? "global";
+    }
+    // Once the real room exists the placeholder has done its job.
+    if (pendingCh && chanOf(pendingCh)) pendingDm = null;
     applyRails();
-    renderTabs(); renderChannels(); renderMembers(); renderLog();
+    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderLog();
     if (view?.status === "error" && view.error) sys(view.error);
     else if (view?.status === "connecting") sys("Connecting…");
     else if (view && view.status === "off" && view.hasIdentity) sys("Chat is off. Open the Chat widget on the overlay to connect.");
@@ -826,12 +1036,14 @@
   // They rewrite what you SEND into a token the renderer turns into a link, so the message
   // still reads as plain text for anyone on an older build. Kept deliberately short: these
   // are typed mid-flight, one-handed.
+  // `inline: true` = the command produces a TOKEN inside a sentence, so it is offered wherever
+  // the caret is. The others rewrite the whole message and are start-of-message only.
   const COMMANDS = [
-    { cmd: "/bp", args: "<blueprint>", hint: "link a blueprint on subliminal.gg",
+    { cmd: "/bp", args: "<blueprint>", hint: "link a blueprint on subliminal.gg", inline: true,
       run: (rest) => rest ? "[bp:" + rest + "]" : null },
-    { cmd: "/item", args: "<item>", hint: "look it up on starcitizen.tools",
+    { cmd: "/item", args: "<item>", hint: "look it up on starcitizen.tools", inline: true,
       run: (rest) => rest ? "[item:" + rest + "]" : null },
-    { cmd: "/mission", args: "<mission>", hint: "link a mission on subliminal.gg",
+    { cmd: "/mission", args: "<mission>", hint: "link a mission on subliminal.gg", inline: true,
       run: (rest) => rest ? "[mission:" + rest + "]" : null },
     { cmd: "/me", args: "<action>", hint: "speak in the third person",
       run: (rest) => rest ? "* " + (view?.you?.handle ?? "") + " " + rest : null },
@@ -941,13 +1153,24 @@
       const m = text.match(re);
       return m ? { frag: m[1] ?? "", at: m.index ?? 0 } : null;
     };
-    // 1. a command being typed (only at the very start, before any space)
-    if (/^\/\S*$/.test(text)) {
-      const matches = COMMANDS.filter((c) => c.cmd.startsWith(text.toLowerCase()));
+    // 1. a command being typed.
+    // 🔑 Matched at the CARET, not only at the start of the message. The list used to be
+    // anchored `^\/\S*$`, so typing "hey Bob, want to run /" mid-sentence offered NOTHING and
+    // the inline link commands were undiscoverable unless you already knew to type the whole
+    // word (Sub, 2026-08-09: "the slash commands don't do anything when you type slash — the
+    // user may not even know"). Mid-message offers only the INLINE commands: /me and /shrug
+    // rewrite the entire message, so accepting one after the first word would silently mangle
+    // what you had already typed.
+    const slash = text.match(/(?:^|\s)(\/\S*)$/);
+    if (slash) {
+      const frag = slash[1].toLowerCase();
+      const atStart = slash.index === 0;
+      const pool = atStart ? COMMANDS : COMMANDS.filter((c) => c.inline);
+      const matches = pool.filter((c) => c.cmd.startsWith(frag));
       drawSugg(matches.map((c) => ({
         label: c.cmd + (c.args ? " " + c.args : ""), hint: c.hint, mono: true,
         insert: c.cmd + (c.args ? " " : ""),
-      })), 0);
+      })), text.length - slash[1].length);
       return;
     }
     // 2. a blueprint / item / mission name after its command — asked of the local dataset.
@@ -1021,14 +1244,22 @@
     const el = $("sendInput");
     const raw = el.value.trim();
     if (!raw) return;
-    if (!chanOf(activeCh)) { sys("Not in a channel yet."); return; }
+    // A DM you have opened but not yet sent into has no room server-side, so it is not in
+    // `channels` — that is expected, not "not in a channel".
+    const openingDm = activeCh.startsWith("dm:") && !chanOf(activeCh);
+    if (!openingDm && !chanOf(activeCh)) { sys("Not in a channel yet."); return; }
     const commanded = applyCommand(raw);
     if (commanded === null) { el.value = ""; $("slash").classList.remove("open"); return; }
     const text = expandShortcodes(commanded);
     el.value = "";
     setEmojiPop(false);
     $("slash").classList.remove("open");
-    if (!await post("/api/chat/send", { ch: activeCh, text })) el.value = raw;
+    // The first message is what CREATES the conversation, on both ends; after that a DM is an
+    // ordinary room and goes down the ordinary path.
+    const ok = openingDm
+      ? await post("/api/chat/dm", { to: dmOther(activeCh), text })
+      : await post("/api/chat/send", { ch: activeCh, text });
+    if (!ok) el.value = raw;
   }
   async function joinNamed(name, mode) {
     const n = (name ?? "").trim();
@@ -1036,6 +1267,56 @@
     if (await post("/api/chat/join", { name: n, mode })) $("chanInput").value = "";
   }
   function leave(ch) { void post("/api/chat/leave", { ch }); }
+
+  // ── creating a room ────────────────────────────────────────────────────────
+  /* Two questions, answered BEFORE the room exists: what activity it's for, and whether it is
+     listed. Doing it after the fact would mean a private room spends its first moments in the
+     public directory, which is the exact problem private rooms were added to solve. */
+  function setCreatePop(on) {
+    const pop = $("createPop");
+    pop.classList.toggle("open", !!on);
+    if (!on) return;
+    // Rebuild the activity list from the server's every time it opens, so a category added
+    // server-side shows up without an app release.
+    const sel = $("cpCat");
+    const keep = sel.value;
+    sel.textContent = "";
+    for (const c of (view?.categories ?? [])) {
+      const o = document.createElement("option");
+      o.value = c.slug; o.textContent = c.label;
+      sel.appendChild(o);
+    }
+    // 🔑 A <select> silently defaults to its FIRST option, so "no choice yet" is not an empty
+    // value — it is Org Operations, whatever happens to be first in the server's list. Default
+    // to the same Social / Other the server falls back to, or a mis-set room is the quiet
+    // outcome of never touching the dropdown.
+    sel.value = keep || "social";
+    if (!sel.value) sel.value = sel.options[0]?.value ?? "";
+    $("cpName").value = $("chanInput").value.trim();
+    updateCreateHint();
+    $("cpName").focus();
+  }
+  function updateCreateHint() {
+    $("cpHint").textContent = $("cpPriv").value === "private"
+      ? "Not listed anywhere. You'll get a code to share, and you can invite RSI handles by name."
+      : "Listed for everyone under " + ($("cpCat").selectedOptions[0]?.textContent ?? "its activity") + ".";
+  }
+  async function createRoom() {
+    const name = $("cpName").value.trim();
+    if (!name) { $("cpName").focus(); return; }
+    const ok = await post("/api/chat/join", {
+      name, mode: "create", category: $("cpCat").value, privacy: $("cpPriv").value,
+    });
+    if (!ok) return;
+    setCreatePop(false);
+    $("chanInput").value = "";
+    $("cpName").value = "";
+  }
+  async function inviteToRoom() {
+    const h = $("rbInvite").value.trim();
+    if (!h) { $("rbInvite").focus(); return; }
+    if (await post("/api/chat/invite", { ch: activeCh, handle: h })) $("rbInvite").value = "";
+  }
 
   // ── identity gate (dev builds only; production uses the verified account) ──
   async function saveHandle() {
@@ -1085,7 +1366,26 @@
   $("emojiBtn").addEventListener("click", () => setEmojiPop(!$("emojiPop").classList.contains("open")));
   $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
   $("joinBtn").addEventListener("click", () => joinNamed($("chanInput").value, "join"));
-  $("createBtn").addEventListener("click", () => joinNamed($("chanInput").value, "create"));
+  $("createBtn").addEventListener("click", () => setCreatePop(!$("createPop").classList.contains("open")));
+  $("cpCancel").addEventListener("click", () => setCreatePop(false));
+  $("cpGo").addEventListener("click", () => void createRoom());
+  $("cpPriv").addEventListener("change", updateCreateHint);
+  $("cpCat").addEventListener("change", updateCreateHint);
+  $("cpName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void createRoom(); } });
+  $("rbInviteGo").addEventListener("click", () => void inviteToRoom());
+  $("rbInvite").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void inviteToRoom(); } });
+  $("rbCopy").addEventListener("click", () => {
+    const code = $("rbCode").textContent;
+    // The overlay runs without a secure-context clipboard in some shells, so say what happened
+    // either way rather than failing silently and looking like a dead button.
+    try { navigator.clipboard.writeText(code).then(() => sys("Join code " + code + " copied."),
+                                                    () => sys("Join code: " + code)); }
+    catch { sys("Join code: " + code); }
+  });
+  // Typing-mode focus rules, same as the other fields: focusing asks for the keyboard grab.
+  for (const id of ["cpName", "rbInvite"]) {
+    $(id).addEventListener("focus", () => { if (!typing) setTyping(true, "chan"); });
+  }
   $("chanInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); joinNamed($("chanInput").value); } });
   // Clicking into a field over the game needs the shell's keyboard grab, or the keystrokes
   // reach Star Citizen instead.
@@ -1098,6 +1398,7 @@
     // Escape closes the picker first, THEN typing mode — otherwise dismissing the grid also
     // drops the keyboard grab and the next keystroke reaches the game.
     if ($("ctx").classList.contains("open")) { e.preventDefault(); closeCtx(); return; }
+    if ($("createPop").classList.contains("open")) { e.preventDefault(); setCreatePop(false); return; }
     if ($("slash").classList.contains("open")) { e.preventDefault(); $("slash").classList.remove("open"); return; }
     if ($("emojiPop").classList.contains("open")) { e.preventDefault(); setEmojiPop(false); return; }
     if (typing) { e.preventDefault(); setTyping(false); }

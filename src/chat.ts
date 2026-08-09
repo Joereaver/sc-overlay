@@ -41,7 +41,11 @@ export interface ChatOptions {
   channels: string[];
 }
 
-export type ChannelKind = "global" | "region" | "shard" | "org" | "custom";
+export type ChannelKind = "global" | "region" | "shard" | "org" | "custom" | "dm";
+
+/** The activity a custom room is for. The list is the SERVER's (welcome frame) — this type is
+ *  just "some slug", so adding a category server-side needs no client release. */
+export interface RoomCategory { slug: string; label: string }
 
 interface ChannelState {
   ch: string;
@@ -50,6 +54,12 @@ interface ChannelState {
   count: number | null;         // unique handles, when the server reports presence
   members: ChatIdentity[];      // who's here (capped server-side; count stays exact)
   msgs: ChatMsg[];
+  // Custom rooms only, from the roominfo frame.
+  category?: string;
+  privacy?: "public" | "private";
+  owner?: string | null;
+  /** Only ever present for a private room you are INSIDE — it is what admits the next person. */
+  code?: string;
 }
 
 const HISTORY_KEEP = 200;
@@ -101,8 +111,13 @@ export class ChatClient extends EventEmitter {
   private you: ChatIdentity | null = null;
   private shard: string | null = null; // full id from the log; region derives from it
   private channels = new Map<string, ChannelState>();
-  /** Public custom-room directory as the server last broadcast it. */
-  private directory: { ch: string; label: string; count: number }[] = [];
+  /** Public custom-room directory as the server last broadcast it. Private rooms are never in
+   *  it — the server omits them, so there is nothing to filter here. */
+  private directory: { ch: string; label: string; category?: string; count: number }[] = [];
+  /** The activity list the room-creation dropdown is built from; the server's, via welcome. */
+  private categories: RoomCategory[] = [];
+  /** DM conversations, newest first — including ones that arrived while the app was closed. */
+  private dmThreads: { other: string; lastAt: string }[] = [];
   /** Custom rooms (display names) we are — or want to be — in; rejoined on every welcome.
    *  Changes emit "channels" so the sidecar can persist them across app restarts. */
   private customRooms: string[] = [];
@@ -216,6 +231,7 @@ export class ChatClient extends EventEmitter {
         this.status = "connected";
         this.retry = 0;
         this.you = f.you ?? null;
+        if (Array.isArray(f.categories)) this.categories = f.categories;
         this.sendLoc();
         // Rejoin the user's custom rooms — this is what makes a reconnect (or app restart)
         // land back in the same channels instead of just Global.
@@ -245,6 +261,31 @@ export class ChatClient extends EventEmitter {
       case "dir":
         this.directory = Array.isArray(f.channels) ? f.channels : [];
         this.emit("sse", { type: "dir", channels: this.directory });
+        return;
+      case "roominfo": {
+        // Category / privacy / owner, and for a private room you're inside, the join code.
+        const c = this.ensureChannel(f.ch, "custom");
+        c.category = f.category;
+        c.privacy = f.privacy;
+        c.owner = f.owner ?? null;
+        if (typeof f.code === "string") c.code = f.code;
+        this.pushState();
+        return;
+      }
+      case "invited":
+        this.emit("sse", { type: "notice", level: "info", text: `Invited ${f.handle}.` });
+        return;
+      case "roominvite":
+        // Someone opened a private room to you. A notice, not an auto-join: being pulled into a
+        // room without asking is how the org-ops room ends up full of people who didn't want it.
+        this.emit("sse", {
+          type: "notice", level: "info",
+          text: `${f.from} invited you to “${f.label}” — join it by name to accept.`,
+        });
+        return;
+      case "dms":
+        this.dmThreads = Array.isArray(f.threads) ? f.threads : [];
+        this.pushState();
         return;
       case "history": {
         const c = this.ensureChannel(f.ch);
@@ -279,11 +320,12 @@ export class ChatClient extends EventEmitter {
     let c = this.channels.get(ch);
     if (!c) {
       const kind: ChannelKind =
-        kindHint === "org" || kindHint === "custom" ? kindHint
+        kindHint === "org" || kindHint === "custom" || kindHint === "dm" ? kindHint
         : ch === "global" ? "global"
         : ch.startsWith("region:") ? "region"
         : ch.startsWith("shard:") ? "shard"
         : ch.startsWith("org:") ? "org"
+        : ch.startsWith("dm:") ? "dm"
         : ch.startsWith("custom:") ? "custom"
         : "custom";
       c = { ch, kind, label: this.labelFor(ch, kind), count: null, members: [], msgs: [] };
@@ -296,6 +338,13 @@ export class ChatClient extends EventEmitter {
     if (kind === "global") return "Global";
     if (kind === "region") return regionLabel(ch.slice("region:".length));
     if (kind === "shard") return shardLabel(ch.slice("shard:".length));
+    // A DM is titled with the OTHER person. The key holds both handles lowercased, so pick the
+    // one that isn't you; the server's joined frame carries their real casing and overwrites it.
+    if (kind === "dm") {
+      const pair = ch.slice("dm:".length).split("|");
+      const me = (this.you?.handle ?? "").toLowerCase();
+      return pair.find((h) => h !== me) ?? pair[0] ?? ch;
+    }
     // org/custom labels come from the server on the joined frame; the raw key is the fallback.
     return ch.split(":").slice(1).join(":");
   }
@@ -321,12 +370,47 @@ export class ChatClient extends EventEmitter {
     return { ok: true };
   }
 
-  /** Join (or create) a custom room by display name. Membership lands via the joined frame. */
-  join(name: string, mode?: "join" | "create"): { ok: boolean; message?: string } {
+  /** Join (or create) a custom room. Membership lands via the joined frame.
+   *  `name` doubles as the JOIN CODE box: a private room has no name anyone can look up, so the
+   *  server tries a code first when the text is code-shaped.
+   *  `category` and `privacy` apply only when CREATING — joining an existing room can't restyle
+   *  it, which would otherwise let anyone flip someone else's private room public. */
+  join(name: string, mode?: "join" | "create", category?: string, privacy?: "public" | "private"):
+    { ok: boolean; message?: string } {
     if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
     const n = name.trim();
     if (!n) return { ok: false, message: "Name a channel first." };
-    this.wsSend({ t: "join", name: n, ...(mode ? { mode } : {}) });
+    this.wsSend({
+      t: "join", name: n,
+      ...(mode ? { mode } : {}),
+      ...(mode === "create" && category ? { category } : {}),
+      ...(mode === "create" && privacy ? { privacy } : {}),
+    });
+    return { ok: true };
+  }
+
+  /** Admit an RSI handle to a private room you own. */
+  invite(ch: string, handle: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const h = handle.trim();
+    if (!h) return { ok: false, message: "Who do you want to invite?" };
+    this.wsSend({ t: "invite", ch, handle: h });
+    return { ok: true };
+  }
+
+  /** Message one player directly. The conversation opens on both ends. */
+  dm(to: string, text: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const t = text.trim();
+    if (!t) return { ok: false, message: "Empty message." };
+    this.wsSend({ t: "dm", to: to.trim(), text: t });
+    return { ok: true };
+  }
+
+  /** Refresh the conversation list (it also arrives unasked on connect). */
+  dmList(): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "dmlist" });
     return { ok: true };
   }
 
@@ -339,10 +423,14 @@ export class ChatClient extends EventEmitter {
 
   /** Widget bootstrap + /api/chat/state. Channel order is the fixed hierarchy. */
   view() {
-    const order = { global: 0, region: 1, shard: 2, org: 3, custom: 4 } as const;
+    // DMs sort last: they're a conversation list, not part of the channel hierarchy.
+    const order = { global: 0, region: 1, shard: 2, org: 3, custom: 4, dm: 5 } as const;
     const channels = [...this.channels.values()]
       .sort((a, b) => order[a.kind] - order[b.kind] || a.ch.localeCompare(b.ch))
-      .map((c) => ({ ch: c.ch, kind: c.kind, label: c.label, count: c.count, members: c.members, msgs: c.msgs }));
+      .map((c) => ({
+        ch: c.ch, kind: c.kind, label: c.label, count: c.count, members: c.members, msgs: c.msgs,
+        category: c.category, privacy: c.privacy, owner: c.owner, code: c.code,
+      }));
     return {
       status: this.status,
       error: this.lastError,
@@ -355,6 +443,12 @@ export class ChatClient extends EventEmitter {
       // The browsable directory of custom rooms, minus the ones already joined (the left
       // rail lists "channels you could join", not a duplicate of your tabs).
       directory: this.directory.filter((d) => !this.channels.has(d.ch)),
+      // The activity list the create-room dropdown renders from, straight from the server.
+      categories: this.categories,
+      // Conversations that exist but aren't open as tabs — the ones with something waiting.
+      dmThreads: this.dmThreads.filter((t) => !this.channels.has(`dm:${[
+        (this.you?.handle ?? "").toLowerCase(), t.other.toLowerCase(),
+      ].sort().join("|")}`)),
     };
   }
 }

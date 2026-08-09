@@ -211,6 +211,135 @@ try {
   assert(!/[\uD800-\uDFFF]/.test(long.text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")),
     "no lone surrogate survives truncation");
 
+  // ── room categories, privacy, join codes and invites ──────────────────────
+  // Sub, 2026-08-09: rooms are categorised by the gameplay people are doing, and creating one
+  // must no longer publish it to everybody by force.
+  const owner = client();
+  await owner.open();
+  owner.send({ t: "hello", handle: "RoomOwner" });
+  const ownerWelcome = await owner.next((f) => f.t === "welcome", "welcome room owner");
+  assert(Array.isArray(ownerWelcome.categories) && ownerWelcome.categories.length === 12,
+    "the welcome frame carries the activity list the dropdown is built from");
+  assert(ownerWelcome.categories.some((c) => c.slug === "org-ops" && c.label === "Org Operations"),
+    "categories are {slug,label}");
+
+  // A PUBLIC room is listed, and carries its category.
+  owner.send({ t: "join", name: "Halo Mining", mode: "create", category: "mining", privacy: "public" });
+  await owner.next((f) => f.t === "joined" && f.ch === "custom:halo-mining", "created a public room");
+  const pubInfo = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:halo-mining", "roominfo for the public room");
+  assert.equal(pubInfo.category, "mining", "the category was stored");
+  assert.equal(pubInfo.privacy, "public");
+  assert.equal(pubInfo.code, undefined, "a public room has no join code to leak");
+  const pubDir = await owner.next(
+    (f) => f.t === "dir" && f.channels.some((c) => c.ch === "custom:halo-mining"), "public room is in the directory");
+  assert.equal(pubDir.channels.find((c) => c.ch === "custom:halo-mining").category, "mining",
+    "the directory carries the category so it can group by activity");
+
+  // A PRIVATE room is not.
+  owner.send({ t: "join", name: "Sunday Ops", mode: "create", category: "org-ops", privacy: "private" });
+  await owner.next((f) => f.t === "joined" && f.ch === "custom:sunday-ops", "created a private room");
+  const privInfo = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:sunday-ops", "roominfo for the private room");
+  assert.equal(privInfo.privacy, "private");
+  assert.match(privInfo.code, /^[A-HJ-NP-Z2-9]{6}$/, "a private room gets a shareable code with no O/0/I/1");
+  const code = privInfo.code;
+  await wait(700);   // the directory broadcast is debounced
+  const lastDir = [...owner.frames].reverse().find((f) => f.t === "dir");
+  assert(!lastDir.channels.some((c) => c.ch === "custom:sunday-ops"),
+    "🔑 a private room is ABSENT from the directory, not merely flagged in it");
+
+  // An outsider can't get in, and isn't told the room exists.
+  const outsider = client();
+  await outsider.open();
+  outsider.send({ t: "hello", handle: "Outsider" });
+  await outsider.next((f) => f.t === "welcome", "welcome outsider");
+  outsider.send({ t: "join", name: "Sunday Ops", mode: "join" });
+  const refused = await outsider.next((f) => f.t === "error", "outsider refused");
+  assert.equal(refused.code, "no_such_channel",
+    "🔑 a private room reads as NON-EXISTENT — 'that's private' would confirm the name to anyone guessing");
+
+  // ...but the code lets them in.
+  outsider.send({ t: "join", name: code });
+  await outsider.next((f) => f.t === "joined" && f.ch === "custom:sunday-ops", "the join code admits an outsider");
+  const lower = await outsider.next((f) => f.t === "roominfo" && f.ch === "custom:sunday-ops", "roominfo after code join");
+  assert.equal(lower.code, code, "someone inside the room can see the code, to pass it on");
+  outsider.send({ t: "leave", ch: "custom:sunday-ops" });
+  await outsider.next((f) => f.t === "left" && f.ch === "custom:sunday-ops", "outsider left");
+
+  // 🔑 Redeeming the code recorded an invite, so they can now get back in BY NAME. Without
+  // this the client's rejoin-by-name on reconnect would silently drop them from the room.
+  outsider.send({ t: "join", name: "Sunday Ops", mode: "join" });
+  await outsider.next((f) => f.t === "joined" && f.ch === "custom:sunday-ops",
+    "having used the code once, they rejoin by name — a reconnect must not lock them out");
+  outsider.send({ t: "leave", ch: "custom:sunday-ops" });
+  await outsider.next((f) => f.t === "left" && f.ch === "custom:sunday-ops", "outsider left again");
+
+  // A lowercase code still works — it gets read off Discord and typed by hand.
+  outsider.send({ t: "join", name: code.toLowerCase() });
+  await outsider.next((f) => f.t === "joined" && f.ch === "custom:sunday-ops", "codes are case-insensitive");
+
+  // Invite by handle: the second door, and owner-only.
+  const guest = client();
+  await guest.open();
+  guest.send({ t: "hello", handle: "Guest" });
+  await guest.next((f) => f.t === "welcome", "welcome guest");
+  outsider.send({ t: "invite", ch: "custom:sunday-ops", handle: "Guest" });
+  const notOwner = await outsider.next((f) => f.t === "error" && f.code === "not_owner", "a member cannot invite");
+  assert(notOwner, "only the owner may widen access");
+
+  owner.send({ t: "invite", ch: "custom:sunday-ops", handle: "Guest" });
+  await owner.next((f) => f.t === "invited" && f.handle === "Guest", "invite recorded");
+  const ping = await guest.next((f) => f.t === "roominvite" && f.ch === "custom:sunday-ops", "the invitee is told");
+  assert.equal(ping.from, "RoomOwner");
+  assert.equal(ping.label, "Sunday Ops");
+  guest.send({ t: "join", name: "Sunday Ops", mode: "join" });
+  await guest.next((f) => f.t === "joined" && f.ch === "custom:sunday-ops", "an invited handle joins by NAME, no code");
+
+  // A v1 client (0.1.41) sends neither field and must still get exactly what it always got.
+  owner.send({ t: "join", name: "Old Client Room", mode: "create" });
+  const v1 = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:old-client-room", "v1-shaped create still works");
+  assert.equal(v1.privacy, "public", "backward compatible: no privacy field means public");
+  assert.equal(v1.category, "social", "backward compatible: no category means Social / Other");
+  // A junk category is corrected, not refused — the room is what the user wanted either way.
+  owner.send({ t: "join", name: "Junk Cat", mode: "create", category: "not-a-real-category" });
+  const junk = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:junk-cat", "junk category");
+  assert.equal(junk.category, "social", "an unknown category falls back rather than failing the create");
+
+  // ── direct messages ───────────────────────────────────────────────────────
+  const dmA = client();
+  await dmA.open();
+  dmA.send({ t: "hello", handle: "Alice" });
+  await dmA.next((f) => f.t === "welcome", "welcome Alice");
+  const dmB = client();
+  await dmB.open();
+  dmB.send({ t: "hello", handle: "Bob" });
+  await dmB.next((f) => f.t === "welcome", "welcome Bob");
+
+  dmA.send({ t: "dm", to: "Bob", text: "code is " + code });
+  const gotA = await dmA.next((f) => f.t === "msg" && f.ch.startsWith("dm:"), "sender sees their own DM");
+  const gotB = await dmB.next((f) => f.t === "msg" && f.ch.startsWith("dm:"), "recipient receives the DM");
+  assert.equal(gotB.text, "code is " + code, "which is the whole point of DMs — handing over a join code");
+  assert.equal(gotA.ch, gotB.ch, "both ends are in the SAME room");
+  assert.equal(gotA.ch, "dm:alice|bob", "the room key is the ordered, lowercased pair");
+
+  // Replying the other way must not open a second half-conversation.
+  dmB.send({ t: "dm", to: "Alice", text: "on my way" });
+  const back = await dmA.next((f) => f.t === "msg" && f.text === "on my way", "reply arrives");
+  assert.equal(back.ch, "dm:alice|bob", "🔑 (a,b) and (b,a) are ONE conversation, not two");
+
+  dmA.send({ t: "dm", to: "Alice", text: "hello me" });
+  await dmA.next((f) => f.t === "error" && f.code === "bad_handle", "you can't DM yourself");
+  dmA.send({ t: "dm", to: "not a handle!", text: "hi" });
+  await dmA.next((f) => f.t === "error" && f.code === "bad_handle", "a malformed handle is refused");
+
+  // A third party must not be able to reach into someone else's conversation.
+  const nosy = client();
+  await nosy.open();
+  nosy.send({ t: "hello", handle: "Nosy" });
+  await nosy.next((f) => f.t === "welcome", "welcome Nosy");
+  nosy.send({ t: "msg", ch: "dm:alice|bob", text: "let me in" });
+  const kept = await nosy.next((f) => f.t === "error" && f.code === "not_member", "outsiders can't post into a DM");
+  assert(kept, "DM membership is enforced by the same not_member rule as every other room");
+
   console.log("chat-server tests passed");
 } finally {
   server.kill();
