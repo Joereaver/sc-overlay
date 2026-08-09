@@ -626,6 +626,11 @@
       else if (f.type === "msg") {
         const c = chanOf(f.msg.ch);
         if (c) { c.msgs.push(f.msg); if (c.msgs.length > MAX_ROWS) c.msgs.splice(0, c.msgs.length - MAX_ROWS); }
+        // Being named is the one thing worth interrupting for — in ANY channel, whether or not
+        // you are looking at it, and never for your own messages.
+        const me = (view?.you?.handle ?? "").toLowerCase();
+        const namesMe = me && new RegExp("@" + me.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&") + "\\b", "i").test(f.msg.text);
+        if (namesMe && (f.msg.from?.handle ?? "").toLowerCase() !== me) announceMention(f.msg.from?.handle ?? "Someone");
         if (f.msg.ch === activeCh) append(msgRow(f.msg));
         else { unread.add(f.msg.ch); renderTabs(); renderChannels(); }
       }
@@ -704,6 +709,29 @@
     // The popover hangs OUTSIDE the widget's own box, so the shell must be told to hit-test it
     // or it is unclickable over the game (the clipping/RSEL trap every widget chrome hits).
     try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
+  // ── being mentioned ──────────────────────────────────────────────────────
+  // HAL says it, because that is this app's voice everywhere else (mining call-outs, SC Feed).
+  // The clip is `c_mentioned.ogg`; if it is not bundled yet the browser voice reads the same
+  // line, so the feature works today and simply gets better when the clip lands — the same
+  // fallback the mining call-outs use for a missing clip.
+  let mentionAudio = null;
+  async function announceMention(from) {
+    try {
+      const r = await fetch("/tts/c_mentioned.ogg", { cache: "force-cache" });
+      if (r.ok) {
+        mentionAudio = mentionAudio || new Audio("/tts/c_mentioned.ogg");
+        mentionAudio.currentTime = 0;
+        await mentionAudio.play();
+        return;
+      }
+    } catch { /* fall through to the browser voice */ }
+    try {
+      const u = new SpeechSynthesisUtterance("Message received. " + from + " is addressing you.");
+      u.rate = 0.9; u.pitch = 0.7;   // HAL is slow and low; this is the nearest a system voice gets
+      speechSynthesis.speak(u);
+    } catch { /* no speech engine — the gold highlight still marks it */ }
   }
 
   // ── slash commands ───────────────────────────────────────────────────────

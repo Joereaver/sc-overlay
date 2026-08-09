@@ -394,6 +394,20 @@
      only inside the `scaled` branch of applyFrame(), so the moment the last scaled widget became
      a box NOTHING honoured --wangle any more and both angle sliders in the app moved a value
      nobody read. */
+  /* ── Fade when idle ──────────────────────────────────────────────────────────────────────
+     PER WIDGET, not per window (Sub, 2026-08-09: "I want all my widgets visible like they were
+     before... make it so the chat app specifically" fades). Window opacity cannot express that
+     — it is one number for the whole canvas — so the fade is CSS on each widget, with the
+     global setting acting only as the DEFAULT each widget inherits.
+     🔑 Hovering a widget brings THAT widget back to full: "drawn out until you actually want to
+     read it" is exactly a hover. Arrange mode and the override hotkey force everything to full.
+     🔑 `opacity` creates a stacking context, so the widget composites as ONE unit against the
+     game — a group's members can't show through each other. */
+  .widget, #panel.canvas { opacity: var(--wdim, 1); transition: opacity 0.18s ease; }
+  .widget:hover, .widget.touched, .widget.grouped:hover, #panel.canvas:hover, #panel.canvas.touched { opacity: 1; }
+  /* Never fade while arranging (you cannot place what you cannot see), while the override
+     hotkey is held on, or while a notifier is actually saying something. */
+  html.no-dim .widget, html.no-dim #panel.canvas, .widget.notifier.live, .widget.moving { opacity: 1 !important; }
   .widget { position: absolute; left: var(--wx, 40px); top: var(--wy, 60px); z-index: var(--wz, 20);
     transform-origin: 0 0; /* top-left anchor, so tilting doesn't walk the widget off its corner */
     transform: perspective(1700px) rotateY(var(--wangle, 0deg)); }
@@ -1670,9 +1684,12 @@
     // Window opacity belongs to the SHELL, but the setting is saved through the sidecar — so
     // the prefs broadcast is what carries a save from ANY settings surface to the window that
     // has to act on it. Only on change: this runs on every mission tick.
+    // The GLOBAL fade default. Per-widget overrides win over it (see wDim); this is only what
+    // a widget inherits when it has no opinion of its own.
     if (typeof PREFS.unfocusedOpacity === "number" && PREFS.unfocusedOpacity !== lastOpacityPref) {
       lastOpacityPref = PREFS.unfocusedOpacity;
-      window.overlayApi?.setUnfocusedOpacity?.(PREFS.unfocusedOpacity);
+      globalDim = PREFS.unfocusedOpacity;
+      if (typeof applyAllDims === "function") applyAllDims();
     }
     // Manufacturer theme (mobiglas default, drake, or the auto-resolved theme from the
     // server) + left↔right HUD-align angle. A ?theme= query param overrides for testing.
@@ -2979,6 +2996,10 @@
           + '<input type="range" class="wcfg-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1" value="0"'
           + ' title="Tilt this widget left or right" />'
           + '<span class="wcfg-angv"></span></div>')
+        + '<div class="wcfg-row wcfg-dimrow"><span class="wcfg-lbl">Fade when idle</span>'
+        + '<input type="range" class="wcfg-dim" min="20" max="100" step="5" value="100"'
+        + ' title="How faint this widget goes while you are not using it. 100% never fades." />'
+        + '<span class="wcfg-dimv"></span></div>'
         + '</div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -3155,9 +3176,31 @@
   // widget's tilt was forgotten on restart even once it applied.
   function persistW(w) {
     const layout = w.shape === "scaled"
-      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text }
-      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text };
+      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text, dim: w.s.dim }
+      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text, dim: w.s.dim };
     window.overlayApi?.saveWidget?.(w.key, layout);
+  }
+
+  // ── Per-widget fade ─────────────────────────────────────────────────────────────────────
+  // `w.s.dim` is 0.2–1, or null meaning "inherit the global setting". Null is the default, so
+  // a user who never opens this control keeps exactly the behaviour they had.
+  let globalDim = 1;                       // from prefs.unfocusedOpacity
+  const wDim = (w) => (typeof w.s.dim === "number" ? w.s.dim : globalDim);
+  function applyDim(w) {
+    const el = wEl(w); if (!el) return;
+    el.style.setProperty("--wdim", String(Math.max(0.2, Math.min(1, wDim(w)))));
+    const inp = el.querySelector(".wcfg-dim");
+    if (inp) inp.value = String(Math.round(wDim(w) * 100));
+    const out = el.querySelector(".wcfg-dimv");
+    if (out) out.textContent = wDim(w) >= 1 ? "Off" : Math.round(wDim(w) * 100) + "%";
+  }
+  function applyAllDims() { for (const w of WIDGETS) applyDim(w); }
+  function setWidgetDim(w, pct) {
+    const v = Math.max(0.2, Math.min(1, Number(pct) / 100));
+    // 100% means "never fade" for THIS widget — stored explicitly rather than as null, so it
+    // stays opaque even if the global default is later turned down.
+    w.s.dim = v;
+    applyDim(w);
   }
 
   // ── Per-widget text size ────────────────────────────────────────────────────────────────
@@ -3504,12 +3547,13 @@
   }
   function resetWidget(w) {
     if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
-    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null;
+    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null; w.s.dim = null;
     centreWidget(w);
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
     applyTextScale(w);
+    applyDim(w);  // back to inheriting the global default
     showAngle(w); // the sliders have to fall back to flat with it
     persistW(w);
   }
@@ -3690,6 +3734,10 @@
   }
   // Re-read the chart PNG whenever the shell asks (a re-exported chart shows up without a restart).
   window.overlayApi?.onBindingChartReload?.(() => { try { frameWin(WBY.bindingChart)?.__bindingReload?.(); } catch { /* not loaded */ } });
+  // The shell's fade override: the hotkey, and arrange mode. Per-widget values are untouched —
+  // this only suspends the fade while it is on.
+  window.overlayApi?.onDimOverride?.((off) => document.documentElement.classList.toggle("no-dim", !!off));
+  window.overlayApi?.onDimGlobal?.((v) => { if (Number.isFinite(v)) { globalDim = v; applyAllDims(); } });
 
   // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
   document.addEventListener("click", (e) => {
@@ -3762,6 +3810,7 @@
         }
         applyFrame(w);
         applyTextScale(w);
+        applyDim(w);
         if (w.local) probeSettings(w); // no iframe load event will ever fire for it
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
@@ -3910,6 +3959,10 @@
       angIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetAngle(w, angIn.value); });
       angIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
       angIn?.addEventListener("pointerdown", (e) => e.stopPropagation()); // don't start a widget drag
+      const dimIn = el.querySelector(".wcfg-dim");
+      dimIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetDim(w, dimIn.value); });
+      dimIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
+      dimIn?.addEventListener("pointerdown", (e) => e.stopPropagation());
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
       el.querySelector(".wh-reset")?.addEventListener("click", (e) => { e.stopPropagation(); resetWidget(w); });
       // Engaging a widget's own chrome reveals its header too (the iframe can't report this one).

@@ -1114,21 +1114,16 @@ function toggleMining() {
 // against what's behind the window.
 // 🔑 Never fade while ARRANGING — you cannot place what you cannot see — and never below the
 // 0.2 clamp the settings enforce, or the overlay becomes a thing you can't find to fix.
-// 🔑 "Focused" is the wrong test on its own: this window is click-through by design and
-// normally never takes focus, so keying only on isFocused() would leave it dimmed even while
-// you are actively using it. HOVERING is the honest signal — the cursor being over a widget
-// means you are reading it, so it comes back to full for as long as you are there.
+// 🔑 The fade is PER WIDGET, so it lives in the canvas as CSS — one window opacity cannot say
+// "fade the chat widget but not the tracker", which is what Sub asked for (2026-08-09). All the
+// shell owns now is the OVERRIDE: a hotkey that forces every widget back to full, and arrange
+// mode, which must never be faded. The canvas applies both by toggling `html.no-dim`.
 function applyOverlayOpacity() {
   if (!overlay || overlay.isDestroyed()) return;
-  const usingIt = overlay.isFocused() || hovering || moveMode;
-  const dim = unfocusedOpacity < 1 && !opacityOverride && !usingIt;
-  const want = dim ? Math.max(0.2, unfocusedOpacity) : 1;
+  const off = opacityOverride || moveMode;
   try {
-    overlay.setOpacity(want);
-    // Read back what Windows actually applied — a transparent, always-on-top, software-rendered
-    // window is exactly the case where "I called setOpacity" and "the user sees a change" can
-    // disagree, and this is the only way to tell those apart from outside the process.
-    lastOpacityApplied = { want, got: overlay.getOpacity(), dim, hovering, focused: overlay.isFocused() };
+    overlay.webContents.send("overlay:dim-override", off);
+    lastOpacityApplied = { override: opacityOverride, moveMode, sentNoDim: off };
   } catch { /* window going away */ }
 }
 let lastOpacityApplied = null;
@@ -1137,6 +1132,9 @@ function setUnfocusedOpacity(v) {
   const next = Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1;
   const changed = next !== unfocusedOpacity;
   unfocusedOpacity = next;
+  // Live preview while the slider moves: the saved value reaches the canvas on the next prefs
+  // broadcast, but a transparency is judged by watching it change, so push it straight through.
+  try { overlay?.webContents.send("overlay:dim-global", unfocusedOpacity); } catch { /* no window */ }
   applyOverlayOpacity();
   // Republish the diagnostic when the SETTING changes (not on every hover tick) — otherwise
   // /api/overlay-geometry reports whatever was true at the last canvas refit, which is exactly
