@@ -9,8 +9,12 @@ import { join, dirname } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = 8797; // scratch — not 8788 (a dev chat server may be running) nor 8778 (sidecar)
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+const scratchData = mkdtempSync(join(tmpdir(), "sc-chat-test-"));
+
 const server = spawn(process.execPath, [join(here, "server.mjs")], {
-  env: { ...process.env, CHAT_PORT: String(PORT), CHAT_AUTH: "dev" },
+  env: { ...process.env, CHAT_PORT: String(PORT), CHAT_AUTH: "dev", CHAT_DATA_DIR: scratchData },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
 });
@@ -142,6 +146,50 @@ try {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ handle: "strangertest" }),
   });
+
+  // ── v2: member lists ride presence ──
+  const withMembers = await a.next((f) => f.t === "presence" && f.ch === "global" && Array.isArray(f.members), "presence carries members");
+  assert(withMembers.members.every((m) => typeof m.handle === "string" && typeof m.verified === "boolean"), "member rows have handle+verified");
+  assert(withMembers.count >= 1, "count is at least the sender");
+
+  // ── v2: org auto-join (dev passthrough) ──
+  const o = client();
+  await o.open();
+  o.send({ t: "hello", handle: "OrgPilot", org: { sid: "IRREGS", name: "7th Nul Irregulars" } });
+  const oj = await o.next((f) => f.t === "joined" && f.ch === "org:irregs", "org room auto-joined");
+  assert.equal(oj.label, "7th Nul Irregulars", "org room carries the org NAME as label");
+  assert.equal(oj.kind, "org");
+  await o.next((f) => f.t === "dir" && Array.isArray(f.channels), "directory arrives on welcome");
+
+  // ── v2: custom rooms — create, directory, join by name, leave ──
+  o.send({ t: "join", name: "Salvage Crew" });
+  const cj = await o.next((f) => f.t === "joined" && f.ch === "custom:salvage-crew", "custom room created+joined");
+  assert.equal(cj.label, "Salvage Crew", "custom room keeps display casing");
+  // mode:"create" on a taken name refuses; mode:"join" on a missing one refuses.
+  o.send({ t: "join", name: "salvage crew", mode: "create" });
+  await o.next((f) => f.t === "error" && f.code === "channel_exists", "create refuses a taken name");
+  o.send({ t: "join", name: "no such room", mode: "join" });
+  await o.next((f) => f.t === "error" && f.code === "no_such_channel", "join refuses a missing name");
+  // Another client sees it in the directory and joins by the same display name.
+  const dirSeen = await a.next((f) => f.t === "dir" && f.channels.some((c) => c.ch === "custom:salvage-crew"), "directory broadcast reaches others");
+  assert.equal(dirSeen.channels.find((c) => c.ch === "custom:salvage-crew").label, "Salvage Crew");
+  a.send({ t: "join", name: "SALVAGE CREW", mode: "join" });
+  await a.next((f) => f.t === "joined" && f.ch === "custom:salvage-crew", "join is case-insensitive on the name");
+  const waitMsg = a.next((f) => f.t === "msg" && f.ch === "custom:salvage-crew", "custom room delivers");
+  o.send({ t: "msg", ch: "custom:salvage-crew", text: "anyone got a Reclaimer?" });
+  await waitMsg;
+  // Leaving: custom yes, auto/org no.
+  a.send({ t: "leave", ch: "custom:salvage-crew" });
+  await a.next((f) => f.t === "left" && f.ch === "custom:salvage-crew", "custom room left");
+  o.send({ t: "leave", ch: "org:irregs" });
+  await o.next((f) => f.t === "error" && f.code === "bad_channel", "org room refuses leave");
+  // Location churn must NOT drop org/custom membership.
+  o.send({ t: "loc", region: "use1b", shard: "pub_use1b_12326004_040" });
+  await o.next((f) => f.t === "joined" && f.ch === "shard:pub_use1b_12326004_040", "org client lands on shard");
+  o.send({ t: "loc", region: null, shard: null });
+  await o.next((f) => f.t === "left" && f.ch === "region:use1b", "loc churn drops region");
+  o.send({ t: "msg", ch: "org:irregs", text: "still here" });
+  await o.next((f) => f.t === "msg" && f.ch === "org:irregs" && f.text === "still here", "org membership survived loc churn");
 
   console.log("chat-server tests passed");
 } finally {

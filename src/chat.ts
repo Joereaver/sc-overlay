@@ -36,13 +36,19 @@ export interface ChatOptions {
   url: string;          // ws:// or wss:// endpoint of the chat server
   handle: string;       // dev-mode identity; production auth is the sync token
   token: string;        // overlay sync token (site-mode auth on the chat server)
+  /** Custom rooms (display names) to rejoin on every connect — the user's chosen channels,
+   *  persisted by the sidecar so an app restart lands them back where they were. */
+  channels: string[];
 }
+
+export type ChannelKind = "global" | "region" | "shard" | "org" | "custom";
 
 interface ChannelState {
   ch: string;
-  kind: "global" | "region" | "shard";
+  kind: ChannelKind;
   label: string;
-  count: number | null; // unique handles, when the backend reports presence
+  count: number | null;         // unique handles, when the server reports presence
+  members: ChatIdentity[];      // who's here (capped server-side; count stays exact)
   msgs: ChatMsg[];
 }
 
@@ -77,6 +83,11 @@ export class ChatClient extends EventEmitter {
   private you: ChatIdentity | null = null;
   private shard: string | null = null; // full id from the log; region derives from it
   private channels = new Map<string, ChannelState>();
+  /** Public custom-room directory as the server last broadcast it. */
+  private directory: { ch: string; label: string; count: number }[] = [];
+  /** Custom rooms (display names) we are — or want to be — in; rejoined on every welcome.
+   *  Changes emit "channels" so the sidecar can persist them across app restarts. */
+  private customRooms: string[] = [];
   private retry = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private closingDeliberately = false;
@@ -87,8 +98,14 @@ export class ChatClient extends EventEmitter {
   /** (Re)configure and set whether a connection is WANTED. Safe to call repeatedly with the
    *  same values — only a real change tears the socket down. */
   configure(opts: ChatOptions, active: boolean): void {
-    const changed = JSON.stringify(this.opts) !== JSON.stringify(opts);
+    // The channel list seeds customRooms but is NOT part of the change check — the sidecar
+    // echoes our own "channels" events back through config, and treating that echo as a
+    // change would bounce the socket on every join/leave.
+    const { channels: seedChannels, ...rest } = opts;
+    const prev = this.opts ? (({ channels: _c, ...r }) => r)(this.opts) : null;
+    const changed = JSON.stringify(prev) !== JSON.stringify(rest);
     this.opts = opts;
+    if (this.customRooms.length === 0 && Array.isArray(seedChannels)) this.customRooms = [...seedChannels];
     if (changed || active !== this.active) {
       this.active = active;
       this.teardown();
@@ -182,15 +199,34 @@ export class ChatClient extends EventEmitter {
         this.retry = 0;
         this.you = f.you ?? null;
         this.sendLoc();
+        // Rejoin the user's custom rooms — this is what makes a reconnect (or app restart)
+        // land back in the same channels instead of just Global.
+        for (const name of this.customRooms) this.wsSend({ t: "join", name });
         this.pushState();
         return;
-      case "joined":
-        this.ensureChannel(f.ch);
+      case "joined": {
+        const c = this.ensureChannel(f.ch, f.kind);
+        if (typeof f.label === "string" && f.label) c.label = f.label;
+        if (c.kind === "custom" && !this.customRooms.includes(c.label)) {
+          this.customRooms.push(c.label);
+          this.emit("channels", [...this.customRooms]);
+        }
         this.pushState();
         return;
-      case "left":
+      }
+      case "left": {
+        const gone = this.channels.get(f.ch);
         this.channels.delete(f.ch);
+        if (gone?.kind === "custom") {
+          this.customRooms = this.customRooms.filter((n) => n.toLowerCase() !== gone.label.toLowerCase());
+          this.emit("channels", [...this.customRooms]);
+        }
         this.pushState();
+        return;
+      }
+      case "dir":
+        this.directory = Array.isArray(f.channels) ? f.channels : [];
+        this.emit("sse", { type: "dir", channels: this.directory });
         return;
       case "history": {
         const c = this.ensureChannel(f.ch);
@@ -203,7 +239,11 @@ export class ChatClient extends EventEmitter {
         return;
       case "presence": {
         const c = this.channels.get(f.ch);
-        if (c) { c.count = f.count; this.emit("sse", { type: "presence", ch: f.ch, count: f.count }); }
+        if (c) {
+          c.count = f.count;
+          if (Array.isArray(f.members)) c.members = f.members;
+          this.emit("sse", { type: "presence", ch: f.ch, count: f.count, members: c.members });
+        }
         return;
       }
       case "error":
@@ -217,20 +257,29 @@ export class ChatClient extends EventEmitter {
 
   // ── Shared state plumbing ─────────────────────────────────────────────────
 
-  private ensureChannel(ch: string): ChannelState {
+  private ensureChannel(ch: string, kindHint?: string): ChannelState {
     let c = this.channels.get(ch);
     if (!c) {
-      const kind = ch === "global" ? "global" : ch.startsWith("region:") ? "region" : "shard";
-      c = { ch, kind, label: this.labelFor(ch, kind), count: null, msgs: [] };
+      const kind: ChannelKind =
+        kindHint === "org" || kindHint === "custom" ? kindHint
+        : ch === "global" ? "global"
+        : ch.startsWith("region:") ? "region"
+        : ch.startsWith("shard:") ? "shard"
+        : ch.startsWith("org:") ? "org"
+        : ch.startsWith("custom:") ? "custom"
+        : "custom";
+      c = { ch, kind, label: this.labelFor(ch, kind), count: null, members: [], msgs: [] };
       this.channels.set(ch, c);
     }
     return c;
   }
 
-  private labelFor(ch: string, kind: ChannelState["kind"]): string {
+  private labelFor(ch: string, kind: ChannelKind): string {
     if (kind === "global") return "Global";
     if (kind === "region") return regionLabel(ch.slice("region:".length));
-    return shardLabel(ch.slice("shard:".length));
+    if (kind === "shard") return shardLabel(ch.slice("shard:".length));
+    // org/custom labels come from the server on the joined frame; the raw key is the fallback.
+    return ch.split(":").slice(1).join(":");
   }
 
   private pushMsg(msg: ChatMsg): void {
@@ -254,12 +303,28 @@ export class ChatClient extends EventEmitter {
     return { ok: true };
   }
 
+  /** Join (or create) a custom room by display name. Membership lands via the joined frame. */
+  join(name: string, mode?: "join" | "create"): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const n = name.trim();
+    if (!n) return { ok: false, message: "Name a channel first." };
+    this.wsSend({ t: "join", name: n, ...(mode ? { mode } : {}) });
+    return { ok: true };
+  }
+
+  /** Leave a custom room (the server refuses auto/org channels). */
+  leave(ch: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "leave", ch });
+    return { ok: true };
+  }
+
   /** Widget bootstrap + /api/chat/state. Channel order is the fixed hierarchy. */
   view() {
-    const order = { global: 0, region: 1, shard: 2 } as const;
+    const order = { global: 0, region: 1, shard: 2, org: 3, custom: 4 } as const;
     const channels = [...this.channels.values()]
       .sort((a, b) => order[a.kind] - order[b.kind] || a.ch.localeCompare(b.ch))
-      .map((c) => ({ ch: c.ch, kind: c.kind, label: c.label, count: c.count, msgs: c.msgs }));
+      .map((c) => ({ ch: c.ch, kind: c.kind, label: c.label, count: c.count, members: c.members, msgs: c.msgs }));
     return {
       status: this.status,
       error: this.lastError,
@@ -269,6 +334,9 @@ export class ChatClient extends EventEmitter {
       regionLabel: regionLabel(regionOfShard(this.shard)),
       shardLabel: shardLabel(this.shard),
       channels,
+      // The browsable directory of custom rooms, minus the ones already joined (the left
+      // rail lists "channels you could join", not a duplicate of your tabs).
+      directory: this.directory.filter((d) => !this.channels.has(d.ch)),
     };
   }
 }

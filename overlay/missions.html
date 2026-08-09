@@ -2791,7 +2791,9 @@
       // and history (src/chat.ts) — this page only renders and posts, so closing or regrouping
       // it drops nothing. No socket exists unless this widget is open (chatOpen is the gate).
       key: "chat", page: "chat.html", title: "Chat",
-      def: { x: 900, y: 420 }, size: { w: 360, h: 460, minW: 280, maxW: 900, minH: 240, maxH: 1100 },
+      // Three panes (channels · chat · members), so it defaults wider than a single-column
+      // widget; the rails collapse from its header when the user wants it narrow.
+      def: { x: 760, y: 400 }, size: { w: 820, h: 480, minW: 280, maxW: 1600, minH: 240, maxH: 1200 },
       focusFn: "__chatFocus",
       // Don't strand the keyboard grab: hiding mid-typing would leave the interact key suspended.
       onHide: (w) => { try { frameWin(w)?.__chatExitTyping?.(); } catch { /* iframe gone */ } },

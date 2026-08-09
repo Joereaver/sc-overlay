@@ -14,18 +14,21 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/widget-theme.css" />
 <style>
-  /* Player-to-player chat, EVE-style: Global / Server (region) / Shard tabs that follow the
-     Game.log. The page renders whatever the SIDECAR knows — the connection, history and channel
-     membership all live in the sidecar (src/chat.ts), so regrouping or closing this iframe
-     costs nothing. This page only draws state and posts sends. */
+  /* Three panes, EVE's structure in OUR skin (Sub's spec, 2026-08-09):
+       LEFT   channel browser — what you could join, plus Join/Create
+       CENTER tabs + messages + send
+       RIGHT  who is in the channel you are looking at
+     Both rails collapse; the collapsed state is remembered. Everything here is themed from
+     /widget-theme.css — no EVE colours, no EVE chrome. */
   * { box-sizing: border-box; }
   * { scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), 0.28) transparent; }
   html, body { margin: 0; height: 100%; background: transparent; }
   body { font-family: var(--sans); color: var(--cyan-text); overflow: hidden; }
+  [hidden] { display: none !important; }
 
   #panel {
     display: flex; flex-direction: column;
-    width: 360px; height: 460px; margin: 20px auto;
+    width: 820px; height: 480px; margin: 20px auto;
     border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
     -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px);
@@ -36,24 +39,58 @@
   body.embedded { overflow: visible; background: transparent; }
   body.embedded #panel { width: 100%; height: 100%; margin: 0; }
 
-  /* Header: connection dot + the three-tier channel tabs. */
-  .head { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px;
-    border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 40px; }
-  .dia { width: 7px; height: 7px; flex: none; background: var(--faint); transform: rotate(45deg); transition: background 0.3s; }
-  #panel.on .dia { background: var(--cyan-bright); box-shadow: 0 0 8px var(--cyan); }
-  #tabs { flex: 1; display: flex; gap: 4px; min-width: 0; }
-  .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
-    color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.08); border: 1px solid var(--divider);
-    border-radius: 6px; padding: 4px 8px; cursor: pointer; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 40%; position: relative; }
-  .tab:hover { background: rgba(var(--accent-rgb), 0.18); }
-  .tab.active { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
-  .tab.dead { opacity: 0.4; cursor: default; }
-  .tab .n { margin-left: 4px; font-weight: 600; color: var(--gold); }
+  /* ── the three-pane body ───────────────────────────────────────────────── */
+  #body { flex: 1; min-height: 0; display: flex; position: relative; z-index: 4; }
+  .rail { flex: none; display: flex; flex-direction: column; min-height: 0;
+    background: rgba(0, 0, 0, 0.16); }
+  #left { width: 190px; border-right: 1px solid var(--divider); }
+  #right { width: 168px; border-left: 1px solid var(--divider); }
+  #panel.no-left #left, #panel.no-right #right { display: none; }
+  #center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .rail-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 9px;
+    border-bottom: 1px solid var(--divider);
+    font-size: 8.5px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+  .rail-head .n { margin-left: auto; color: var(--gold); letter-spacing: 0.06em; }
+  .rail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
+
+  /* left rail: group headings + rows you can join */
+  .grp { padding: 8px 10px 3px; font-size: 8.5px; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint); }
+  .crow { display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
+    font-size: 11.5px; color: var(--cyan-text); }
+  .crow:hover { background: rgba(var(--accent-rgb), 0.1); }
+  .crow.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); }
+  .crow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crow .ct { flex: none; font-size: 10px; color: var(--gold); }
+  .crow .x { flex: none; opacity: 0; font-size: 11px; color: var(--faint); padding: 0 2px; }
+  .crow:hover .x { opacity: 1; }
+  .crow .x:hover { color: var(--red, #ff6b5e); }
+  .empty { padding: 8px 10px; font-size: 10.5px; font-style: italic; color: var(--faint); line-height: 1.5; }
+
+  /* left rail: the join/create form */
+  .rail-foot { flex: none; border-top: 1px solid var(--divider); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #chanInput { font-family: var(--sans); font-size: 11.5px; color: var(--cyan-bright);
+    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
+    padding: 5px 7px; outline: none; width: 100%; }
+  #chanInput:focus { border-color: var(--cyan); }
+  #chanInput::placeholder { color: var(--faint); }
+  .rail-foot .row { display: flex; gap: 6px; }
+  .rail-foot .row .hbtn { flex: 1; text-align: center; }
+
+  /* centre: tab strip */
+  #tabs { flex: none; display: flex; align-items: stretch; gap: 3px; padding: 6px 8px 0;
+    overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--divider); }
+  .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
+    color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.07);
+    border: 1px solid var(--divider); border-bottom: none; border-radius: 6px 6px 0 0;
+    padding: 5px 9px; cursor: pointer; white-space: nowrap; position: relative; }
+  .tab:hover { background: rgba(var(--accent-rgb), 0.16); }
+  .tab.active { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.22); border-color: var(--cyan); }
   .tab .unread { position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%;
     background: var(--gold); box-shadow: 0 0 6px var(--gold); }
 
-  #log { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; z-index: 4;
+  #log { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
     padding: 6px 0; font-size: 12.5px; line-height: 1.5; }
   .msg { padding: 3px 12px; word-wrap: break-word; overflow-wrap: anywhere; }
   .msg:hover { background: rgba(var(--accent-rgb), 0.05); }
@@ -65,23 +102,37 @@
   .msg .ts { float: right; margin-left: 6px; font-size: 9.5px; color: var(--faint); }
   .sys { padding: 3px 12px; font-size: 11px; color: var(--faint); font-style: italic; }
 
-  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider);
-    position: relative; z-index: 4; }
+  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); }
   #sendInput { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px; color: var(--cyan-bright);
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
     padding: 6px 8px; outline: none; }
   #sendInput:focus { border-color: var(--cyan); }
   #sendInput::placeholder { color: var(--faint); }
+
+  /* right rail: members */
+  .mrow { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; }
+  .mrow .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--cyan-dim); }
+  .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mrow .vf { flex: none; font-size: 8px; font-weight: 800; color: var(--green, #38d980); }
+  .mrow.you .nm { color: var(--gold); font-weight: 700; }
+
+  /* header (thin — the tabs carry the identity, so this stays out of the way) */
+  .head { flex: none; display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+    border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 34px; }
+  .dia { width: 7px; height: 7px; flex: none; background: var(--faint); transform: rotate(45deg); transition: background 0.3s; }
+  #panel.on .dia { background: var(--cyan-bright); box-shadow: 0 0 8px var(--cyan); }
+  .h-title { font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan-dim); }
+  #whoami { flex: 1; min-width: 0; font-size: 10.5px; color: var(--faint); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   .hbtn { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
     color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
   .hbtn:hover { background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
-  .hbtn.sm { padding: 4px 7px; font-size: 10px; }
+  .hbtn.sm { padding: 3px 7px; font-size: 10px; }
   .hbtn.active { background: rgba(var(--accent-rgb), 0.28); border-color: var(--cyan); }
+  .hbtn.tog { min-width: 26px; text-align: center; }
 
-  /* Identity gate. Chat needs someone bannable on the other end (Sub's rule: RSI-verified
-     accounts only). The A/B build takes a plain handle; production replaces this pane with
-     the site's verification flow. */
+  /* identity gate */
   #gate { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
     gap: 10px; padding: 22px 18px; overflow-y: auto;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)); z-index: 5; }
@@ -92,26 +143,50 @@
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: 7px;
     padding: 9px 10px; outline: none; width: 100%; }
   #handleInput:focus { border-color: var(--cyan); }
-  .row { display: flex; gap: 8px; align-items: center; }
-  .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
-  /* Belt for the widget-page hidden trap: any class rule that sets display would silently
-     defeat a bare [hidden] (see the Unlock Alerts claim-row bug). */
-  [hidden] { display: none !important; }
+  #gate .row { display: flex; gap: 8px; align-items: center; }
+  #gate .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
+
+  /* Narrow embeds (a user can drag this widget small): drop the rails rather than crush them. */
+  @media (max-width: 520px) { #left, #right { display: none; } }
 </style>
 </head>
 <body>
   <div id="panel" class="wpanel">
     <div class="head">
       <span class="dia"></span>
-      <div id="tabs"></div>
+      <span class="h-title">Chat</span>
+      <span id="whoami"></span>
+      <button id="leftBtn" class="hbtn sm tog" type="button" title="Show or hide the channel list">☰</button>
+      <button id="rightBtn" class="hbtn sm tog" type="button" title="Show or hide who's here">👥</button>
     </div>
 
-    <div id="log"></div>
+    <div id="body">
+      <div id="left" class="rail">
+        <div class="rail-head">Channels</div>
+        <div id="chanList" class="rail-body"></div>
+        <div class="rail-foot">
+          <input id="chanInput" type="text" placeholder="Channel name…" maxlength="30" spellcheck="false" autocomplete="off" />
+          <div class="row">
+            <button id="joinBtn" class="hbtn sm" type="button" title="Join an existing channel">Join</button>
+            <button id="createBtn" class="hbtn sm" type="button" title="Create a new channel">Create</button>
+          </div>
+        </div>
+      </div>
 
-    <div id="sendbar">
-      <input id="sendInput" type="text" placeholder="Say something…" maxlength="400" autocomplete="off" spellcheck="false" />
-      <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
-      <button id="sendBtn" class="hbtn sm" type="button">Send</button>
+      <div id="center">
+        <div id="tabs"></div>
+        <div id="log"></div>
+        <div id="sendbar">
+          <input id="sendInput" type="text" placeholder="Say something…" maxlength="400" autocomplete="off" spellcheck="false" />
+          <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
+          <button id="sendBtn" class="hbtn sm" type="button">Send</button>
+        </div>
+      </div>
+
+      <div id="right" class="rail">
+        <div class="rail-head">Here <span id="memCount" class="n"></span></div>
+        <div id="memList" class="rail-body"></div>
+      </div>
     </div>
 
     <div id="gate">
@@ -137,16 +212,26 @@
   const host = () => (EMBEDDED && window.parent) ? window.parent.__chatHost : null;
 
   const MAX_ROWS = 250;
-  // The three-tier hierarchy in display order. Region/shard tabs render even while you're not
-  // on a shard (dimmed) — an empty slot that explains itself beats one that comes and goes.
-  const TIERS = ["global", "region", "shard"];
+  // Group headings for the left rail, in the same order the tabs run.
+  const GROUPS = [
+    { kind: "global", title: "Universe" },
+    { kind: "region", title: "Server" },
+    { kind: "shard", title: "Shard" },
+    { kind: "org", title: "Organisation" },
+    { kind: "custom", title: "Your channels" },
+  ];
 
-  let view = null;        // last full state from the sidecar
+  let view = null;
   let activeCh = "global";
-  let unread = new Set(); // channels with messages arrived while another tab was up
+  let unread = new Set();
   let es = null;
 
-  // ── rendering ────────────────────────────────────────────────────────────────
+  // Rail visibility is a local preference (per machine, not per account).
+  const railPref = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v === "1"; } catch { return d; } };
+  let showLeft = railPref("chatLeft", true);
+  let showRight = railPref("chatRight", true);
+
+  // ── rendering ────────────────────────────────────────────────────────────
   const atBottom = () => {
     const el = $("log");
     return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -164,8 +249,6 @@
     d.textContent = text;
     append(d);
   }
-  // A stable per-handle colour (same trick as every chat client): hash → hue, fixed S/L that
-  // stay readable on the dark glass in every skin.
   function handleColor(handle) {
     let h = 0;
     for (const c of handle) h = (h * 31 + c.codePointAt(0)) % 360;
@@ -174,6 +257,10 @@
   function msgRow(m) {
     const row = document.createElement("div");
     row.className = "msg";
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
+    row.appendChild(ts);
     const nm = document.createElement("span");
     nm.className = "nm";
     nm.textContent = m.from?.handle ?? "?";
@@ -188,76 +275,159 @@
     sep.className = "sep"; sep.textContent = ":";
     row.appendChild(sep);
     const tx = document.createElement("span");
-    tx.className = "tx"; tx.textContent = m.text; // textContent — markup stays inert
+    tx.className = "tx"; tx.textContent = m.text;  // textContent — markup stays inert
     row.appendChild(tx);
-    const ts = document.createElement("span");
-    ts.className = "ts";
-    try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
-    row.prepend(ts);
     return row;
   }
 
-  function chanFor(tier) {
-    return view?.channels?.find((c) => c.kind === tier) ?? null;
-  }
+  const chans = () => view?.channels ?? [];
+  const chanOf = (ch) => chans().find((c) => c.ch === ch) ?? null;
+
   function renderTabs() {
     const tabs = $("tabs");
     tabs.textContent = "";
-    for (const tier of TIERS) {
-      const c = chanFor(tier);
+    for (const c of chans()) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "tab";
-      const label = c ? c.label
-        : tier === "global" ? "Global"
-        : tier === "region" ? (view?.regionLabel ?? "Server")
-        : (view?.shardLabel ?? "Shard");
-      b.textContent = label;
-      if (c) {
-        if (typeof c.count === "number") {
-          const n = document.createElement("span");
-          n.className = "n"; n.textContent = String(c.count);
-          b.appendChild(n);
-        }
-        if (unread.has(c.ch)) {
-          const u = document.createElement("span");
-          u.className = "unread";
-          b.appendChild(u);
-        }
-        b.classList.toggle("active", c.ch === activeCh);
-        b.addEventListener("click", () => { activeCh = c.ch; unread.delete(c.ch); renderTabs(); renderLog(); });
-      } else {
-        b.classList.add("dead");
-        b.title = tier === "region" ? "Joins automatically when you enter the PU" : "Joins automatically when you land on a shard";
+      b.className = "tab" + (c.ch === activeCh ? " active" : "");
+      b.textContent = c.label + (typeof c.count === "number" ? ` [${c.count}]` : "");
+      if (unread.has(c.ch)) {
+        const u = document.createElement("span");
+        u.className = "unread";
+        b.appendChild(u);
       }
+      b.addEventListener("click", () => select(c.ch));
       tabs.appendChild(b);
     }
   }
+
+  /* The left rail is BOTH your channel list and the browser for ones you could join —
+     the same thing EVE splits across two windows, which is why it reads as one list here. */
+  function renderChannels() {
+    const list = $("chanList");
+    list.textContent = "";
+    for (const g of GROUPS) {
+      const mine = chans().filter((c) => c.kind === g.kind);
+      const avail = g.kind === "custom" ? (view?.directory ?? []) : [];
+      if (!mine.length && !avail.length) continue;
+      const h = document.createElement("div");
+      h.className = "grp"; h.textContent = g.title;
+      list.appendChild(h);
+      for (const c of mine) {
+        const row = document.createElement("div");
+        row.className = "crow" + (c.ch === activeCh ? " on" : "");
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.textContent = c.label;
+        row.appendChild(nm);
+        if (typeof c.count === "number") {
+          const ct = document.createElement("span");
+          ct.className = "ct"; ct.textContent = String(c.count);
+          row.appendChild(ct);
+        }
+        row.addEventListener("click", () => select(c.ch));
+        // Only custom rooms can be left — the rest follow your log and your org.
+        if (c.kind === "custom") {
+          const x = document.createElement("span");
+          x.className = "x"; x.textContent = "✕"; x.title = "Leave this channel";
+          x.addEventListener("click", (e) => { e.stopPropagation(); leave(c.ch); });
+          row.appendChild(x);
+        }
+        list.appendChild(row);
+      }
+      for (const d of avail) {
+        const row = document.createElement("div");
+        row.className = "crow";
+        row.title = "Join " + d.label;
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = d.label;
+        row.appendChild(nm);
+        const ct = document.createElement("span");
+        ct.className = "ct"; ct.textContent = String(d.count ?? 0);
+        row.appendChild(ct);
+        row.addEventListener("click", () => joinNamed(d.label, "join"));
+        list.appendChild(row);
+      }
+    }
+    if (!list.childElementCount) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No channels yet — they appear as you connect and fly.";
+      list.appendChild(e);
+    }
+  }
+
+  function renderMembers() {
+    const list = $("memList");
+    list.textContent = "";
+    const c = chanOf(activeCh);
+    const members = c?.members ?? [];
+    $("memCount").textContent = c && typeof c.count === "number" ? String(c.count) : "";
+    if (!members.length) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = c ? "Just you so far." : "";
+      list.appendChild(e);
+      return;
+    }
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    for (const m of [...members].sort((a, b) => a.handle.localeCompare(b.handle))) {
+      const row = document.createElement("div");
+      row.className = "mrow" + (m.handle.toLowerCase() === me ? " you" : "");
+      const dot = document.createElement("span");
+      dot.className = "dot"; dot.style.background = handleColor(m.handle);
+      row.appendChild(dot);
+      const nm = document.createElement("span");
+      nm.className = "nm"; nm.textContent = m.handle;
+      row.appendChild(nm);
+      if (m.verified) {
+        const v = document.createElement("span");
+        v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
+        row.appendChild(v);
+      }
+      list.appendChild(row);
+    }
+  }
+
   function renderLog() {
     $("log").textContent = "";
-    const c = view?.channels?.find((x) => x.ch === activeCh);
+    const c = chanOf(activeCh);
     if (!c) {
-      if (view?.status === "connected") sys("Nothing here yet.");
+      if (view?.status === "connected") sys("Pick a channel on the left.");
       return;
     }
     for (const m of c.msgs) append(msgRow(m));
     $("log").scrollTop = $("log").scrollHeight;
   }
+
+  function select(ch) {
+    activeCh = ch;
+    unread.delete(ch);
+    renderTabs(); renderChannels(); renderMembers(); renderLog();
+  }
+
+  function applyRails() {
+    $("panel").classList.toggle("no-left", !showLeft);
+    $("panel").classList.toggle("no-right", !showRight);
+    $("leftBtn").classList.toggle("active", showLeft);
+    $("rightBtn").classList.toggle("active", showRight);
+  }
+
   function renderAll() {
     const p = $("panel");
     p.classList.toggle("on", view?.status === "connected");
     p.classList.toggle("gated", view ? !view.hasIdentity : false);
     $("devIdRow").hidden = !view?.devServer;
-    // If the active channel disappeared (left the shard), fall back to global.
-    if (view && !view.channels.some((c) => c.ch === activeCh)) activeCh = "global";
-    renderTabs();
-    renderLog();
+    const you = view?.you;
+    $("whoami").textContent = you ? you.handle : "";
+    if (view && !chans().some((c) => c.ch === activeCh)) activeCh = chans()[0]?.ch ?? "global";
+    applyRails();
+    renderTabs(); renderChannels(); renderMembers(); renderLog();
     if (view?.status === "error" && view.error) sys(view.error);
     else if (view?.status === "connecting") sys("Connecting…");
     else if (view && view.status === "off" && view.hasIdentity) sys("Chat is off. Open the Chat widget on the overlay to connect.");
   }
 
-  // ── live stream from the sidecar ─────────────────────────────────────────────
+  // ── live stream from the sidecar ─────────────────────────────────────────
   function listen() {
     if (es) es.close();
     es = new EventSource("/chat/events");
@@ -266,15 +436,18 @@
       try { f = JSON.parse(e.data); } catch { return; }
       if (f.type === "state") { view = { ...(view ?? {}), ...f.view }; renderAll(); }
       else if (f.type === "msg") {
-        const c = view?.channels?.find((x) => x.ch === f.msg.ch);
+        const c = chanOf(f.msg.ch);
         if (c) { c.msgs.push(f.msg); if (c.msgs.length > MAX_ROWS) c.msgs.splice(0, c.msgs.length - MAX_ROWS); }
         if (f.msg.ch === activeCh) append(msgRow(f.msg));
-        else { unread.add(f.msg.ch); renderTabs(); }
+        else { unread.add(f.msg.ch); renderTabs(); renderChannels(); }
       }
       else if (f.type === "presence") {
-        const c = view?.channels?.find((x) => x.ch === f.ch);
-        if (c) { c.count = f.count; renderTabs(); }
+        const c = chanOf(f.ch);
+        if (c) { c.count = f.count; if (Array.isArray(f.members)) c.members = f.members; }
+        renderTabs(); renderChannels();
+        if (f.ch === activeCh) renderMembers();
       }
+      else if (f.type === "dir") { if (view) view.directory = (f.channels ?? []).filter((d) => !chanOf(d.ch)); renderChannels(); }
       else if (f.type === "notice") sys(f.text);
     };
     es.onerror = () => { /* EventSource retries on its own */ };
@@ -290,28 +463,34 @@
     listen();
   }
 
-  // ── sending ──────────────────────────────────────────────────────────────────
+  // ── actions ──────────────────────────────────────────────────────────────
+  async function post(path, body) {
+    try {
+      const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.ok) { sys(d?.message || "That didn't work."); return false; }
+      return true;
+    } catch {
+      sys("Couldn't reach the overlay service.");
+      return false;
+    }
+  }
   async function send() {
     const el = $("sendInput");
     const text = el.value.trim();
     if (!text) return;
-    const c = view?.channels?.find((x) => x.ch === activeCh);
-    if (!c) { sys("Not in a channel yet."); return; }
+    if (!chanOf(activeCh)) { sys("Not in a channel yet."); return; }
     el.value = "";
-    try {
-      const r = await fetch("/api/chat/send", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ch: activeCh, text }),
-      });
-      const d = await r.json().catch(() => null);
-      if (!r.ok || !d?.ok) { sys(d?.message || "Couldn't send that."); el.value = text; }
-    } catch {
-      sys("Couldn't reach the overlay service.");
-      el.value = text;
-    }
+    if (!await post("/api/chat/send", { ch: activeCh, text })) el.value = text;
   }
+  async function joinNamed(name, mode) {
+    const n = (name ?? "").trim();
+    if (!n) { $("chanInput").focus(); return; }
+    if (await post("/api/chat/join", { name: n, mode })) $("chanInput").value = "";
+  }
+  function leave(ch) { void post("/api/chat/leave", { ch }); }
 
-  // ── identity gate (A/B build: plain handle → config; release: site verification) ──
+  // ── identity gate (dev builds only; production uses the verified account) ──
   async function saveHandle() {
     const h = $("handleInput").value.trim();
     if (!/^[A-Za-z0-9._-]{3,30}$/.test(h)) { $("handleInput").focus(); return; }
@@ -322,36 +501,57 @@
         body: JSON.stringify({ chatHandle: h }),
       });
     } catch { sys("Couldn't reach the overlay service."); return; }
-    // The sidecar re-arms chat on that POST; refresh the snapshot so the gate drops now.
     load();
   }
 
   // ── typing mode (shared shell keyboard grab, same as Journal / Twitch Chat) ──
   let typing = false;
-  function setTyping(on) {
+  let typingField = "send"; // which field the grab was requested for
+  function setTyping(on, field) {
     typing = !!on;
-    for (const b of [$("typeBtn"), $("gateTypeBtn")]) b.classList.toggle("active", typing);
+    if (field) typingField = field;
+    $("typeBtn").classList.toggle("active", typing);
+    $("gateTypeBtn").classList.toggle("active", typing);
     $("gateTypeBtn").textContent = typing ? "✓ Done" : "✎ Type mode";
     if (typing) { if (host()) host().editStart(); else focusField(); }
     else { if (host()) host().editEnd(); const a = document.activeElement; if (a && a.blur) a.blur(); }
   }
   function focusField() {
-    ($("panel").classList.contains("gated") ? $("handleInput") : $("sendInput")).focus();
+    if ($("panel").classList.contains("gated")) { $("handleInput").focus(); return; }
+    ($(typingField === "chan" ? "chanInput" : "sendInput")).focus();
   }
   window.__chatFocus = () => { if (typing) focusField(); };
   window.__chatExitTyping = () => { if (typing) setTyping(false); };
 
   $("sendBtn").addEventListener("click", send);
   $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
-  $("typeBtn").addEventListener("click", () => setTyping(!typing));
+  $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
+  $("joinBtn").addEventListener("click", () => joinNamed($("chanInput").value, "join"));
+  $("createBtn").addEventListener("click", () => joinNamed($("chanInput").value, "create"));
+  $("chanInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); joinNamed($("chanInput").value); } });
+  // Clicking into a field over the game needs the shell's keyboard grab, or the keystrokes
+  // reach Star Citizen instead.
+  $("chanInput").addEventListener("focus", () => { if (!typing) setTyping(true, "chan"); });
   $("gateTypeBtn").addEventListener("click", () => setTyping(!typing));
   $("gateSaveBtn").addEventListener("click", saveHandle);
   $("handleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveHandle(); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && typing) { e.preventDefault(); setTyping(false); } });
 
+  $("leftBtn").addEventListener("click", () => {
+    showLeft = !showLeft;
+    try { localStorage.setItem("chatLeft", showLeft ? "1" : "0"); } catch { /* private mode */ }
+    applyRails();
+  });
+  $("rightBtn").addEventListener("click", () => {
+    showRight = !showRight;
+    try { localStorage.setItem("chatRight", showRight ? "1" : "0"); } catch { /* private mode */ }
+    applyRails();
+  });
+
   // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
+  applyRails();
   load();
   try { host()?.ready?.(); } catch { /* not embedded */ }
 </script>

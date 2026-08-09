@@ -17,16 +17,33 @@
 //                   { handle, verified } — the production mode; endpoint lands with the
 //                   site-side work, shape documented at verifyIdentity().
 //
-// Wire protocol (JSON text frames over /ws):
-//   c→s  {t:"hello", token?, handle?}          auth; nothing else is accepted before it
+// Channel kinds (v2, 2026-08-09 — EVE-structured widget):
+//   AUTO    global · region:<use1b> · shard:<full id>   follow the Game.log, never chosen
+//   ORG     org:<sid>                                   auto-joined from the VERIFIED org on the
+//                                                       RSI dossier (site auth carries it)
+//   CUSTOM  custom:<slug>                               user-created rooms; join/create/leave;
+//                                                       a public directory lists them
+//
+// Wire protocol (JSON text frames over /ws). v1 clients (0.1.41) only ever send hello/loc/msg
+// and ignore unknown frames, so everything added here is backward compatible.
+//   c→s  {t:"hello", token?, handle?, org?}    auth; nothing else is accepted before it
 //        {t:"loc", region?, shard?}            current location (null/absent = leave)
 //        {t:"msg", ch, text}                   say something
+//        {t:"join", name, mode?}               custom room by display name; mode "join" errors
+//                                              if absent, "create" errors if taken, default
+//                                              join-or-create
+//        {t:"leave", ch}                       custom rooms only (auto/org follow identity)
 //   s→c  {t:"welcome", you:{handle,verified}}  hello accepted
-//        {t:"joined", ch} {t:"left", ch}       membership changes (always server-initiated)
+//        {t:"joined", ch, label?, kind?}       membership changes (always server-initiated)
+//        {t:"left", ch}
 //        {t:"history", ch, msgs:[Msg]}         last messages, sent right after joined
 //        {t:"msg", ...Msg}                     live message (Msg = {ch,id,from,text,at})
-//        {t:"presence", ch, count}             unique handles in the room, debounced
+//        {t:"presence", ch, count, members}    unique handles in the room, debounced;
+//                                              members = [{handle,verified}] capped at 200
+//        {t:"dir", channels}                   the custom-room directory [{ch,label,count}],
+//                                              sent on welcome + debounced on change
 //        {t:"error", code, message}            bad_auth | banned | not_member | rate | bad_msg
+//                                              | bad_channel | no_such_channel | channel_exists
 
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -42,8 +59,12 @@ const HISTORY_SEND = 50;    // sent on join
 const MSG_MAX = 400;        // chars
 const RATE_N = 5, RATE_WINDOW_MS = 10_000; // msgs per window per connection
 
-const dataDir = join(dirname(fileURLToPath(import.meta.url)), "data");
+// CHAT_DATA_DIR: tests point this at a scratch dir so their bans/rooms never touch real state.
+const dataDir = process.env.CHAT_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), "data");
 const bansPath = join(dataDir, "bans.json");
+const channelsPath = join(dataDir, "channels.json");
+const MEMBERS_CAP = 200;        // handles listed per presence frame (count is always exact)
+const CUSTOM_IDLE_PRUNE_MS = 14 * 24 * 3600 * 1000; // empty custom rooms older than this drop
 
 // ── Bans — lowercase handles. The whole point of the RSI-verify gate is that these stick. ──
 let bans = new Set();
@@ -52,6 +73,45 @@ catch { /* no bans file yet */ }
 function saveBans() {
   mkdirSync(dataDir, { recursive: true });
   writeFileSync(bansPath, JSON.stringify([...bans], null, 2));
+}
+
+// ── Custom-room directory — survives restarts so a created room is a durable place. ──
+/** slug → { label, created, lastActive } (all customs are public; key = "custom:"+slug). */
+let customDir = new Map();
+try {
+  const raw = JSON.parse(readFileSync(channelsPath, "utf8"));
+  customDir = new Map(Object.entries(raw));
+} catch { /* no channels file yet */ }
+function saveChannels() {
+  // Prune long-empty rooms on the way out so the directory can't grow forever.
+  const now = Date.now();
+  for (const [slug, meta] of customDir) {
+    const empty = (rooms.get(`custom:${slug}`)?.members.size ?? 0) === 0;
+    if (empty && now - (meta.lastActive ?? meta.created ?? now) > CUSTOM_IDLE_PRUNE_MS) customDir.delete(slug);
+  }
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(channelsPath, JSON.stringify(Object.fromEntries(customDir), null, 2));
+}
+/** Display name → slug. The slug is the identity; the label keeps the user's casing. */
+function slugOfName(name) {
+  const s = String(name ?? "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9._-]/g, "");
+  return /^[a-z0-9][a-z0-9._-]{2,29}$/.test(s) ? s : null;
+}
+function dirPayload() {
+  return [...customDir.entries()].map(([slug, meta]) => ({
+    ch: `custom:${slug}`,
+    label: meta.label,
+    count: new Set([...(rooms.get(`custom:${slug}`)?.members ?? [])].map((c) => c.handleLower)).size,
+  }));
+}
+let dirTimer = null;
+function broadcastDir() {
+  if (dirTimer) return;
+  dirTimer = setTimeout(() => {
+    dirTimer = null;
+    const frame = JSON.stringify({ t: "dir", channels: dirPayload() });
+    for (const c of conns) if (c.handle && c.ws.readyState === 1) c.ws.send(frame);
+  }, 500);
 }
 
 // ── Rooms ───────────────────────────────────────────────────────────────────
@@ -73,16 +133,22 @@ function presence(ch) {
   if (!r || r.presenceTimer) return;
   r.presenceTimer = setTimeout(() => {
     r.presenceTimer = null;
-    const handles = new Set([...r.members].map((c) => c.handleLower));
-    roomSend(ch, { t: "presence", ch, count: handles.size });
+    // One row per HANDLE (a second window isn't a second person), capped for frame size —
+    // the count stays exact past the cap.
+    const seen = new Map();
+    for (const c of r.members) if (!seen.has(c.handleLower)) seen.set(c.handleLower, { handle: c.handle, verified: c.verified });
+    roomSend(ch, { t: "presence", ch, count: seen.size, members: [...seen.values()].slice(0, MEMBERS_CAP) });
+    if (ch.startsWith("custom:")) broadcastDir();
   }, 250);
 }
-function joinRoom(conn, ch) {
+/** Label + kind ride the joined frame for rooms the CLIENT can't derive (org names, custom
+ *  display casing). Auto channels send neither; the client's own labels are already right. */
+function joinRoom(conn, ch, label, kind) {
   if (conn.channels.has(ch)) return;
   const r = room(ch);
   r.members.add(conn);
   conn.channels.add(ch);
-  conn.send({ t: "joined", ch });
+  conn.send({ t: "joined", ch, ...(label ? { label } : {}), ...(kind ? { kind } : {}) });
   conn.send({ t: "history", ch, msgs: r.history.slice(-HISTORY_SEND) });
   presence(ch);
 }
@@ -92,20 +158,31 @@ function leaveRoom(conn, ch) {
   const r = rooms.get(ch);
   if (r) {
     r.members.delete(conn);
-    // An empty region/shard room is garbage — shards churn every patch day. Global persists.
-    if (r.members.size === 0 && ch !== "global") rooms.delete(ch);
+    // An empty region/shard room is garbage — shards churn every patch day. Global persists,
+    // and CUSTOM rooms keep their object (and scrollback) while their directory entry lives;
+    // the idle prune in saveChannels() is what finally retires them.
+    if (r.members.size === 0 && (ch.startsWith("region:") || ch.startsWith("shard:"))) rooms.delete(ch);
     else presence(ch);
+  }
+  if (ch.startsWith("custom:")) {
+    const meta = customDir.get(ch.slice("custom:".length));
+    if (meta) meta.lastActive = Date.now();
+    broadcastDir();
   }
   conn.send({ t: "left", ch });
 }
 
 // ── Identity ────────────────────────────────────────────────────────────────
 const HANDLE_RE = /^[A-Za-z0-9._-]{3,30}$/; // RSI handle shape
+const ORG_SID_RE = /^[A-Za-z0-9]{3,12}$/; // RSI org SIDs (e.g. IRREGS)
 async function verifyIdentity(hello) {
   if (AUTH_MODE === "dev") {
     const handle = String(hello.handle ?? "").trim();
     if (!HANDLE_RE.test(handle)) return null;
-    return { handle, verified: true };
+    // Dev passthrough for org testing: hello.org = {sid, name}.
+    const sid = String(hello.org?.sid ?? "");
+    const org = ORG_SID_RE.test(sid) ? { sid, name: String(hello.org?.name ?? sid).slice(0, 60) } : null;
+    return { handle, verified: true, org };
   }
   // site mode: the token is the overlay's existing sync token; the endpoint answers
   // { handle: "RSIHandle", verified: true|false } and 401s an unknown token. A KNOWN
@@ -119,7 +196,11 @@ async function verifyIdentity(hello) {
     const d = await res.json();
     const handle = String(d?.handle ?? "");
     if (d?.verified !== true || !HANDLE_RE.test(handle)) return { handle: "", verified: false };
-    return { handle, verified: true };
+    // The verified org from the RSI dossier (captured at handle-verification time) drives the
+    // org channel. Absent/redacted org just means no org room — never a refusal.
+    const sid = String(d?.orgSid ?? "");
+    const org = ORG_SID_RE.test(sid) ? { sid, name: String(d?.orgName ?? sid).slice(0, 60) } : null;
+    return { handle, verified: true, org };
   } catch { return null; }
 }
 
@@ -212,14 +293,47 @@ wss.on("connection", (ws) => {
       conn.verified = id.verified;
       conn.send({ t: "welcome", you: { handle: conn.handle, verified: conn.verified } });
       joinRoom(conn, "global");
+      // Verified org → its room, automatically. No setup, no invite — membership on the RSI
+      // dossier IS the invite.
+      if (id.org) joinRoom(conn, `org:${id.org.sid.toLowerCase()}`, id.org.name, "org");
+      conn.send({ t: "dir", channels: dirPayload() });
       return;
     }
     if (!conn.handle) return; // nothing but hello before auth
 
     if (f.t === "loc") {
       const want = new Set(locChannels(f));
-      for (const ch of [...conn.channels]) if (ch !== "global" && !want.has(ch)) leaveRoom(conn, ch);
+      // Only the AUTO location channels churn with the log — global/org/custom stay put.
+      for (const ch of [...conn.channels])
+        if ((ch.startsWith("region:") || ch.startsWith("shard:")) && !want.has(ch)) leaveRoom(conn, ch);
       for (const ch of want) joinRoom(conn, ch);
+      return;
+    }
+
+    // Custom rooms: join-or-create by display name (mode narrows it: "join" = must exist,
+    // "create" = must not).
+    if (f.t === "join") {
+      const label = String(f.name ?? "").trim().slice(0, 30);
+      const slug = slugOfName(label);
+      if (!slug) { conn.send({ t: "error", code: "bad_channel", message: "Channel names are 3–30 letters, numbers, spaces or -._" }); return; }
+      const exists = customDir.has(slug);
+      if (f.mode === "join" && !exists) { conn.send({ t: "error", code: "no_such_channel", message: `No channel called “${label}”.` }); return; }
+      if (f.mode === "create" && exists) { conn.send({ t: "error", code: "channel_exists", message: `“${customDir.get(slug).label}” already exists — join it instead.` }); return; }
+      if (!exists) {
+        customDir.set(slug, { label, created: Date.now(), lastActive: Date.now() });
+        saveChannels();
+        broadcastDir();
+      }
+      joinRoom(conn, `custom:${slug}`, customDir.get(slug).label, "custom");
+      return;
+    }
+
+    if (f.t === "leave") {
+      const ch = String(f.ch ?? "");
+      // Only custom rooms are leavable — auto channels follow the log, the org room follows
+      // the dossier. (Muting those is a CLIENT affordance, not membership.)
+      if (!ch.startsWith("custom:")) { conn.send({ t: "error", code: "bad_channel", message: "Only custom channels can be left." }); return; }
+      leaveRoom(conn, ch);
       return;
     }
 
@@ -249,8 +363,13 @@ wss.on("connection", (ws) => {
       const r = rooms.get(ch);
       if (r) {
         r.members.delete(conn);
-        if (r.members.size === 0 && ch !== "global") rooms.delete(ch);
+        if (r.members.size === 0 && (ch.startsWith("region:") || ch.startsWith("shard:"))) rooms.delete(ch);
         else presence(ch);
+      }
+      if (ch.startsWith("custom:")) {
+        const meta = customDir.get(ch.slice("custom:".length));
+        if (meta) meta.lastActive = Date.now();
+        broadcastDir();
       }
     }
   });

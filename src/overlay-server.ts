@@ -284,6 +284,10 @@ interface Config {
    *  the site resolves it to the RSI-VERIFIED handle, and unverified accounts get no chat
    *  (Sub's rule: chat identities must be bannable). */
   chatHandle: string;
+  /** Custom chat rooms the user has joined, by DISPLAY NAME. Rejoined on every connect, so a
+   *  restart lands you back in the same channels. The client owns this list; the sidecar only
+   *  persists what it reports. */
+  chatChannels: string[];
   /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
    *  wizard is finished; the wizard never auto-opens again once true. */
   setupDone: boolean;
@@ -368,6 +372,7 @@ const DEFAULTS: Config = {
   // verified RSI handle). Local dev server: ws://127.0.0.1:8788/ws + a chatHandle.
   chatServerUrl: "wss://chat.subliminal.gg/ws",
   chatHandle: "",
+  chatChannels: [],
   setupDone: false,
   setupSettingsReviewed: false,
   setupShareResolved: false,
@@ -919,8 +924,16 @@ function chatConfigure(): void {
     url: config.chatServerUrl,
     handle: config.chatHandle,
     token: config.syncToken,
+    channels: config.chatChannels,
   }, active);
 }
+// The client is authoritative about which custom rooms it's in (joins and leaves both land
+// asynchronously, from the server). Persist whatever it reports so the next launch rejoins.
+chat.on("channels", (names: string[]) => {
+  if (JSON.stringify(names) === JSON.stringify(config.chatChannels)) return;
+  config.chatChannels = names;
+  void saveConfig();
+});
 
 /** The parser events chat cares about: shard join/hop feeds the region+shard channels,
  *  and leaving the PU (quit/menu) drops them. Runs on the seed pass too, so a mid-session
@@ -1714,6 +1727,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     res.end(JSON.stringify(out));
     return;
   }
+  // Joining/creating and leaving custom rooms — same loopback rule as sending: these act
+  // with the user's chat identity, so the LAN must not be able to drive them.
+  if ((url === "/api/chat/join" || url === "/api/chat/leave") && req.method === "POST") {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, message: "Chat channels can only be changed from this machine." }));
+      return;
+    }
+    const body = await readBody(req);
+    const out = url.endsWith("/join")
+      ? chat.join(String(body.name ?? ""), body.mode === "join" || body.mode === "create" ? body.mode : undefined)
+      : chat.leave(String(body.ch ?? ""));
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(out));
+    return;
+  }
 
   // Mining Assistant: live state stream + snapshot + controls.
   if (url === "/mining/events") {
@@ -1992,6 +2021,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.chatHandle === "string") {
       const h = body.chatHandle.trim();
       if (!h || /^[A-Za-z0-9._-]{3,30}$/.test(h)) config.chatHandle = h;
+    }
+    // Only ever WRITTEN by the chat client's own "channels" event (see chat.on above) — a
+    // POST may still clear it, which is how a user resets their room list by hand.
+    if (Array.isArray(body.chatChannels)) {
+      config.chatChannels = body.chatChannels.filter((n: unknown) => typeof n === "string" && n.trim()).slice(0, 30);
     }
     if (typeof body.miningTone === "string") config.miningTone = body.miningTone;
     // GPU accel is read by electron/main.cjs at startup; persist here, restart applies it.
