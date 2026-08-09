@@ -1868,6 +1868,60 @@ const COGHIDE = `(async () => {
 // It must: prefer the fabricator capture over the clay render, fall back when there's no capture,
 // never re-announce a receipt it has already shown, ignore stale ones an SSE reconnect replays,
 // and queue a burst instead of flickering. Local URLs stand in for the two image endpoints.
+// The completion card's auto-hide. Sub, 2026-08-09: he picked the rating, alt-tabbed, came back
+// and could no longer answer the solo question. The post-answer ceiling was a flat deadline that
+// kept counting while he was away in the game.
+const REPORTHOLD = `(async () => {
+  ${PRELUDE}
+  const card = document.getElementById("mreport");
+  const up = () => card.classList.contains("show");
+
+  const completion = {
+    title: "Deep space hit", at: new Date().toISOString(), contractKey: "TEST_KEY",
+    aUEC: 42000, payout: null, durationMs: 600000, blueprints: [], giver: "Headhunters",
+    missionType: "Assassination", rank: null, reputationGained: [], aUecPerHour: null,
+    timesCompleted: 3, poolProgress: { owned: 7, total: 15 },
+    classification: { combat: null, activity: null, source: null },
+  };
+
+  // Caught deliberately: a throw here surfaces as a bare "harness error" with no line and no
+  // suite name, which costs a bisection run every time. Naming it is one line.
+  try { showReport(completion); } catch (e) { ok("showReport threw", false, e && e.message); return out; }
+  ok("the card shows", up());
+  ok("...on the plain countdown, not the ceiling", !card.classList.contains("answered"));
+
+  // Answering is what switches it to the ceiling.
+  const opt = card.querySelector(".mr-opt");
+  ok("the questions rendered", !!opt);
+  opt.click();
+  await sleep(30);
+  ok("answering marks the card answered", card.classList.contains("answered"));
+  ok("...and it is still up", up());
+
+  // 🔑 The reported bug: away in the game, the ceiling ran and took the card with it. Blur then
+  // focus must leave the card up and cancel any pending deadline.
+  window.dispatchEvent(new Event("blur"));
+  await sleep(20);
+  window.dispatchEvent(new Event("focus"));
+  await sleep(20);
+  ok("coming back to the overlay keeps the card up", up());
+  ok("...with no deadline pending while it has focus", (mrTimer === null), String(mrTimer));
+
+  // Hovering counts as using it too.
+  window.dispatchEvent(new Event("blur"));
+  card.dispatchEvent(new MouseEvent("mouseenter"));
+  await sleep(20);
+  ok("a pointer on the card also holds it open", (mrTimer === null));
+  card.dispatchEvent(new MouseEvent("mouseleave"));
+  await sleep(20);
+  // Unattended: pointer off AND the window blurred. The ceiling has to come back, or a
+  // forgotten card lives forever — the trapped-user bug.
+  ok("left unattended, the ceiling re-arms", (mrTimer !== null));
+
+  ok("Close still dismisses it", (document.getElementById("mrClose").click(), !up()));
+  return out;
+})()`;
+
 // Chat's outbound links and the slash menu. Two things Sub reported on 2026-08-09: a blueprint
 // link and a starcitizen.tools item lookup rendered identically (only the tooltip differed), and
 // the command menu never appeared mid-sentence so the inline commands were undiscoverable.
@@ -2182,6 +2236,7 @@ app.whenReady().then(async () => {
     fails += await run("chrome over the native view", VIEWMASK, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
     fails += await run("chat links + slash menu", CHATLINKS, null, null, "chat.html");
+    fails += await run("completion card holds while you use it", REPORTHOLD, null);
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
     // hunting that by bisection wastes a run each time.

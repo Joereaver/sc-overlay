@@ -835,6 +835,9 @@ export class MissionTracker extends EventEmitter {
    *  a stale mission from a previous shard — wait for a marker or a manual pick. */
   private markerSinceJoin = false;
   private completedMissionIds = new Set<string>();
+  /** missionId → when it completed. The fence completionBlueprints() uses to keep one
+   *  mission's receipts off the next mission's card when contracts overlap. */
+  private completedAtByMission = new Map<string, number>();
   /** Any mission that logged an end (complete/fail/abandon) — dropped from the
    *  active picker and auto-follow so only missions you currently have show. */
   private endedMissionIds = new Set<string>();
@@ -1234,6 +1237,12 @@ export class MissionTracker extends EventEmitter {
   ): void {
     const completedAtMs = ts ? Date.parse(ts) : Date.now();
     if (!Number.isFinite(completedAtMs)) return;
+    // 🔑 Recorded BEFORE the freshness gate below and for every completion, carded or not:
+    // completionBlueprints() uses these to stop one mission's receipts landing on the next
+    // card, and a completion whose card was suppressed still produced a receipt that has to
+    // be fenced off. Keyed by missionId so the two completion signals (contractComplete and
+    // MissionEnded) can't record the same mission twice with slightly different times.
+    if (!this.completedAtByMission.has(missionId)) this.completedAtByMission.set(missionId, completedAtMs);
     const info = this.missions.get(missionId);
     const aUEC =
       this.lastReward && Math.abs(this.lastReward.atMs - completedAtMs) <= REWARD_WINDOW_MS
@@ -1319,12 +1328,35 @@ export class MissionTracker extends EventEmitter {
     return Math.round(amount / (ms / 3_600_000));
   }
 
-  /** Blueprint names received during the completed mission (receipt time between its
-   *  accept and completion) — the "+N blueprints" line on the completion card. */
+  /** Blueprint names received during the completed mission — the tiles on the completion card.
+   *
+   *  🔴 THE WINDOW MAY NOT REACH BACK PAST THE PREVIOUS COMPLETION. It used to open at this
+   *  mission's ACCEPT time, which is wrong the moment two contracts overlap — and running
+   *  several at once is the normal way to play. Finish A at 10:10 and B (accepted 10:05) at
+   *  10:12 and B's window was [10:05, 10:12], so A's blueprint was inside it: Sub unlocked ONE
+   *  blueprint and the card showed two, the second being an M8A from an earlier mission
+   *  (2026-08-09, "when I do missions in rapid succession it might just merge the images").
+   *
+   *  🔑 The floor is the previous completion's window END, not the completion itself. A receipt
+   *  lands 0–1s AFTER the completion it belongs to, so a floor at the bare completion time
+   *  leaves it sitting inside the next mission's window — which is the bug, not the fix.
+   *
+   *  Two completions closer together than REWARD_WINDOW_MS therefore leave the second card
+   *  empty. That is the honest answer: with the receipts interleaved there is no evidence in
+   *  the log saying which mission paid out, and the log never attributes a blueprint to a
+   *  mission (every receipt carries an all-zeros MissionId). A confidently wrong tile is worse
+   *  than a missing one — the same rule the split-pool fix rests on.
+   *
+   *  🔑 A missing accept no longer means -Infinity. It used to, so an app that attached
+   *  mid-session (no accept seen) matched EVERY receipt it had ever replayed. */
   private completionBlueprints(): BlueprintReward[] {
     const c = this.completion;
     if (!c) return [];
-    const lo = c.acceptedAtMs ?? -Infinity;
+    let priorEnd = -Infinity;
+    for (const [id, t] of this.completedAtByMission) {
+      if (id !== c.missionId && t < c.completedAtMs) priorEnd = Math.max(priorEnd, t + REWARD_WINDOW_MS);
+    }
+    const lo = Math.max(c.acceptedAtMs ?? c.completedAtMs - REWARD_WINDOW_MS, priorEnd);
     const hi = c.completedAtMs + REWARD_WINDOW_MS;
     const out: BlueprintReward[] = [];
     for (const [name, ts] of this.observedAt) {
@@ -1594,6 +1626,9 @@ export class MissionTracker extends EventEmitter {
     this.screenMissionId = null;
     this.endedMissionIds.clear();
     this.completedMissionIds.clear();
+    // Mission ids are per-connection GUIDs, so none of these times can describe anything on
+    // the other side of a shard change.
+    this.completedAtByMission.clear();
     if (this.completionTimer) clearTimeout(this.completionTimer);
     this.completionTimer = null;
     this.completion = null;

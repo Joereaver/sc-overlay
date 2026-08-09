@@ -2182,9 +2182,24 @@
   const REPORT_HOLD_MS = 40000;
   // Once someone touches the card the countdown is cancelled — Sub's rule: "if they start
   // interacting with it, let it stay up". This is the ceiling on that, NOT a second countdown:
-  // a card that can never close is the trapped-user bug this project keeps rediscovering, and
-  // three minutes is far past any honest interaction with three controls.
-  const REPORT_MAX_MS = 180000;
+  // a card that can never close is the trapped-user bug this project keeps rediscovering.
+  //
+  // 🔑 The ceiling only runs while the player is AWAY — pointer off the card and the overlay
+  // window not focused. It used to be a flat three minutes from the last click, which expired
+  // on someone who answered the first question, alt-tabbed into the game for a couple of
+  // minutes, and came back to finish: the card was gone and the remaining questions could
+  // never be answered (Sub, 2026-08-09: "will it eventually time out and not let me select
+  // whether or not I did it solo? that's what happened to me sometimes").
+  //
+  // Answers are POSTed per click, so nothing already given was lost — what was lost was the
+  // chance to give the rest, which is the crowdsourced data the card exists to collect.
+  //
+  // The anti-trap guarantee is intact and is why this is a pause rather than a removal:
+  // the timer is ARMED by default and re-arms the moment you leave, so a card you walk away
+  // from still tidies itself up. Ten minutes rather than three, because "alt-tab, fly the next
+  // leg, come back and finish answering" is the behaviour being supported and three was inside
+  // it. The ceiling only has to beat "forgotten", not "busy".
+  const REPORT_MAX_MS = 600000;
   let mrAt = null, mrTimer = null, mrRaf = null, mrContract = null, mrAnswers = {};
 
   const DIFFICULTY = [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]];
@@ -2322,6 +2337,7 @@
     $("mrAsk").innerHTML = reportAsk(c);
     const box = $("mreport");
     box.classList.remove("answered");
+    mrAnswered = false;   // a new completion starts on the plain countdown, not the ceiling
     box.classList.add("show");
     mrCountdown(REPORT_HOLD_MS);
   }
@@ -2385,9 +2401,31 @@
     mrTimer = setTimeout(hideReport, ms);
   }
 
+  /* The post-interaction ceiling. Runs only while the card is unattended: the pointer is off it
+     AND the overlay window doesn't have focus. Either of those means the player is still with
+     it, and a card that vanishes out from under someone mid-answer is the bug this replaced. */
+  let mrAnswered = false, mrHovered = false, mrWinFocused = false;
+  function armReportCeiling() {
+    if (!mrAnswered) return;
+    if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
+    if (mrHovered || mrWinFocused) return;      // being used — no deadline while that's true
+    mrTimer = setTimeout(hideReport, REPORT_MAX_MS);
+  }
+  {
+    const card = $("mreport");
+    card.addEventListener("mouseenter", () => { mrHovered = true; armReportCeiling(); });
+    card.addEventListener("mouseleave", () => { mrHovered = false; armReportCeiling(); });
+    // Alt-tabbing to the overlay is "I am dealing with this now"; alt-tabbing away re-arms.
+    // 🔑 Plain window events, not the shell's focus IPC: this has to hold in the widget harness
+    // and in a browser tab too, where overlayApi doesn't exist at all.
+    window.addEventListener("focus", () => { mrWinFocused = true; armReportCeiling(); });
+    window.addEventListener("blur", () => { mrWinFocused = false; armReportCeiling(); });
+  }
+
   function hideReport() {
     if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
+    mrAnswered = false;
     $("mreport").classList.remove("show");
     $("panel")?.classList.remove("mr-open"); // back into the normal stacking order
     if (mrForcedPanel) { document.body.classList.add("bp-hidden"); mrForcedPanel = false; }
@@ -2431,9 +2469,9 @@
     sendFeedback();
     // Interaction cancels the countdown (Sub's rule) — replaced by the ceiling, not by nothing.
     $("mreport").classList.add("answered");
-    if (mrTimer) clearTimeout(mrTimer);
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
-    mrTimer = setTimeout(hideReport, REPORT_MAX_MS);
+    mrAnswered = true;
+    armReportCeiling();
     const cur = current && current.completion;
     if (cur) $("mrAsk").innerHTML = reportAsk(cur); // only the answers change; leave the summary alone
   });
