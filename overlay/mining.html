@@ -426,8 +426,8 @@
       <div class="cog-tone">Alert tone <span class="lnk" id="toneBtn">choose WAV…</span><span class="lnk clr hidden" id="toneClr">reset</span></div>
       <div class="cog-sec">Announce</div>
       <div class="cog-seg"><span class="seg" id="segTarget" data-m="target">Targets only</span><span class="seg" id="segEvery" data-m="every">Every rock</span></div>
-      <label class="cog-opt" title="Speak up for a scan that isn't the ore you came for: debris, a signature I can't identify, or a value that could be either a rock or a debris field. Turn this off if you only care about rocks. Rocks you've targeted are always called out.">
-        <input type="checkbox" id="debrisChk" /> Call out debris &amp; unknown
+      <label class="cog-opt" title="Speak up for a scan that isn't the ore you came for: a debris field, or a value that could be either a rock or debris. Turn this off if you only care about rocks. Rocks you've targeted are always called out.">
+        <input type="checkbox" id="debrisChk" /> Call out debris
       </label>
       <div class="cog-sec">Tools</div>
       <label class="cog-opt" title="Draws a box on screen showing the area the app reads for a scan signature. Nothing outside it is looked at.">
@@ -619,17 +619,10 @@
   // was "no table match = debris".
   const verdictOf = (sc) => sc.verdict || (sc.matches.length ? "ore" : "debris");
 
-  // "I don't know what that is, but it's not ore" — Sub's line, five ways, picked at random so a
-  // stubborn unidentifiable contact doesn't repeat the same sentence at you. Each is ONE clip
-  // (whole sentences, unlike the name call-outs, which are stitched); the text is also the
-  // Windows-TTS fallback for anyone whose build has no clips.
-  const UNKNOWN_LINES = [
-    ["c_unknown1", "I don't know what that is, but it's not ore."],
-    ["c_unknown2", "That is not ore. Beyond that, I have no idea."],
-    ["c_unknown3", "I'm unable to identify that. I can tell you it isn't ore."],
-    ["c_unknown4", "No match in my records. Whatever it is, it isn't ore."],
-    ["c_unknown5", "I don't recognize that signature. It is not ore."],
-  ];
+  // (HAL's five "I don't know what that is" lines used to live here. An `unknown` value is one the
+  // game cannot draw as a signature, so it is now refused by the tracker and never reaches this
+  // widget at all — see applyMineableRead. The c_unknown1..5 clips are still in overlay/tts/ if the
+  // call-out is ever wanted back.)
 
   // ---- render ----
   function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
@@ -873,34 +866,32 @@
   //                     dismissive — which is the case Sub asked to make easier (Savrilium ×5 is
   //                     16,000, and someone hunting Savrilium must not hear it called debris).
   //   debris         -> "Debris", flash, no chime, so it stays distinct from a target hit
-  //   unknown        -> one of five HAL ways of saying it isn't ore and it isn't identifiable
+  //   unknown        -> never gets here; the tracker refuses a value the game cannot draw
   function onNewScan(sc) {
     const v = verdictOf(sc);
     const isTarget = sc.matches.some((m) => targetSet.has(m.name));
+    // 🔑 `unknown` is a number the game cannot draw as a signature, so it is never a contact — the
+    // tracker refuses it outright (applyMineableRead) and it should not arrive at all. It still can
+    // from a scan persisted by an older build, and it names no rock, so it has to return HERE
+    // rather than fall through: everything below the debris branch assumes matches[0] exists.
+    if (v === "unknown") return;
     // 🔑 While the widget is HIDDEN (armed for auto-show) it must be silent. It stays subscribed
     // to the event stream purely so auto-show can pop it — announcing from an invisible widget is
     // what made "debris" speak when the Mining Assistant wasn't even open.
-    // Evidence that the player is REALLY scanning is either of: the number resolved to a known
+    // Evidence strong enough to POP THE WIDGET OPEN is either of: the number resolved to a known
     // ore, or the frame showed the scan glyph beside it (sc.confirmed — see findScanGlyph in
-    // capture.cjs). Debris used to be barred from auto-show because a bare number proved nothing
-    // and the widget kept popping itself up mid-flight; a confirmed glyph is proof, so confirmed
-    // debris pops again. An unconfirmed non-match never reaches here — the tracker drops it.
-    const real = (s) => s.matches.length > 0 || s.confirmed === true;
-    // The switch governs everything that ISN'T the ore you came for: debris, an unidentifiable
-    // contact, and an ambiguous one you aren't hunting. None of those is worth a word, a flash, or
-    // popping the widget open if you've said you only care about rocks. A target — even an
-    // ambiguous target — is never suppressed by it.
-    if ((v === "debris" || v === "unknown" || (v === "ore-or-debris" && !isTarget)) && !debrisOn()) return;
-    if (hiddenMode) { if (real(sc)) maybeAutoShow(); return; }
+    // capture.cjs). Debris is deliberately the weaker case: the tracker will announce an exact
+    // panel count with no glyph (13 legal values is evidence in itself), but only a glyph gets it
+    // to un-hide a widget the player closed. `unknown` cannot reach here at all any more.
+    const canPop = (s) => s.matches.length > 0 || s.confirmed === true;
+    // The switch governs everything that ISN'T the ore you came for: debris and an ambiguous read
+    // you aren't hunting. Neither is worth a word, a flash, or popping the widget open if you've
+    // said you only care about rocks. A target — even an ambiguous target — is never suppressed.
+    if ((v === "debris" || (v === "ore-or-debris" && !isTarget)) && !debrisOn()) return;
+    if (hiddenMode) { if (canPop(sc)) maybeAutoShow(); return; }
     const el = $("scanNow");
     const flash = () => { el.classList.remove("hit"); void el.offsetWidth; el.classList.add("hit"); };
     if (v === "debris") { maybeAutoShow(); flash(); speakClips(["n_debris"], "Debris"); return; }
-    if (v === "unknown") {
-      maybeAutoShow(); flash();
-      const line = UNKNOWN_LINES[Math.floor(Math.random() * UNKNOWN_LINES.length)];
-      speakClips([line[0]], line[1]);
-      return;
-    }
     maybeAutoShow();                 // a REAL ore signature => the player is genuinely scanning
     if (isTarget) { flash(); chime(); }
     // Lead with the hunted rock when a value matches more than one (19,200 is Savrilium ×6 AND

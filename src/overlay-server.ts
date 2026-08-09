@@ -2470,8 +2470,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
 
   // The verdict on a signature the screen-read found: did the frame also show the scan glyph
   // beside it? Only the caller can answer that (it holds the bitmap; this process only ever sees
-  // the OCR's text). Unconfirmed numbers still resolve a KNOWN rock — a table hit is its own
-  // evidence — but they can't announce debris, which is where the false call-outs came from.
+  // the OCR's text). The glyph corroborates, it never licenses — what the tracker does with a read
+  // is decided by the VALUE (see applyMineableRead), and a number the game cannot draw is refused
+  // however convincing the pixels beside it looked.
   if (url === "/api/mining/scan" && req.method === "POST") {
     const body = await readBody(req);
     const signature = Number(body?.signature);

@@ -669,19 +669,22 @@ const MININGSAY = `(async () => {
      JSON.stringify(said && said.slugs));
   ok("...with the target chime", chimed);
 
-  // debris and unknown
+  // debris
   targetSet.clear();
   say(scan("debris", 6000, [], true));
   await sleep(30);
   ok("debris says Debris", said && said.slugs && said.slugs[0] === "n_debris", JSON.stringify(said && said.slugs));
   ok("...without the target chime", !chimed);
-  const UNK = ["c_unknown1", "c_unknown2", "c_unknown3", "c_unknown4", "c_unknown5"];
-  const seen = new Set();
-  for (let i = 0; i < 60; i++) { say(scan("unknown", 2500 + i, [], true)); await sleep(2); if (said && said.slugs) seen.add(said.slugs[0]); }
-  ok("unknown says it doesn't know — and varies", seen.size >= 3 && [...seen].every(s => UNK.includes(s)),
-     [...seen].sort().join(", "));
-  ok("...and the panel says Unknown, not Debris",
-     document.getElementById("scanNow").textContent.includes("Unknown"),
+
+  // unknown — a value the game cannot draw as a signature. The tracker refuses these outright now
+  // (Sub, 2026-08-09: the scanner was popping open mid-flight off a HUD number whose glyph check
+  // passed), so one should never arrive here at all. A stale scan persisted from an older build
+  // still has to RENDER without speaking, which is what this asserts.
+  say(scan("unknown", 2500, [], true));
+  await sleep(30);
+  ok("an unknown value is silent even with the glyph confirmed", said === null, JSON.stringify(said));
+  ok("...and never chimes or claims to be a rock", !chimed
+     && document.getElementById("scanNow").textContent.includes("Unknown"),
      document.getElementById("scanNow").textContent.slice(0, 60));
 
   // the switch
@@ -689,18 +692,15 @@ const MININGSAY = `(async () => {
   say(scan("debris", 8000, [], true));
   await sleep(30);
   ok("the switch silences debris", said === null);
-  say(scan("unknown", 9999, [], true));
-  await sleep(30);
-  ok("...and unknown", said === null);
   say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
   await sleep(30);
   ok("...and an ambiguous read you aren't hunting", said === null);
   targetSet.add("Bexalite");
   say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
   await sleep(30);
-  // 18,000 is the OTHER real collision (Bexalite x5, Rare, vs nine panels). The "call out debris &
-  // unknown" switch governs everything that isn't the ore you came for — but a target is never
-  // suppressed by it, hedged phrasing or not.
+  // 18,000 is the OTHER real collision (Bexalite x5, Rare, vs nine panels). The "call out debris"
+  // switch governs everything that isn't the ore you came for — but a target is never suppressed
+  // by it, hedged phrasing or not.
   ok("...but NEVER a target", said && said.slugs && said.slugs[0] === "c_mightbe"
        && said.slugs[1] === "n_bexalite",
      JSON.stringify(said && said.slugs));
