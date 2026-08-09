@@ -102,7 +102,26 @@
   .msg .ts { float: right; margin-left: 6px; font-size: 9.5px; color: var(--faint); }
   .sys { padding: 3px 12px; font-size: 11px; color: var(--faint); font-style: italic; }
 
-  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); }
+  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); position: relative; }
+
+  /* Emoji: rendered by the OS font (Segoe UI Emoji on Windows), so there is nothing to
+     download and nothing to host. This picker exists because Windows' own Win+. panel is
+     unreliable over a fullscreen game — and typing :shortcodes: beats hunting a grid anyway. */
+  #emojiPop { position: absolute; bottom: calc(100% + 6px); right: 10px; width: 244px; max-height: 210px;
+    overflow-y: auto; display: none; z-index: 6; padding: 6px;
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--panel-solid, rgba(10, 20, 28, 0.98));
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55); }
+  #emojiPop.open { display: block; }
+  #emojiPop .egrp { padding: 4px 4px 2px; font-size: 8.5px; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint); }
+  #emojiPop .erow { display: flex; flex-wrap: wrap; gap: 1px; }
+  #emojiPop button { font-size: 17px; line-height: 1; background: none; border: 0; border-radius: 5px;
+    padding: 4px; cursor: pointer;
+    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+  #emojiPop button:hover { background: rgba(var(--accent-rgb), 0.22); }
+  /* Emoji in a message want a touch more size than the surrounding text to read at all. */
+  .msg .tx { font-family: var(--sans), "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"; }
   #sendInput { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px; color: var(--cyan-bright);
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
     padding: 6px 8px; outline: none; }
@@ -177,9 +196,11 @@
         <div id="tabs"></div>
         <div id="log"></div>
         <div id="sendbar">
-          <input id="sendInput" type="text" placeholder="Say something…" maxlength="400" autocomplete="off" spellcheck="false" />
+          <input id="sendInput" type="text" placeholder="Say something…  (try :o7: or :thumbsup:)" maxlength="400" autocomplete="off" spellcheck="false" />
+          <button id="emojiBtn" class="hbtn sm" type="button" title="Emoji">🙂</button>
           <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
           <button id="sendBtn" class="hbtn sm" type="button">Send</button>
+          <div id="emojiPop"></div>
         </div>
       </div>
 
@@ -463,6 +484,61 @@
     listen();
   }
 
+  // ── emoji ────────────────────────────────────────────────────────────────
+  // Curated rather than exhaustive: a full Unicode set is a scroll you never finish, and the
+  // point here is the twenty you actually send while flying. SC-flavoured group first — o7 is
+  // the salute every SC player types, so it earns the top-left slot.
+  const EMOJI = [
+    ["Verse", [["o7", "🫡"], ["ship", "🚀"], ["mining", "⛏️"], ["salvage", "🔧"], ["cargo", "📦"], ["money", "💰"],
+               ["boom", "💥"], ["fire", "🔥"], ["skull", "💀"], ["medic", "🩺"], ["fuel", "⛽"], ["star", "⭐"]]],
+    ["Reactions", [["yes", "👍"], ["thumbsup", "👍"], ["no", "👎"], ["ok", "👌"], ["wave", "👋"], ["clap", "👏"],
+                   ["pray", "🙏"], ["muscle", "💪"], ["eyes", "👀"], ["brain", "🧠"], ["100", "💯"], ["check", "✅"]]],
+    ["Faces", [["smile", "🙂"], ["grin", "😄"], ["joy", "😂"], ["wink", "😉"], ["cool", "😎"], ["think", "🤔"],
+               ["sad", "🙁"], ["cry", "😭"], ["angry", "😠"], ["shock", "😱"], ["sweat", "😅"], ["shrug", "🤷"]]],
+    ["Signals", [["warn", "⚠️"], ["sos", "🆘"], ["question", "❓"], ["bang", "❗"], ["clock", "⏰"], ["pin", "📍"],
+                 ["up", "⬆️"], ["down", "⬇️"], ["left", "⬅️"], ["right", "➡️"], ["heart", "❤️"], ["party", "🎉"]]],
+  ];
+  /** :shortcode: → emoji, applied on send. Typing beats hunting a grid mid-flight. */
+  const SHORTCODES = new Map(EMOJI.flatMap(([, rows]) => rows.map(([name, ch]) => [name, ch])));
+  function expandShortcodes(text) {
+    return text.replace(/:([a-z0-9_+-]{1,20}):/gi, (m, name) => SHORTCODES.get(name.toLowerCase()) ?? m);
+  }
+  function buildEmojiPicker() {
+    const pop = $("emojiPop");
+    for (const [group, rows] of EMOJI) {
+      const h = document.createElement("div");
+      h.className = "egrp"; h.textContent = group;
+      pop.appendChild(h);
+      const row = document.createElement("div");
+      row.className = "erow";
+      for (const [name, ch] of rows) {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = ch; b.title = ":" + name + ":";
+        b.addEventListener("click", () => insertEmoji(ch));
+        row.appendChild(b);
+      }
+      pop.appendChild(row);
+    }
+  }
+  function insertEmoji(ch) {
+    const el = $("sendInput");
+    // Insert at the CARET, not the end — an emoji mid-sentence is the common case.
+    const s = el.selectionStart ?? el.value.length, e = el.selectionEnd ?? el.value.length;
+    el.value = el.value.slice(0, s) + ch + el.value.slice(e);
+    const at = s + ch.length;
+    el.setSelectionRange(at, at);
+    setEmojiPop(false);
+    // Keep the keyboard grab: over a focused game, losing it sends the next keys to SC.
+    if (typing) el.focus(); else setTyping(true, "send");
+  }
+  function setEmojiPop(on) {
+    $("emojiPop").classList.toggle("open", !!on);
+    $("emojiBtn").classList.toggle("active", !!on);
+    // The popover hangs OUTSIDE the widget's own box, so the shell must be told to hit-test it
+    // or it is unclickable over the game (the clipping/RSEL trap every widget chrome hits).
+    try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
   // ── actions ──────────────────────────────────────────────────────────────
   async function post(path, body) {
     try {
@@ -477,11 +553,13 @@
   }
   async function send() {
     const el = $("sendInput");
-    const text = el.value.trim();
-    if (!text) return;
+    const raw = el.value.trim();
+    if (!raw) return;
     if (!chanOf(activeCh)) { sys("Not in a channel yet."); return; }
+    const text = expandShortcodes(raw);
     el.value = "";
-    if (!await post("/api/chat/send", { ch: activeCh, text })) el.value = text;
+    setEmojiPop(false);
+    if (!await post("/api/chat/send", { ch: activeCh, text })) el.value = raw;
   }
   async function joinNamed(name, mode) {
     const n = (name ?? "").trim();
@@ -525,6 +603,7 @@
 
   $("sendBtn").addEventListener("click", send);
   $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
+  $("emojiBtn").addEventListener("click", () => setEmojiPop(!$("emojiPop").classList.contains("open")));
   $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
   $("joinBtn").addEventListener("click", () => joinNamed($("chanInput").value, "join"));
   $("createBtn").addEventListener("click", () => joinNamed($("chanInput").value, "create"));
@@ -535,7 +614,19 @@
   $("gateTypeBtn").addEventListener("click", () => setTyping(!typing));
   $("gateSaveBtn").addEventListener("click", saveHandle);
   $("handleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveHandle(); } });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && typing) { e.preventDefault(); setTyping(false); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    // Escape closes the picker first, THEN typing mode — otherwise dismissing the grid also
+    // drops the keyboard grab and the next keystroke reaches the game.
+    if ($("emojiPop").classList.contains("open")) { e.preventDefault(); setEmojiPop(false); return; }
+    if (typing) { e.preventDefault(); setTyping(false); }
+  });
+  // Clicking anywhere else closes the picker (it hangs over the message list).
+  document.addEventListener("pointerdown", (e) => {
+    if (!$("emojiPop").classList.contains("open")) return;
+    if (e.target.closest("#emojiPop") || e.target.closest("#emojiBtn")) return;
+    setEmojiPop(false);
+  });
 
   $("leftBtn").addEventListener("click", () => {
     showLeft = !showLeft;
@@ -552,6 +643,7 @@
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
   applyRails();
+  buildEmojiPicker();
   load();
   try { host()?.ready?.(); } catch { /* not embedded */ }
 </script>

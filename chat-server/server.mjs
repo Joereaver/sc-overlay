@@ -344,7 +344,11 @@ wss.on("connection", (ws) => {
       conn.stamps = conn.stamps.filter((s) => now - s < RATE_WINDOW_MS);
       if (conn.stamps.length >= RATE_N) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return; }
       // Strip control chars; the widget renders via textContent so markup is inert anyway.
-      const text = String(f.text ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, MSG_MAX);
+      // 🔑 Truncate by CODE POINT, not by .slice(): an emoji is a surrogate PAIR, and slicing
+      // between its halves emits a lone surrogate — the black-diamond "�" every client would
+      // then render, from a message that was perfectly valid when sent.
+      const cleaned = String(f.text ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim();
+      const text = [...cleaned].slice(0, MSG_MAX).join("");
       if (!text) { conn.send({ t: "error", code: "bad_msg", message: "Empty message." }); return; }
       conn.stamps.push(now);
       const msg = { ch, id: nextMsgId++, from: { handle: conn.handle, verified: conn.verified }, text, at: new Date().toISOString() };

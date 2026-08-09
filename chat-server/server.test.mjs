@@ -191,6 +191,26 @@ try {
   o.send({ t: "msg", ch: "org:irregs", text: "still here" });
   await o.next((f) => f.t === "msg" && f.ch === "org:irregs" && f.text === "still here", "org membership survived loc churn");
 
+  // ── emoji survive the round trip, and truncation never splits one ──
+  // 🔑 A FRESH client: `a` burned its rate-limit window on the spam test above, and a
+  // rate-refused send looks exactly like a delivery failure from the outside.
+  const em1 = client();
+  await em1.open();
+  em1.send({ t: "hello", handle: "EmojiTest" });
+  await em1.next((f) => f.t === "welcome", "welcome emoji client");
+  const emojiWait = em1.next((f) => f.t === "msg" && f.ch === "global" && f.text.includes("🫡"), "emoji delivered intact");
+  em1.send({ t: "msg", ch: "global", text: "o7 🫡 mining ⛏️ done 💯" });
+  const em = await emojiWait;
+  assert.equal(em.text, "o7 🫡 mining ⛏️ done 💯", "multi-byte emoji survive byte-for-byte");
+  // 🔑 400 emoji is 800 UTF-16 units — a .slice(0,400) would cut the 400th in half and emit a
+  // lone surrogate. Truncation is by code point, so the tail must still be a whole emoji.
+  const longWait = em1.next((f) => f.t === "msg" && f.ch === "global" && f.text.startsWith("🚀"), "long emoji message");
+  em1.send({ t: "msg", ch: "global", text: "🚀".repeat(500) });
+  const long = await longWait;
+  assert.equal([...long.text].length, 400, "truncated to 400 CODE POINTS");
+  assert(!/[\uD800-\uDFFF]/.test(long.text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "")),
+    "no lone surrogate survives truncation");
+
   console.log("chat-server tests passed");
 } finally {
   server.kill();

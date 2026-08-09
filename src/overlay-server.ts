@@ -236,6 +236,14 @@ interface Config {
   holdToInteract: boolean;
   /** Global hotkey that toggles arrange/move mode (Electron accelerator syntax). */
   moveHotkey: string;
+  /** How opaque the overlay is while you are NOT focused on it — i.e. while you are playing.
+   *  1 = off (the default, so nobody's overlay changes appearance on update); clamped 0.2–1 in
+   *  the UI, the server AND the shell, because an overlay faded to nothing is one you can't
+   *  find to turn back up. Read by electron/main.cjs, which applies it as WINDOW opacity. */
+  unfocusedOpacity: number;
+  /** Global hotkey that forces full opacity regardless of focus (and back). Lets you read the
+   *  overlay mid-fight without alt-tabbing to it. Empty = no hotkey. */
+  opacityHotkey: string;
   /** Hotkey that CONFIRMS a fabricator claim prompt. A hotkey rather than only a click
    *  because the overlay is click-through over the game — confirming with the mouse means
    *  entering hold-to-interact mid-kiosk, which is exactly when you can least afford it. */
@@ -358,6 +366,8 @@ const DEFAULTS: Config = {
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
   fabClaimHotkey: "F4",
+  unfocusedOpacity: 1,
+  opacityHotkey: "",
   timeRelative: true,
   shareLogs: false,
   seenChangelog: "",
@@ -1067,6 +1077,17 @@ sync.setProvider(() => ({
 
 // Any tracker state change (receipt, manual toggle, verify, mission switch) → resync.
 tracker.on("change", () => sync.markDirty());
+
+// What the player was flying when a mission completed, for the crowdsourced report (Sub's ask,
+// 2026-08-09). Captured the moment the completion appears rather than when they answer, because
+// the card outlives the moment: they can get out, board something else, or quit to the hangar
+// with the report still up. One slot — the card only ever asks about the completion on screen.
+let completionShip: { key: string; ship: string | null; manufacturer: string | null } | null = null;
+tracker.on("change", () => {
+  const c = tracker.view().completion;
+  if (!c?.contractKey || completionShip?.key === c.contractKey) return;
+  completionShip = { key: c.contractKey, ship: shipName, manufacturer: shipManufacturer };
+});
 
 /** Force a resync now (token set / startup / verify). */
 function syncFull(): void {
@@ -2064,6 +2085,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();
     if (typeof body.fabClaimHotkey === "string") config.fabClaimHotkey = body.fabClaimHotkey.trim();
+    if (typeof body.opacityHotkey === "string") config.opacityHotkey = body.opacityHotkey.trim();
+    // Clamped here as well as in the slider: a hand-edited 0 would fade the overlay to
+    // invisible with no visible control left to undo it.
+    if (typeof body.unfocusedOpacity === "number" && Number.isFinite(body.unfocusedOpacity))
+      config.unfocusedOpacity = Math.max(0.2, Math.min(1, Math.round(body.unfocusedOpacity * 100) / 100));
     if (typeof body.timeRelative === "boolean") config.timeRelative = body.timeRelative;
     if (typeof body.shareLogs === "boolean") config.shareLogs = body.shareLogs;
     if (typeof body.showLoadout === "boolean") config.showLoadout = body.showLoadout;
@@ -2561,7 +2587,19 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // written as `url.startsWith("/api/mission-feedback?")` could never match.
   if (url === "/api/mission-feedback" && req.method === "POST") {
     const body = await readBody(req);
-    const saved = missionFeedback.record({ ...(body as object), changelist: tracker.view().build, appVersion: APP_VERSION });
+    // Ship comes from the log, never from a question — the player already told the game what
+    // they were flying. Prefer the one captured AT COMPLETION over whatever they are in now:
+    // the report can sit on screen while they climb out, and a difficulty rating has to answer
+    // for the run, not for where they happen to be standing when they click.
+    const key = typeof (body as { contractKey?: unknown }).contractKey === "string" ? (body as { contractKey: string }).contractKey : "";
+    const at = completionShip && completionShip.key === key ? completionShip : null;
+    const saved = missionFeedback.record({
+      ...(body as object),
+      ship: at ? at.ship : shipName,
+      shipManufacturer: at ? at.manufacturer : shipManufacturer,
+      changelist: tracker.view().build,
+      appVersion: APP_VERSION,
+    });
     // Push straight away so an answer reaches the site while the player is still at their
     // desk; the interval above is only the retry path. Deliberately not awaited — the
     // report card must never wait on the network to acknowledge a click.

@@ -611,6 +611,20 @@
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Off by default — the overlay renders on the CPU, avoiding crashes some GPUs hit. Turn on only if you have GPU headroom and no crashes. Requires restarting the app.</span></span>
     </div>
     <div class="hkrow">
+      <span class="hklabel">Fade while you play</span>
+      <input type="range" id="unfocusedOpacity" min="20" max="100" step="5" style="width:180px;vertical-align:middle" />
+      <b id="unfocusedOpacityV" style="margin-left:8px">Off</b>
+      <div class="hint">How visible the overlay is while you are <em>not</em> focused on it. It returns to
+        full the moment you click or Alt-Tab to it. <strong>100% turns the fade off.</strong></div>
+    </div>
+    <div class="hkrow">
+      <span class="hklabel">Full opacity (hold-off) key</span>
+      <button type="button" id="opacityHotkeyBtn" class="hkbtn" onclick="startCaptureHotkey('opacity')">Set…</button>
+      <button type="button" class="hkclear" id="opacityHotkeyClear" title="Remove this hotkey" onclick="clearHotkey('opacity')">✕</button>
+      <input type="hidden" id="opacityHotkey" />
+      <div class="hint" id="opacityHotkeyHint">Snaps the overlay back to full opacity without leaving the game &mdash; press again to let it fade.</div>
+    </div>
+    <div class="hkrow">
       <span class="hklabel">What this is costing your PC</span>
       <button type="button" id="perfBtn" class="hkbtn">Measure now</button>
       <div class="hint">Widgets that pull live content (Twitch chat, a web page) cost far more than the text-only ones.</div>
@@ -863,6 +877,7 @@
       setHotkeyDisplay(which, typeof saved === "string" ? saved : HOTKEYS[which].def);
     }
     hotkeysLoaded = true;
+    setOpacitySlider(Number.isFinite(cfg.unfocusedOpacity) ? Math.round(cfg.unfocusedOpacity * 100) : 100);
     document.getElementById("holdToInteract").checked = !!cfg.holdToInteract;
     document.getElementById("revertThemeOnFoot").checked = !!cfg.revertThemeOnFoot;
     document.body.classList.toggle("show-loadout", !!cfg.showLoadout);
@@ -968,6 +983,7 @@
       autoSwitch: cfg.autoSwitch,
       hwAccel: document.getElementById("hwAccel").checked,
       amdCompat: document.getElementById("amdCompat").checked,
+      unfocusedOpacity: Number(document.getElementById("unfocusedOpacity").value || 100) / 100,
       bindingPng: document.getElementById("bindingPng").value,
       holdToInteract: document.getElementById("holdToInteract").checked,
       revertThemeOnFoot: document.getElementById("revertThemeOnFoot").checked,
@@ -1101,7 +1117,23 @@
                apply: (a) => window.overlayConfig && window.overlayConfig.setMoveHotkey && window.overlayConfig.setMoveHotkey(a) },
     fabClaim: { input: "fabClaimHotkey", btn: "fabClaimHotkeyBtn", hint: "fabClaimHotkeyHint", def: "F4",
                apply: (a) => window.overlayConfig && window.overlayConfig.setFabClaimHotkey && window.overlayConfig.setFabClaimHotkey(a) },
+    opacity: { input: "opacityHotkey", btn: "opacityHotkeyBtn", hint: "opacityHotkeyHint", def: "",
+               apply: (a) => window.overlayConfig && window.overlayConfig.setOpacityHotkey && window.overlayConfig.setOpacityHotkey(a) },
   };
+  // The fade slider applies LIVE (like the canvas controls) — you judge a transparency by
+  // looking at it, not by saving and alt-tabbing. 100 reads as "Off" because that is what it is.
+  function setOpacitySlider(pct) {
+    const el = document.getElementById("unfocusedOpacity");
+    const out = document.getElementById("unfocusedOpacityV");
+    const v = Math.max(20, Math.min(100, Math.round(Number(pct) || 100)));
+    el.value = String(v);
+    out.textContent = v >= 100 ? "Off" : v + "%";
+  }
+  document.getElementById("unfocusedOpacity")?.addEventListener("input", () => {
+    setOpacitySlider(document.getElementById("unfocusedOpacity").value);
+    window.overlayConfig?.setUnfocusedOpacity?.(Number(document.getElementById("unfocusedOpacity").value) / 100);
+  });
+
   let capturing = null; // which HOTKEYS key is mid-capture, or null
   // 🔑 Have the hotkey fields been filled from the config yet? Save is clickable the moment the page
   // renders, but loadCfg() is async — and now that "" is a REAL saved value meaning "removed", an

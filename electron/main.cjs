@@ -126,6 +126,12 @@ let unlockAlertVisible = true;
 let partyVisible = false; // is the in-canvas Party split widget currently shown
 let battagliaVisible = false; // is the in-canvas Battaglia grind tracker currently shown
 let chatVisible = false; // is the in-canvas social Chat widget shown (also gates the sidecar's chat socket)
+// Fade the whole overlay while you're actually playing. 1 = the feature is OFF, which is the
+// default, so no existing user's overlay changes appearance until they ask for it.
+let unfocusedOpacity = 1;
+// Hotkey override: force full opacity regardless of focus (read the overlay mid-fight without
+// alt-tabbing). Toggles back to automatic on a second press.
+let opacityOverride = false;
 // Settings as a canvas WIDGET. Named ...Widget... throughout to keep it distinct from
 // `configWin`, the standalone settings WINDOW — both exist, same page, two host modes.
 let configWidgetVisible = false;
@@ -700,8 +706,9 @@ function createOverlay() {
   const sendFocus = (on) => {
     if (overlay && !overlay.isDestroyed()) overlay.webContents.send("overlay:window-focus", on);
   };
-  overlay.on("focus", () => sendFocus(true));
-  overlay.on("blur", () => sendFocus(false));
+  overlay.on("focus", () => { sendFocus(true); applyOverlayOpacity(); });
+  overlay.on("blur", () => { sendFocus(false); applyOverlayOpacity(); });
+  applyOverlayOpacity();
   overlay.on("closed", () => {
     overlay = null;
     overlayLoaded = false;
@@ -1094,6 +1101,38 @@ function toggleMining() {
 // combo is already claimed by another app).
 // Live-rebindable global shortcut for showing/hiding the overlay HUD. Same shape as
 // registerBindingHotkey so the config window can warn on an invalid / in-use combo.
+// ── Unfocused opacity ───────────────────────────────────────────────────────
+// The overlay fades while you're playing and comes back to full the moment you switch TO it
+// (Alt-Tab / clicking it), so reading it is always one focus away rather than a settings trip.
+// 🔑 Window opacity, not a CSS filter: the canvas is a transparent always-on-top window over
+// the game, and a CSS opacity on its body would fade widgets against each other rather than
+// against what's behind the window.
+// 🔑 Never fade while ARRANGING — you cannot place what you cannot see — and never below the
+// 0.2 clamp the settings enforce, or the overlay becomes a thing you can't find to fix.
+function applyOverlayOpacity() {
+  if (!overlay || overlay.isDestroyed()) return;
+  const dim = unfocusedOpacity < 1 && !opacityOverride && !moveMode && !overlay.isFocused();
+  try { overlay.setOpacity(dim ? Math.max(0.2, unfocusedOpacity) : 1); } catch { /* window going away */ }
+}
+function setUnfocusedOpacity(v) {
+  const n = Number(v);
+  unfocusedOpacity = Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1;
+  applyOverlayOpacity();
+}
+function toggleOpacityOverride() {
+  opacityOverride = !opacityOverride;
+  applyOverlayOpacity();
+}
+let opacityAccel = null;
+function registerOpacityHotkey(accel) {
+  if (opacityAccel) hotkeys.unregister(opacityAccel);
+  opacityAccel = null;
+  if (!accel || typeof accel !== "string") return { ok: true };
+  const r = hotkeys.register(accel, toggleOpacityOverride);
+  if (r.ok) opacityAccel = accel;
+  return r;
+}
+
 let overlayAccel = null;
 function registerOverlayHotkey(accel) {
   if (overlayAccel) hotkeys.unregister(overlayAccel);
@@ -1206,6 +1245,7 @@ function setMoveMode(on) {
   applyMouse();
   if (on && overlay) overlay.focus();
   overlay?.webContents.send("overlay:move-mode", on);
+  applyOverlayOpacity(); // arranging is always full-opacity — you can't place what you can't see
   refreshTray();
 }
 // Global arrange: one cohesive overlay app. Both widgets (Blueprint + Mining) now live in the
@@ -1709,6 +1749,8 @@ if (!app.requestSingleInstanceLock()) {
       if (typeof c.interactHotkey === "string") interactKey = c.interactHotkey;
       if (typeof c.moveHotkey === "string") moveKey = c.moveHotkey;
       if (typeof c.fabClaimHotkey === "string") fabClaimKey = c.fabClaimHotkey;
+      if (Number.isFinite(c.unfocusedOpacity)) setUnfocusedOpacity(c.unfocusedOpacity);
+      if (typeof c.opacityHotkey === "string") registerOpacityHotkey(c.opacityHotkey);
       if (c.holdToInteract === true) holdMode = true; // opt-in: require holding the interact key
     } catch { /* defaults */ }
     foreground.want("hold", holdMode); // only track the foreground app if something asks
@@ -1858,6 +1900,9 @@ if (!app.requestSingleInstanceLock()) {
     registerMoveHotkey(typeof accel === "string" ? accel : ""));
   ipcMain.handle("set-fabclaim-hotkey", (_e, accel) =>
     registerFabClaimHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("set-opacity-hotkey", (_e, accel) =>
+    registerOpacityHotkey(typeof accel === "string" ? accel : ""));
+  ipcMain.handle("app:set-unfocused-opacity", (_e, v) => { setUnfocusedOpacity(v); return true; });
   ipcMain.handle("overlay:reset-layout", () => { resetWidgetLayout(); return true; });
   // Primary display's offset + size within the full-desktop canvas, so the page can default a
   // new/reset widget onto the PRIMARY monitor (not a corner of a left/top secondary display).
