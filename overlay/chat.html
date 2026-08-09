@@ -22,6 +22,9 @@
      /widget-theme.css — no EVE colours, no EVE chrome. */
   * { box-sizing: border-box; }
   * { scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), 0.28) transparent; }
+  /* Dropdown chevron, as a shape to be MASKED so it can be filled in the active skin's colour.
+     Declared once here because a mask URL cannot inherit currentColor the way a stroke can. */
+  :root { --chev: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>"); }
   html, body { margin: 0; height: 100%; background: transparent; }
   body { font-family: var(--sans); color: var(--cyan-text); overflow: hidden; }
   [hidden] { display: none !important; }
@@ -145,7 +148,29 @@
   #createPop input, #createPop select { width: 100%; box-sizing: border-box; font-family: var(--sans);
     font-size: 11.5px; color: var(--cyan-bright); background: rgba(0,0,0,.28);
     border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; }
-  #createPop select { cursor: pointer; }
+  #createPop input:focus, #createPop select:focus { outline: none; border-color: var(--cyan); }
+  /* 🔑 A native <select> keeps the OS chrome — grey Windows arrow, system-blue highlight —
+     whatever colour you set on it, so it read as unstyled next to everything else in the
+     widget. appearance:none strips it; the arrow is then drawn as a background SVG in the
+     skin's own colour. Same reason the chrome icons here are inline SVG rather than glyphs. */
+  #createPop select {
+    cursor: pointer; appearance: none; -webkit-appearance: none; padding-right: 22px;
+  }
+  #createPop select:hover { border-color: var(--cyan); }
+  /* The arrow is a MASK filled with the skin's own colour, not an inline SVG data URI — a data
+     URI has to hard-code its stroke, and this widget re-skins per manufacturer, so a fixed
+     cyan chevron would be wrong on nine of the ten skins. */
+  #createPop .cp-row.sel { position: relative; }
+  #createPop .cp-row.sel::after {
+    content: ""; position: absolute; right: 7px; top: 50%; width: 9px; height: 6px;
+    transform: translateY(-50%); pointer-events: none; background-color: var(--cyan);
+    -webkit-mask: var(--chev) no-repeat center / 9px 6px;
+            mask: var(--chev) no-repeat center / 9px 6px;
+  }
+  /* The dropdown LIST is drawn by the OS and inherits almost nothing — these two are the only
+     properties Chromium actually honours on <option>, and without them the open list is white
+     with black text against a dark widget. */
+  #createPop select option { background: #0b1a22; color: #cfe9ef; }
   #createPop .cp-hint { font-size: 10px; color: var(--faint); line-height: 1.35; margin: 2px 0 7px; min-height: 26px; }
   #createPop .cp-btns { display: flex; gap: 6px; justify-content: flex-end; }
 
@@ -159,6 +184,15 @@
     letter-spacing: .12em; background: rgba(0,0,0,.3); border-radius: 4px; padding: 1px 6px; }
   #roomBar #rbOwnerOnly { display: none; align-items: center; gap: 4px; margin-left: auto; }
   #roomBar.owner #rbOwnerOnly { display: flex; }
+  /* The code half only exists for a private room; a public room you own shows just Delete. */
+  #roomBar .rb-lock, #roomBar .rb-lbl, #roomBar code, #roomBar #rbCopy { display: none; }
+  #roomBar.secret .rb-lock { display: block; }
+  #roomBar.secret .rb-lbl, #roomBar.secret code, #roomBar.secret #rbCopy { display: inline-block; }
+  /* Destructive, and it takes the room away from everyone in it — so it does not look like
+     the buttons beside it. */
+  #roomBar .hbtn.danger { color: #ff8a7a; border-color: rgba(255,138,122,.45); }
+  #roomBar .hbtn.danger:hover { color: #fff; background: rgba(255,90,70,.35); border-color: #ff8a7a; }
+  #roomBar .hbtn.danger.confirm { color: #fff; background: rgba(255,70,50,.45); border-color: #ff8a7a; }
   #roomBar input { width: 110px; font-family: var(--sans); font-size: 11px; color: var(--cyan-bright);
     background: rgba(0,0,0,.28); border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
 
@@ -310,9 +344,9 @@
           <div id="createPop">
             <div class="cp-row"><label for="cpName">Name</label>
               <input id="cpName" type="text" maxlength="30" spellcheck="false" autocomplete="off" placeholder="Sunday Ops" /></div>
-            <div class="cp-row"><label for="cpCat">Activity</label>
+            <div class="cp-row sel"><label for="cpCat">Activity</label>
               <select id="cpCat"></select></div>
-            <div class="cp-row"><label for="cpPriv">Privacy</label>
+            <div class="cp-row sel"><label for="cpPriv">Privacy</label>
               <select id="cpPriv">
                 <option value="public">Public — listed for everyone</option>
                 <option value="private">Private — code or invite only</option>
@@ -340,6 +374,7 @@
           <span id="rbOwnerOnly">
             <input id="rbInvite" type="text" placeholder="RSI handle…" maxlength="30" spellcheck="false" autocomplete="off" />
             <button id="rbInviteGo" class="hbtn sm" type="button" title="Let this handle in">Invite</button>
+            <button id="rbDelete" class="hbtn sm danger" type="button" title="Delete this room for everyone">Delete</button>
           </span>
         </div>
         <div id="log"></div>
@@ -799,12 +834,19 @@
   function renderRoomBar() {
     const bar = $("roomBar");
     const c = chanOf(activeCh);
-    const show = !!c && c.kind === "custom" && c.privacy === "private" && !!c.code;
-    bar.classList.toggle("show", show);
-    if (!show) { bar.classList.remove("owner"); return; }
-    $("rbCode").textContent = c.code;
     const me = (view?.you?.handle ?? "").toLowerCase();
-    bar.classList.toggle("owner", !!c.owner && c.owner === me);
+    const mine = !!c && c.kind === "custom" && !!c.owner && c.owner === me;
+    const secret = !!c && c.kind === "custom" && c.privacy === "private" && !!c.code;
+    // The bar earns its space for a private room (it carries the join code) OR for any room you
+    // OWN (it carries Delete). A public room you don't own has nothing to put in it.
+    bar.classList.toggle("show", secret || mine);
+    bar.classList.toggle("owner", mine);
+    bar.classList.toggle("secret", secret);
+    if (secret) $("rbCode").textContent = c.code;
+    // Inviting is meaningless for a public room — anyone can already walk in — so the box only
+    // appears where it does something.
+    $("rbInvite").hidden = !secret;
+    $("rbInviteGo").hidden = !secret;
   }
 
   function renderMembers() {
@@ -1336,6 +1378,30 @@
     $("chanInput").value = "";
     $("cpName").value = "";
   }
+  /* Deleting takes the room away from everyone in it and destroys its scrollback, so it asks
+     twice — but with the BUTTON, not a confirm() dialog: a native modal inside the overlay
+     steals focus from the game and there is no way to style it. Second click within 4s does it;
+     otherwise it forgets, so a stray click can never delete a room. */
+  let rbArmed = 0;
+  async function deleteRoom() {
+    const btn = $("rbDelete");
+    const c = chanOf(activeCh);
+    if (!c) return;
+    if (Date.now() > rbArmed) {
+      rbArmed = Date.now() + 4000;
+      btn.textContent = "Really delete?";
+      btn.classList.add("confirm");
+      setTimeout(() => {
+        if (Date.now() > rbArmed) { btn.textContent = "Delete"; btn.classList.remove("confirm"); }
+      }, 4100);
+      return;
+    }
+    rbArmed = 0;
+    btn.textContent = "Delete";
+    btn.classList.remove("confirm");
+    await post("/api/chat/delete-room", { ch: c.ch });
+  }
+
   async function inviteToRoom() {
     const h = $("rbInvite").value.trim();
     if (!h) { $("rbInvite").focus(); return; }
@@ -1397,6 +1463,7 @@
   $("cpCat").addEventListener("change", updateCreateHint);
   $("cpName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void createRoom(); } });
   $("rbInviteGo").addEventListener("click", () => void inviteToRoom());
+  $("rbDelete").addEventListener("click", () => void deleteRoom());
   $("rbInvite").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void inviteToRoom(); } });
   $("rbCopy").addEventListener("click", () => {
     const code = $("rbCode").textContent;

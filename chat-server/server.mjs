@@ -292,6 +292,29 @@ function deliver(conn, ch, raw) {
   return msg;
 }
 
+/** Wipe a custom room: evict everyone, drop it from the directory, delete it and its messages.
+ *  Used by the owner's delete and by the loopback admin route, so both paths behave identically
+ *  — a moderator deleting a room and an owner deleting one must not leave different residue. */
+function destroyRoom(slug, label) {
+  const ch = `custom:${slug}`;
+  const r = rooms.get(ch);
+  if (r) {
+    for (const c of [...r.members]) {
+      c.channels.delete(ch);
+      // Say WHY. A channel that silently vanishes reads as a disconnect, and the client would
+      // cheerfully re-add it to customRooms and try to rejoin on the next reconnect.
+      c.send({ t: "left", ch, reason: "deleted" });
+      c.send({ t: "notice", level: "info", text: `“${label ?? slug}” was deleted.` });
+    }
+    r.members.clear();
+    rooms.delete(ch);
+  }
+  customDir.delete(slug);
+  store.deleteRoom(slug);
+  broadcastDir();
+  return true;
+}
+
 /** Join a custom room and hand back what the widget needs to describe it.
  *  🔑 The join CODE only ever goes to someone already inside the room — it is what admits the
  *  next person, so shipping it in the directory or on a refusal would defeat the whole gate. */
@@ -410,6 +433,26 @@ const server = createServer(async (req, res) => {
     } else { bans.delete(handle); store.deleteBan(handle); }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, bans: bans.size }));
+    return;
+  }
+  // Moderation: list and delete ANY room, including ones with no owner (everything imported
+  // from the old channels.json has owner NULL, so the owner-gated path can never touch them).
+  // Loopback-only like the ban routes — an endpoint that ACTS with authority IS the authority.
+  if (url === "/admin/rooms" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify([...customDir.entries()].map(([slug, m]) => ({
+      slug, label: m.label, category: m.category, privacy: m.privacy, owner: m.owner,
+      members: rooms.get(`custom:${slug}`)?.members.size ?? 0,
+    }))));
+    return;
+  }
+  if (url === "/admin/room-delete" && req.method === "POST") {
+    const slug = String((await readBody(req)).slug ?? "").toLowerCase();
+    const meta = customDir.get(slug);
+    if (!meta) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, error: "no such room" })); return; }
+    destroyRoom(slug, meta.label);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, deleted: slug, rooms: customDir.size }));
     return;
   }
   res.writeHead(404); res.end();
@@ -554,6 +597,20 @@ wss.on("connection", (ws) => {
           c.send({ t: "roominvite", ch, label: meta.label, category: meta.category, from: conn.handle });
         }
       }
+      return;
+    }
+
+    // Delete a room outright. Owner only — the same authority that can widen access can end it.
+    // 🔑 This is a MODERATION tool as much as a tidy-up: a room's NAME is broadcast to every
+    // user in the directory, so an inappropriate one is a problem the moment it exists and
+    // "wait fourteen days for the idle prune" is not an answer.
+    if (f.t === "deleteRoom") {
+      const ch = String(f.ch ?? "");
+      const slug = ch.startsWith("custom:") ? ch.slice("custom:".length) : "";
+      const meta = customDir.get(slug);
+      if (!meta) { conn.send({ t: "error", code: "no_such_channel", message: "No such channel." }); return; }
+      if (meta.owner !== conn.handleLower) { conn.send({ t: "error", code: "not_owner", message: "Only the person who made the room can delete it." }); return; }
+      destroyRoom(slug, meta.label);
       return;
     }
 

@@ -272,6 +272,11 @@ export class ChatClient extends EventEmitter {
         this.pushState();
         return;
       }
+      case "notice":
+        // A plain server-to-user message. Today: "that room was deleted" — which the user has
+        // to be told, or a channel disappearing reads as a connection fault.
+        this.emit("sse", { type: "notice", level: f.level ?? "info", text: String(f.text ?? "") });
+        return;
       case "invited":
         this.emit("sse", { type: "notice", level: "info", text: `Invited ${f.handle}.` });
         return;
@@ -386,6 +391,13 @@ export class ChatClient extends EventEmitter {
       ...(mode === "create" && category ? { category } : {}),
       ...(mode === "create" && privacy ? { privacy } : {}),
     });
+    return { ok: true };
+  }
+
+  /** Delete a room you own. Everyone in it is evicted and its scrollback goes with it. */
+  deleteRoom(ch: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "deleteRoom", ch });
     return { ok: true };
   }
 

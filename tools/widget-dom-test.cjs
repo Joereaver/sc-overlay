@@ -2069,17 +2069,31 @@ const CHATLINKS = `(async () => {
   renderRoomBar();
   ok("no room bar on an ordinary channel", !bar.classList.contains("show"));
 
+  // A public room you OWN still gets the bar — that is where Delete lives — but nothing that
+  // only makes sense for a private room.
   view.channels.push({ ch: "custom:pub", kind: "custom", label: "Open Room", members: [], msgs: [],
                        count: 2, privacy: "public", owner: "imc-subliminal" });
   activeCh = "custom:pub";
   renderRoomBar();
-  ok("no room bar on a PUBLIC custom room", !bar.classList.contains("show"));
+  ok("a PUBLIC room you own shows the bar (for Delete)", bar.classList.contains("show"));
+  ok("...with no join code", !bar.classList.contains("secret"));
+  ok("...and no invite box — anyone can already walk in",
+     document.getElementById("rbInvite").hidden === true);
+  ok("...but Delete is reachable", bar.classList.contains("owner")
+     && document.getElementById("rbDelete").offsetParent !== null);
+
+  // A public room you do NOT own has nothing to put in the bar.
+  view.channels[1].owner = "someoneelse";
+  renderRoomBar();
+  ok("no room bar on a public room you don't own", !bar.classList.contains("show"));
+  view.channels[1].owner = "imc-subliminal";
 
   view.channels.push({ ch: "custom:ops", kind: "custom", label: "Sunday Ops", members: [], msgs: [],
                        count: 3, privacy: "private", owner: "imc-subliminal", code: "K7M2QD" });
   activeCh = "custom:ops";
   renderRoomBar();
   ok("a private room you own shows the bar", bar.classList.contains("show"));
+  ok("...and offers Delete", document.getElementById("rbDelete").offsetParent !== null);
   ok("...with the join code", document.getElementById("rbCode").textContent === "K7M2QD",
      document.getElementById("rbCode").textContent);
   ok("...and the invite box, because it's yours", bar.classList.contains("owner"));

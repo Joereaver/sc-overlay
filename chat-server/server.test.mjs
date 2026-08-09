@@ -304,6 +304,51 @@ try {
   const junk = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:junk-cat", "junk category");
   assert.equal(junk.category, "social", "an unknown category falls back rather than failing the create");
 
+  // ── deleting a room ───────────────────────────────────────────────────────
+  // Sub's reason is moderation: a room's NAME is broadcast to every user in the directory, so
+  // an inappropriate one is a problem the moment it exists — "wait for the 14-day idle prune"
+  // is not an answer.
+  owner.send({ t: "join", name: "Doomed Room", mode: "create", category: "mining", privacy: "public" });
+  await owner.next((f) => f.t === "joined" && f.ch === "custom:doomed-room", "created the doomed room");
+  guest.send({ t: "join", name: "Doomed Room", mode: "join" });
+  await guest.next((f) => f.t === "joined" && f.ch === "custom:doomed-room", "guest joined it");
+
+  guest.send({ t: "deleteRoom", ch: "custom:doomed-room" });
+  await guest.next((f) => f.t === "error" && f.code === "not_owner", "a member cannot delete a room");
+
+  owner.send({ t: "deleteRoom", ch: "custom:doomed-room" });
+  const evicted = await guest.next((f) => f.t === "left" && f.ch === "custom:doomed-room", "the guest is evicted");
+  assert.equal(evicted.reason, "deleted",
+    "the eviction says WHY — a channel that just vanishes reads as a disconnect and the client would try to rejoin it");
+  await guest.next((f) => f.t === "notice" && /Doomed Room/.test(f.text ?? ""), "and the guest is told");
+  await wait(700);
+  const dirAfter = [...owner.frames].reverse().find((f) => f.t === "dir");
+  assert(!dirAfter.channels.some((c) => c.ch === "custom:doomed-room"), "gone from the directory");
+
+  // Really gone: re-creating it must be a CREATE, not a join onto leftover state.
+  owner.send({ t: "join", name: "Doomed Room", mode: "create", category: "salvage", privacy: "public" });
+  await wait(400);
+  // 🔑 The LAST matching frame, not next(): the helper searches already-buffered frames from the
+  // start, so it would hand back the roominfo from the room's first life and the assertion would
+  // "fail" on a server that behaved perfectly.
+  const reborn = [...owner.frames].reverse().find((f) => f.t === "roominfo" && f.ch === "custom:doomed-room");
+  assert.equal(reborn.category, "salvage", "the new room is genuinely new, not the old one revived");
+  owner.send({ t: "deleteRoom", ch: "custom:doomed-room" });
+  await owner.next((f) => f.t === "left" && f.ch === "custom:doomed-room", "cleaned up");
+
+  // The loopback admin route — the ONLY way to remove a room with no owner, which is every
+  // room imported from the old channels.json.
+  const roomsBefore = await (await fetch(`http://127.0.0.1:${PORT}/admin/rooms`)).json();
+  assert(Array.isArray(roomsBefore) && roomsBefore.some((r) => r.slug === "halo-mining"),
+    "admin can list rooms");
+  const del = await (await fetch(`http://127.0.0.1:${PORT}/admin/room-delete`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: "halo-mining" }),
+  })).json();
+  assert.equal(del.ok, true, "admin delete succeeds");
+  const roomsAfter = await (await fetch(`http://127.0.0.1:${PORT}/admin/rooms`)).json();
+  assert(!roomsAfter.some((r) => r.slug === "halo-mining"), "admin delete removes an ownerless room");
+
   // ── direct messages ───────────────────────────────────────────────────────
   const dmA = client();
   await dmA.open();
