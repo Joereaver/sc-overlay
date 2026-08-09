@@ -1134,8 +1134,14 @@ function applyOverlayOpacity() {
 let lastOpacityApplied = null;
 function setUnfocusedOpacity(v) {
   const n = Number(v);
-  unfocusedOpacity = Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1;
+  const next = Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1;
+  const changed = next !== unfocusedOpacity;
+  unfocusedOpacity = next;
   applyOverlayOpacity();
+  // Republish the diagnostic when the SETTING changes (not on every hover tick) — otherwise
+  // /api/overlay-geometry reports whatever was true at the last canvas refit, which is exactly
+  // the stale answer that makes "did it apply?" unanswerable from outside.
+  if (changed) reportGeometry();
 }
 function toggleOpacityOverride() {
   opacityOverride = !opacityOverride;
