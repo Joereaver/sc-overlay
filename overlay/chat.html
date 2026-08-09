@@ -101,6 +101,38 @@
   .msg .tx { color: var(--cyan-text); }
   .msg .ts { float: right; margin-left: 6px; font-size: 9.5px; color: var(--faint); }
   .sys { padding: 3px 12px; font-size: 11px; color: var(--faint); font-style: italic; }
+  /* A message that names YOU gets a gold edge — findable when you scroll back, quiet when
+     you don't. Mentions of anyone else are just a tinted token. */
+  .msg.mention { background: rgba(var(--accent-rgb), 0.10); box-shadow: inset 3px 0 0 var(--gold); }
+  .msg .at { color: var(--cyan-bright); font-weight: 600; }
+  .msg.mention .at.me { color: var(--gold); }
+  /* A link out of chat — a blueprint on the site, or an item on starcitizen.tools. */
+  .msg .lk { color: var(--gold); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .msg .lk:hover { filter: brightness(1.2); }
+  /* Friends float to the top of the member list and keep a marker. */
+  .mrow .fav { flex: none; font-size: 9px; color: var(--gold); }
+
+  /* Right-click menu on a name (member list or message). */
+  #ctx { position: absolute; display: none; z-index: 8; min-width: 150px; padding: 4px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel-solid, rgba(10,20,28,.98));
+    box-shadow: 0 12px 30px rgba(0,0,0,.55); }
+  #ctx.open { display: block; }
+  #ctx .ct-who { padding: 5px 8px 6px; font-size: 10px; font-weight: 700; letter-spacing: .06em;
+    color: var(--gold); border-bottom: 1px solid var(--divider); margin-bottom: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ctx button { display: block; width: 100%; text-align: left; font-family: var(--sans); font-size: 11.5px;
+    color: var(--cyan-text); background: none; border: 0; border-radius: 5px; padding: 6px 8px; cursor: pointer; }
+  #ctx button:hover { background: rgba(var(--accent-rgb), 0.18); color: var(--cyan-bright); }
+
+  /* Slash-command hint strip above the input. */
+  #slash { position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; display: none;
+    z-index: 6; padding: 5px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+  #slash.open { display: block; }
+  #slash .sc-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 7px; border-radius: 5px; cursor: pointer; font-size: 11.5px; }
+  #slash .sc-row:hover, #slash .sc-row.on { background: rgba(var(--accent-rgb), 0.18); }
+  #slash .sc-cmd { font-family: var(--mono); color: var(--cyan-bright); font-weight: 700; }
+  #slash .sc-hint { color: var(--faint); font-size: 10.5px; }
 
   #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); position: relative; }
 
@@ -128,9 +160,11 @@
   #sendInput:focus { border-color: var(--cyan); }
   #sendInput::placeholder { color: var(--faint); }
 
-  /* right rail: members */
+  /* right rail: members.
+     🔑 NO status dot. The first version drew a 6px circle in each handle's own hash colour,
+     which reads as a status light — Sub saw a red one and reasonably asked what it meant. It
+     meant nothing. The NAME carries the colour instead, where a colour is obviously identity. */
   .mrow { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; }
-  .mrow .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--cyan-dim); }
   .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mrow .vf { flex: none; font-size: 8px; font-weight: 800; color: var(--green, #38d980); }
   .mrow.you .nm { color: var(--gold); font-weight: 700; }
@@ -149,7 +183,17 @@
   .hbtn:hover { background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
   .hbtn.sm { padding: 3px 7px; font-size: 10px; }
   .hbtn.active { background: rgba(var(--accent-rgb), 0.28); border-color: var(--cyan); }
-  .hbtn.tog { min-width: 26px; text-align: center; }
+  /* 🔑 These were EMOJI (☰ / 👥). An emoji is painted by the OS colour font, so it ignores the
+     manufacturer skin completely — on Sub's skin it came out purple, clashing and unreadable at
+     this size. Inline SVG on `currentColor` takes the theme accent like every other control. */
+  .hbtn.tog { min-width: 28px; display: inline-flex; align-items: center; justify-content: center;
+    padding: 4px 6px; color: var(--cyan-dim); }
+  .hbtn.tog svg, #emojiBtn svg { width: 13px; height: 13px; display: block; fill: none;
+    stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .hbtn.tog:hover, .hbtn.tog.active { color: var(--cyan-bright); }
+  #emojiBtn { display: inline-flex; align-items: center; justify-content: center;
+    color: var(--cyan-dim); padding: 4px 7px; }
+  #emojiBtn:hover, #emojiBtn.active { color: var(--cyan-bright); }
 
   /* identity gate */
   #gate { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
@@ -175,8 +219,12 @@
       <span class="dia"></span>
       <span class="h-title">Chat</span>
       <span id="whoami"></span>
-      <button id="leftBtn" class="hbtn sm tog" type="button" title="Show or hide the channel list">☰</button>
-      <button id="rightBtn" class="hbtn sm tog" type="button" title="Show or hide who's here">👥</button>
+      <button id="leftBtn" class="hbtn sm tog" type="button" title="Show or hide the channel list" aria-label="Channels">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+      </button>
+      <button id="rightBtn" class="hbtn sm tog" type="button" title="Show or hide who's here" aria-label="Members">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><path d="M11 3.6a2.5 2.5 0 0 1 0 4.3M12.4 9.9c1.4.5 2.3 1.8 2.3 3.6"/></svg>
+      </button>
     </div>
 
     <div id="body">
@@ -197,10 +245,13 @@
         <div id="log"></div>
         <div id="sendbar">
           <input id="sendInput" type="text" placeholder="Say something…  (try :o7: or :thumbsup:)" maxlength="400" autocomplete="off" spellcheck="false" />
-          <button id="emojiBtn" class="hbtn sm" type="button" title="Emoji">🙂</button>
+          <button id="emojiBtn" class="hbtn sm" type="button" title="Emoji" aria-label="Emoji">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.6 9.6a3 3 0 0 0 4.8 0"/><circle cx="6" cy="6.4" r=".9" fill="currentColor" stroke="none"/><circle cx="10" cy="6.4" r=".9" fill="currentColor" stroke="none"/></svg>
+          </button>
           <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
           <button id="sendBtn" class="hbtn sm" type="button">Send</button>
           <div id="emojiPop"></div>
+          <div id="slash"></div>
         </div>
       </div>
 
@@ -209,6 +260,8 @@
         <div id="memList" class="rail-body"></div>
       </div>
     </div>
+
+    <div id="ctx"></div>
 
     <div id="gate">
       <div class="lbl">Chat identity</div>
@@ -275,6 +328,59 @@
     for (const c of handle) h = (h * 31 + c.codePointAt(0)) % 360;
     return `hsl(${h} 65% 70%)`;
   }
+  // ── mentions, links and the message body ─────────────────────────────────
+  // Rendered as NODES, never innerHTML: message text is other players' input, and the one
+  // place it could become markup is the one place it must not.
+  const MENTION_RE = /@([A-Za-z0-9._-]{3,30})/g;
+  // Tokens the app itself writes when you use a slash command. `bp:` is a blueprint on the
+  // site; `item:` is a starcitizen.tools lookup. Both survive as plain text for old clients.
+  const TOKEN_RE = /\[(bp|item):([^\]]{1,80})\]/g;
+  const bpUrl = (name) => "https://subliminal.gg/blueprints/" + encodeURIComponent(name.trim());
+  const toolsUrl = (name) => "https://starcitizen.tools/" + encodeURIComponent(name.trim().replace(/\s+/g, "_"));
+  function openLink(url) {
+    if (host()?.openUrl) host().openUrl(url);
+    else window.open(url, "_blank", "noopener");
+  }
+  function renderBody(text) {
+    const frag = document.createDocumentFragment();
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    let mentionedMe = false;
+    // One pass over both patterns, so a mention inside a token can't double-render.
+    const parts = [];
+    let idx = 0;
+    const all = [];
+    text.replace(TOKEN_RE, (m, kind, name, at) => { all.push({ at, len: m.length, kind, name }); return m; });
+    text.replace(MENTION_RE, (m, handle, at) => { all.push({ at, len: m.length, kind: "at", name: handle }); return m; });
+    all.sort((a, b) => a.at - b.at);
+    for (const t of all) {
+      if (t.at < idx) continue;                       // overlapping match — first one wins
+      if (t.at > idx) parts.push({ text: text.slice(idx, t.at) });
+      parts.push(t);
+      idx = t.at + t.len;
+    }
+    if (idx < text.length) parts.push({ text: text.slice(idx) });
+    for (const p of parts) {
+      if (p.text !== undefined) { frag.appendChild(document.createTextNode(p.text)); continue; }
+      if (p.kind === "at") {
+        const s = document.createElement("span");
+        const isMe = p.name.toLowerCase() === me;
+        if (isMe) mentionedMe = true;
+        s.className = "at" + (isMe ? " me" : "");
+        s.textContent = "@" + p.name;
+        frag.appendChild(s);
+        continue;
+      }
+      const a = document.createElement("span");
+      a.className = "lk";
+      a.textContent = p.name;
+      a.title = p.kind === "bp" ? "Open this blueprint on subliminal.gg" : "Look this up on starcitizen.tools";
+      const url = p.kind === "bp" ? bpUrl(p.name) : toolsUrl(p.name);
+      a.addEventListener("click", () => openLink(url));
+      frag.appendChild(a);
+    }
+    return { frag, mentionedMe };
+  }
+
   function msgRow(m) {
     const row = document.createElement("div");
     row.className = "msg";
@@ -282,10 +388,13 @@
     ts.className = "ts";
     try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
     row.appendChild(ts);
+    const who = m.from?.handle ?? "?";
     const nm = document.createElement("span");
     nm.className = "nm";
-    nm.textContent = m.from?.handle ?? "?";
-    nm.style.color = handleColor(m.from?.handle ?? "?");
+    nm.textContent = who;
+    nm.style.color = handleColor(who);
+    // Right-click a name in the log for the same menu as the member list.
+    nm.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(who, e.clientX, e.clientY); });
     row.appendChild(nm);
     if (m.from?.verified) {
       const v = document.createElement("span");
@@ -296,9 +405,59 @@
     sep.className = "sep"; sep.textContent = ":";
     row.appendChild(sep);
     const tx = document.createElement("span");
-    tx.className = "tx"; tx.textContent = m.text;  // textContent — markup stays inert
+    tx.className = "tx";
+    const body = renderBody(m.text);   // builds NODES — still no innerHTML anywhere
+    tx.appendChild(body.frag);
     row.appendChild(tx);
+    if (body.mentionedMe) row.classList.add("mention");
     return row;
+  }
+
+  // ── right-click a name: mention, friend, copy ────────────────────────────
+  // Friends are a LOCAL list (this machine), not a server relationship — nothing to accept,
+  // nothing to sync, and it can't leak who you fly with. It sorts them to the top of the
+  // member list and marks them.
+  const readFriends = () => { try { return JSON.parse(localStorage.getItem("chatFriends") || "[]"); } catch { return []; } };
+  let friends = readFriends();
+  const isFriend = (h) => friends.some((f) => f.toLowerCase() === h.toLowerCase());
+  function toggleFriend(h) {
+    friends = isFriend(h) ? friends.filter((f) => f.toLowerCase() !== h.toLowerCase()) : [...friends, h];
+    try { localStorage.setItem("chatFriends", JSON.stringify(friends)); } catch { /* private mode */ }
+    renderMembers();
+  }
+  function mention(handle) {
+    const el = $("sendInput");
+    const pad = el.value && !el.value.endsWith(" ") ? " " : "";
+    el.value = el.value + pad + "@" + handle + " ";
+    if (typing) el.focus(); else setTyping(true, "send");
+  }
+  function closeCtx() { $("ctx").classList.remove("open"); }
+  function openCtx(handle, clientX, clientY) {
+    const ctx = $("ctx");
+    ctx.textContent = "";
+    const who = document.createElement("div");
+    who.className = "ct-who"; who.textContent = handle;
+    ctx.appendChild(who);
+    const add = (label, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label;
+      b.addEventListener("click", () => { closeCtx(); fn(); });
+      ctx.appendChild(b);
+    };
+    add("Mention in chat", () => mention(handle));
+    add(isFriend(handle) ? "Remove from friends" : "Add to friends", () => toggleFriend(handle));
+    add("Open their profile", () => openLink("https://subliminal.gg/citizens/" + encodeURIComponent(handle)));
+    // Position INSIDE the panel — this popover hangs over the message list, and a menu that
+    // runs off the widget is a menu the shell never hit-tests.
+    const box = $("panel").getBoundingClientRect();
+    ctx.classList.add("open");
+    const w = ctx.offsetWidth, h = ctx.offsetHeight;
+    let x = clientX - box.left, y = clientY - box.top;
+    if (x + w > box.width - 4) x = Math.max(4, box.width - w - 4);
+    if (y + h > box.height - 4) y = Math.max(4, box.height - h - 4);
+    ctx.style.left = x + "px";
+    ctx.style.top = y + "px";
+    try { host()?.summonCog?.(); } catch { /* not embedded */ }
   }
 
   const chans = () => view?.channels ?? [];
@@ -391,15 +550,23 @@
       return;
     }
     const me = (view?.you?.handle ?? "").toLowerCase();
-    for (const m of [...members].sort((a, b) => a.handle.localeCompare(b.handle))) {
+    // You first, then friends, then everyone alphabetically.
+    const rank = (h) => (h.toLowerCase() === me ? 0 : isFriend(h) ? 1 : 2);
+    for (const m of [...members].sort((a, b) => rank(a.handle) - rank(b.handle) || a.handle.localeCompare(b.handle))) {
       const row = document.createElement("div");
       row.className = "mrow" + (m.handle.toLowerCase() === me ? " you" : "");
-      const dot = document.createElement("span");
-      dot.className = "dot"; dot.style.background = handleColor(m.handle);
-      row.appendChild(dot);
+      row.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(m.handle, e.clientX, e.clientY); });
+      row.title = "Right-click for mention, friends and profile";
       const nm = document.createElement("span");
       nm.className = "nm"; nm.textContent = m.handle;
+      // Same colour the name carries in the log, so a member list and its messages agree.
+      if (m.handle.toLowerCase() !== me) nm.style.color = handleColor(m.handle);
       row.appendChild(nm);
+      if (isFriend(m.handle)) {
+        const f = document.createElement("span");
+        f.className = "fav"; f.textContent = "★"; f.title = "Friend";
+        row.appendChild(f);
+      }
       if (m.verified) {
         const v = document.createElement("span");
         v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
@@ -539,6 +706,56 @@
     try { host()?.summonCog?.(); } catch { /* not embedded */ }
   }
 
+  // ── slash commands ───────────────────────────────────────────────────────
+  // They rewrite what you SEND into a token the renderer turns into a link, so the message
+  // still reads as plain text for anyone on an older build. Kept deliberately short: these
+  // are typed mid-flight, one-handed.
+  const COMMANDS = [
+    { cmd: "/bp", args: "<blueprint>", hint: "link a blueprint on subliminal.gg",
+      run: (rest) => rest ? "[bp:" + rest + "]" : null },
+    { cmd: "/item", args: "<item>", hint: "look it up on starcitizen.tools",
+      run: (rest) => rest ? "[item:" + rest + "]" : null },
+    { cmd: "/me", args: "<action>", hint: "speak in the third person",
+      run: (rest) => rest ? "* " + (view?.you?.handle ?? "") + " " + rest : null },
+    { cmd: "/shrug", args: "", hint: "¯\\_(ツ)_/¯", run: () => "¯\\_(ツ)_/¯" },
+  ];
+  /** Expand a leading slash command. Returns the text to send, or null to refuse. */
+  function applyCommand(text) {
+    if (!text.startsWith("/")) return text;
+    const sp = text.indexOf(" ");
+    const name = (sp < 0 ? text : text.slice(0, sp)).toLowerCase();
+    const rest = sp < 0 ? "" : text.slice(sp + 1).trim();
+    const c = COMMANDS.find((x) => x.cmd === name);
+    if (!c) { sys("No command called " + name + ". Try " + COMMANDS.map((x) => x.cmd).join(", ") + "."); return null; }
+    const out = c.run(rest);
+    if (!out) { sys(c.cmd + " needs something after it - " + c.cmd + " " + c.args); return null; }
+    return out;
+  }
+  function renderSlash(text) {
+    const box = $("slash");
+    if (!text.startsWith("/") || text.includes(" ")) { box.classList.remove("open"); return; }
+    const matches = COMMANDS.filter((c) => c.cmd.startsWith(text.toLowerCase()));
+    box.textContent = "";
+    if (!matches.length) { box.classList.remove("open"); return; }
+    for (const c of matches) {
+      const r = document.createElement("div");
+      r.className = "sc-row";
+      const a = document.createElement("span");
+      a.className = "sc-cmd"; a.textContent = c.cmd + (c.args ? " " + c.args : "");
+      const b = document.createElement("span");
+      b.className = "sc-hint"; b.textContent = c.hint;
+      r.append(a, b);
+      r.addEventListener("click", () => {
+        $("sendInput").value = c.cmd + (c.args ? " " : "");
+        box.classList.remove("open");
+        if (typing) $("sendInput").focus(); else setTyping(true, "send");
+      });
+      box.appendChild(r);
+    }
+    box.classList.add("open");
+    try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
   // ── actions ──────────────────────────────────────────────────────────────
   async function post(path, body) {
     try {
@@ -556,9 +773,12 @@
     const raw = el.value.trim();
     if (!raw) return;
     if (!chanOf(activeCh)) { sys("Not in a channel yet."); return; }
-    const text = expandShortcodes(raw);
+    const commanded = applyCommand(raw);
+    if (commanded === null) { el.value = ""; $("slash").classList.remove("open"); return; }
+    const text = expandShortcodes(commanded);
     el.value = "";
     setEmojiPop(false);
+    $("slash").classList.remove("open");
     if (!await post("/api/chat/send", { ch: activeCh, text })) el.value = raw;
   }
   async function joinNamed(name, mode) {
@@ -603,6 +823,7 @@
 
   $("sendBtn").addEventListener("click", send);
   $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
+  $("sendInput").addEventListener("input", () => renderSlash($("sendInput").value));
   $("emojiBtn").addEventListener("click", () => setEmojiPop(!$("emojiPop").classList.contains("open")));
   $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
   $("joinBtn").addEventListener("click", () => joinNamed($("chanInput").value, "join"));
@@ -618,11 +839,14 @@
     if (e.key !== "Escape") return;
     // Escape closes the picker first, THEN typing mode — otherwise dismissing the grid also
     // drops the keyboard grab and the next keystroke reaches the game.
+    if ($("ctx").classList.contains("open")) { e.preventDefault(); closeCtx(); return; }
+    if ($("slash").classList.contains("open")) { e.preventDefault(); $("slash").classList.remove("open"); return; }
     if ($("emojiPop").classList.contains("open")) { e.preventDefault(); setEmojiPop(false); return; }
     if (typing) { e.preventDefault(); setTyping(false); }
   });
   // Clicking anywhere else closes the picker (it hangs over the message list).
   document.addEventListener("pointerdown", (e) => {
+    if ($("ctx").classList.contains("open") && !e.target.closest("#ctx")) closeCtx();
     if (!$("emojiPop").classList.contains("open")) return;
     if (e.target.closest("#emojiPop") || e.target.closest("#emojiBtn")) return;
     setEmojiPop(false);

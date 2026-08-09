@@ -845,6 +845,12 @@ function missionsPayload(): string {
       theme: effectiveTheme(),
       overlayTwist: config.overlayTwist,
       overlayScale: config.overlayScale,
+      // 🔑 The SHELL owns window opacity but only read this at startup, so saving it did
+      // nothing until the next launch (Sub, 2026-08-09: "I set it to 20, clicked into the
+      // game, nothing happens"). Riding it on the prefs broadcast means EVERY surface that
+      // can change it — settings window, embedded settings widget, a hand-edited config —
+      // reaches the shell through one path that already fires on every config save.
+      unfocusedOpacity: config.unfocusedOpacity,
       premium: entitled(),   // subscriber: skins unlocked + logos/flair shown
       demo: !!demoTheme,     // a trial preview is live → overlay shows the trial watermark
     },

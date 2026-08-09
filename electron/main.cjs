@@ -592,6 +592,10 @@ function reportGeometry() {
         visible: overlay && !overlay.isDestroyed() ? overlay.isVisible() : null,
         enabled: overlayEnabled,
       },
+      // Fade-while-playing: the setting, and what the window actually reports back. `want` vs
+      // `got` is the same trick as asked/got above — "I called setOpacity" and "the user sees a
+      // change" are different claims, and only the readback separates them.
+      opacity: { setting: unfocusedOpacity, override: opacityOverride, ...(lastOpacityApplied ?? {}) },
     };
     void postJson("/api/overlay-geometry", { shell });
   } catch { /* diagnostics must never be the thing that breaks a refit */ }
@@ -847,6 +851,7 @@ function pollCursor() {
     const over = insideRegions(overlayRegions, overlay, pt);
     if (over !== hovering) {
       hovering = over; applyMouse();
+      applyOverlayOpacity(); // reaching for a widget brings it back to full — see below
       // Tell the page when the cursor has left everything. It can't work this out on its own:
       // the window is click-through by then, so it gets no mousemove and therefore no mouseleave
       // — which is why a widget whose header was revealed by a CLICK (any page with a text field
@@ -1109,11 +1114,24 @@ function toggleMining() {
 // against what's behind the window.
 // 🔑 Never fade while ARRANGING — you cannot place what you cannot see — and never below the
 // 0.2 clamp the settings enforce, or the overlay becomes a thing you can't find to fix.
+// 🔑 "Focused" is the wrong test on its own: this window is click-through by design and
+// normally never takes focus, so keying only on isFocused() would leave it dimmed even while
+// you are actively using it. HOVERING is the honest signal — the cursor being over a widget
+// means you are reading it, so it comes back to full for as long as you are there.
 function applyOverlayOpacity() {
   if (!overlay || overlay.isDestroyed()) return;
-  const dim = unfocusedOpacity < 1 && !opacityOverride && !moveMode && !overlay.isFocused();
-  try { overlay.setOpacity(dim ? Math.max(0.2, unfocusedOpacity) : 1); } catch { /* window going away */ }
+  const usingIt = overlay.isFocused() || hovering || moveMode;
+  const dim = unfocusedOpacity < 1 && !opacityOverride && !usingIt;
+  const want = dim ? Math.max(0.2, unfocusedOpacity) : 1;
+  try {
+    overlay.setOpacity(want);
+    // Read back what Windows actually applied — a transparent, always-on-top, software-rendered
+    // window is exactly the case where "I called setOpacity" and "the user sees a change" can
+    // disagree, and this is the only way to tell those apart from outside the process.
+    lastOpacityApplied = { want, got: overlay.getOpacity(), dim, hovering, focused: overlay.isFocused() };
+  } catch { /* window going away */ }
 }
+let lastOpacityApplied = null;
 function setUnfocusedOpacity(v) {
   const n = Number(v);
   unfocusedOpacity = Number.isFinite(n) ? Math.max(0.2, Math.min(1, n)) : 1;

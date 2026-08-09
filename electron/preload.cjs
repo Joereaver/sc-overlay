@@ -91,6 +91,9 @@ contextBridge.exposeInMainWorld("overlayApi", {
   onBattagliaVisible: (cb) => ipcRenderer.on("overlay:battaglia-visible", (_e, s) => cb(s)),
   // Social chat: shell-owned visibility; its send field reuses the keyboard-grab above.
   setChat: (on) => ipcRenderer.send("app:set-chat", !!on),
+  // Fade-while-playing. The canvas relays it off the prefs broadcast so a save from any
+  // settings surface reaches the shell without an app restart.
+  setUnfocusedOpacity: (v) => ipcRenderer.invoke("app:set-unfocused-opacity", v),
   onChatVisible: (cb) => ipcRenderer.on("overlay:chat-visible", (_e, s) => cb(s)),
   // Settings as a canvas widget (the standalone window still exists — see openSettings above).
   setConfig: (on) => ipcRenderer.send("app:set-config", !!on),

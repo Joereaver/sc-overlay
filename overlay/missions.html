@@ -1153,6 +1153,15 @@
      past the panel's rounded ones. */
   #mreport { display: none; position: absolute; inset: 0; z-index: 24; border-radius: 12px; overflow: hidden; }
   #mreport.show { display: block; }
+  /* 🔑 The tracker has NO z-index of its own while every `.widget` carries `z-index: 20`, so
+     ANY widget overlapping it stacks on top — and the report card lives INSIDE the tracker.
+     Sub hit this the day the Chat widget arrived (820×480, defaulting near the tracker): the
+     top of the card answered clicks and everything below the overlap did not, which reads as
+     "the questions are dead" rather than "something invisible is over them". The card is a
+     modal moment — it already tells the shell so — so the tracker rises above the widgets for
+     as long as it is up, and drops straight back after. 40 clears widgets (20-22) and the
+     notifier layers (21-22) while staying under arrange chrome (49+) and the hub (61). */
+  #panel.canvas.mr-open { z-index: 40; }
   /* 🔑 OPAQUE, not the panel's own translucent gradient (Sub, 2026-07-30): the panel is
      semi-transparent by design so gameplay reads through it, but this card is dense text you
      only get 40 seconds to read, and the game showing through made it harder to read for no
@@ -1655,8 +1664,16 @@
   new MutationObserver(updateBrandTab).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class"] });
   updateBrandTab();
 
+  let lastOpacityPref = null;
   function applyPrefs() {
     $("panel").classList.toggle("hide-catbar", !!PREFS.hideCatbar);
+    // Window opacity belongs to the SHELL, but the setting is saved through the sidecar — so
+    // the prefs broadcast is what carries a save from ANY settings surface to the window that
+    // has to act on it. Only on change: this runs on every mission tick.
+    if (typeof PREFS.unfocusedOpacity === "number" && PREFS.unfocusedOpacity !== lastOpacityPref) {
+      lastOpacityPref = PREFS.unfocusedOpacity;
+      window.overlayApi?.setUnfocusedOpacity?.(PREFS.unfocusedOpacity);
+    }
     // Manufacturer theme (mobiglas default, drake, or the auto-resolved theme from the
     // server) + left↔right HUD-align angle. A ?theme= query param overrides for testing.
     const root = document.documentElement;
@@ -2250,6 +2267,8 @@
       document.body.classList.remove("bp-hidden");
       mrForcedPanel = true;
     }
+    // Lift the tracker above every other widget while the card is up — see #panel.canvas.mr-open.
+    $("panel")?.classList.add("mr-open");
     mrContract = c.contractKey;
     mrAnswers = {};
     // Pre-select whatever this player said last time about this contract, so a re-run shows
@@ -2338,6 +2357,7 @@
     if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
     $("mreport").classList.remove("show");
+    $("panel")?.classList.remove("mr-open"); // back into the normal stacking order
     if (mrForcedPanel) { document.body.classList.add("bp-hidden"); mrForcedPanel = false; }
     // 🔑 mrAt is NOT cleared. It's the "already shown this completion" marker, and the server
     // keeps serving v.completion for its full 30s hold — so clearing it here would make the very
