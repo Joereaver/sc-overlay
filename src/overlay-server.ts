@@ -1490,6 +1490,13 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     res.end(JSON.stringify({ names: tracker.searchBlueprintNames(q) }));
     return;
   }
+  // Mission titles for the chat widget's /mission command ("let's run this one").
+  if (url === "/api/mission-search" && req.method === "GET") {
+    const q = new URL(req.url ?? "", "http://x").searchParams.get("q") ?? "";
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ missions: tracker.searchMissionTitles(q) }));
+    return;
+  }
   if (url === "/api/blueprint-detail" && req.method === "GET") {
     const q = new URL(req.url ?? "", "http://x").searchParams;
     const key = (q.get("item") || q.get("name") || "").trim();

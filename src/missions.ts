@@ -2129,7 +2129,7 @@ export class MissionTracker extends EventEmitter {
    *    · or is camelCase             ("AbsoluteZero")          — a capital after the first letter
    *    · or is >= 6 letters and not a common word ("Agrippa")
    *  Anything shorter or word-like is still reachable through /bp, which is explicit. */
-  autoLinkNames(): { match: string; name: string }[] {
+  autoLinkNames(): { match: string; name: string; item: string }[] {
     const idx = this.dataset?.index;
     if (!idx) return [];
     // Words that ARE blueprint names but are also things people say. Kept small on purpose —
@@ -2147,31 +2147,35 @@ export class MissionTracker extends EventEmitter {
     // canonical name, so the link is never ambiguous.
     const ROMAN: Record<string, string> = { i: "1", ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9", x: "10" };
     const TRAILING = /\s+(Cannon|Repeater|Scattergun|Helmet|Core|Arms|Legs|Undersuit|Backpack|Module|Rifle|Pistol|SMG|Shotgun|LMG|Sniper)$/i;
-    const out: { match: string; name: string }[] = [];
+    const out: { match: string; name: string; item: string }[] = [];
     const seen = new Set<string>();
-    const push = (match: string, name: string) => {
+    // 🔑 The site's blueprint page is /blueprints/<ITEM UUID>, not the name — a name-based link
+    // 404s (measured against production). The uuid rides with every entry so the widget never
+    // has to guess.
+    const push = (match: string, name: string, item: string) => {
       const l = match.toLowerCase();
-      if (!match || match.length < 4 || seen.has(l) || COMMON.has(l)) return;
+      if (!match || match.length < 4 || seen.has(l) || COMMON.has(l) || !item) return;
       seen.add(l);
-      out.push({ match, name });
+      out.push({ match, name, item });
     };
     for (const e of idx) {
       const n = (e.name ?? "").trim();
-      if (!n || n.length < 4) continue;
+      const uuid = e.item ?? "";
+      if (!n || n.length < 4 || !uuid) continue;
       const multiWord = /\s/.test(n);
       const hasDigit = /\d/.test(n);
       const camel = /^[A-Za-z][a-z]+[A-Z]/.test(n);
       const longEnough = /^[A-Za-z'’-]{6,}$/.test(n);
       if (!(multiWord || hasDigit || camel || longEnough)) continue;
-      push(n, n);
+      push(n, n, uuid);
       // "Deadbolt III Cannon" → also match "Deadbolt 3 Cannon" and "Deadbolt 3".
       const arabic = n.replace(/\b([ivx]+)\b/gi, (w) => ROMAN[w.toLowerCase()] ?? w);
-      if (arabic !== n) push(arabic, n);
+      if (arabic !== n) push(arabic, n, uuid);
       for (const variant of [n, arabic]) {
         const stem = variant.replace(TRAILING, "");
         // Only when the stem still carries something distinctive of its own — a bare
         // "Deadbolt" could be any mark, and a link that picks one silently is worse than none.
-        if (stem !== variant && /\d/.test(stem)) push(stem, n);
+        if (stem !== variant && /\d/.test(stem)) push(stem, n, uuid);
       }
     }
     // Longest first, so "Geist Armor Arms" wins over "Geist Armor" when both match.
@@ -2183,19 +2187,42 @@ export class MissionTracker extends EventEmitter {
    *  just the ones in mission pools, which is what makes it usable as a lookup rather than a
    *  list of what you happen to be running. Prefix matches rank above contains-matches, so
    *  typing "geist" offers "Geist Armor…" before "…Geist variant". */
-  searchBlueprintNames(q: string, limit = 8): string[] {
+  searchBlueprintNames(q: string, limit = 8): { name: string; item: string }[] {
     const needle = q.trim().toLowerCase();
     if (!needle || !this.dataset?.index) return [];
     const seen = new Set<string>();
-    const starts: string[] = [];
-    const has: string[] = [];
+    const starts: { name: string; item: string }[] = [];
+    const has: { name: string; item: string }[] = [];
     for (const e of this.dataset.index) {
       const name = e.name;
-      if (!name) continue;
+      if (!name || !e.item) continue;
       const l = name.toLowerCase();
       if (seen.has(l)) continue;
-      if (l.startsWith(needle)) { seen.add(l); starts.push(name); }
-      else if (l.includes(needle)) { seen.add(l); has.push(name); }
+      if (l.startsWith(needle)) { seen.add(l); starts.push({ name, item: e.item }); }
+      else if (l.includes(needle)) { seen.add(l); has.push({ name, item: e.item }); }
+      if (starts.length >= limit) break;
+    }
+    return [...starts, ...has].slice(0, limit);
+  }
+
+  /** Mission TITLES matching a fragment, for the chat widget's /mission command — "hey, I want
+   *  to run this" with a link back to the site's mission page (/missions/<contract key>).
+   *  🔑 Titles are not unique (the same title exists as a one-time intro and a repeatable rank
+   *  contract), so the KEY is what the link carries and the title is only what it reads as. */
+  searchMissionTitles(q: string, limit = 8): { title: string; key: string }[] {
+    const needle = q.trim().toLowerCase();
+    const missions = this.dataset?.missions;
+    if (!needle || !missions) return [];
+    const seen = new Set<string>();
+    const starts: { title: string; key: string }[] = [];
+    const has: { title: string; key: string }[] = [];
+    for (const [key, m] of Object.entries(missions)) {
+      const title = (m.title ?? "").trim();
+      if (!title) continue;
+      const l = title.toLowerCase();
+      if (seen.has(l)) continue;
+      if (l.startsWith(needle)) { seen.add(l); starts.push({ title, key }); }
+      else if (l.includes(needle)) { seen.add(l); has.push({ title, key }); }
       if (starts.length >= limit) break;
     }
     return [...starts, ...has].slice(0, limit);

@@ -337,9 +337,17 @@
   const MENTION_RE = /@([A-Za-z0-9._-]{3,30})/g;
   // Tokens the app itself writes when you use a slash command. `bp:` is a blueprint on the
   // site; `item:` is a starcitizen.tools lookup. Both survive as plain text for old clients.
-  const TOKEN_RE = /\[(bp|item):([^\]]{1,80})\]/g;
-  const bpUrl = (name) => "https://subliminal.gg/blueprints/" + encodeURIComponent(name.trim());
-  const toolsUrl = (name) => "https://starcitizen.tools/" + encodeURIComponent(name.trim().replace(/\s+/g, "_"));
+  // A token carries the display text AND the id the link needs: [bp:Name|uuid],
+  // [mission:Title|contractKey], [item:Name]. The id half is optional so an older client's
+  // plain [bp:Name] still renders (it just links by name).
+  // 🔑 The site's routes are /blueprints/<ITEM UUID> and /missions/<CONTRACT KEY> — NOT the
+  // display name. Linking by name 404s, which is exactly what Sub hit.
+  const TOKEN_RE = /\[(bp|item|mission):([^\]|]{1,80})(?:\|([^\]]{1,80}))?\]/g;
+  const bpUrl = (id) => "https://subliminal.gg/blueprints/" + encodeURIComponent(id);
+  const missionUrl = (key) => "https://subliminal.gg/missions/" + encodeURIComponent(key);
+  // starcitizen.tools page titles are the item name with underscores for spaces
+  // (verified: /Deadbolt_III_Cannon → 200).
+  const toolsUrl = (name) => "https://starcitizen.tools/" + name.trim().replace(/\s+/g, "_").split("/").map(encodeURIComponent).join("/");
   function openLink(url) {
     if (host()?.openUrl) host().openUrl(url);
     else window.open(url, "_blank", "noopener");
@@ -355,7 +363,7 @@
       const d = await (await fetch("/api/blueprint-names")).json();
       const rows = (d.names ?? []).filter((r) => r && r.match);
       if (!rows.length) return;
-      bpCanon = new Map(rows.map((r) => [r.match.toLowerCase(), r.name]));
+      bpCanon = new Map(rows.map((r) => [r.match.toLowerCase(), { name: r.name, item: r.item }]));
       const esc = rows.map((r) => r.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
       bpRe = new RegExp("(?<![\\w-])(" + esc.join("|") + ")(?![\\w-])", "gi");
     } catch { /* no dataset yet — chat still works, just without auto-links */ }
@@ -369,10 +377,12 @@
       if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
       const a = document.createElement("span");
       a.className = "lk";
-      a.textContent = m[0];                                   // show what they typed…
-      const canon = bpCanon.get(m[0].toLowerCase()) ?? m[0];   // …but link the real name
-      a.title = canon === m[0] ? "Open this blueprint on subliminal.gg" : "Open “" + canon + "” on subliminal.gg";
-      const url = bpUrl(canon);
+      a.textContent = m[0];                                    // show what they typed…
+      const canon = bpCanon.get(m[0].toLowerCase());           // …but link the real item's UUID
+      a.title = !canon || canon.name === m[0]
+        ? "Open this blueprint on subliminal.gg"
+        : "Open “" + canon.name + "” on subliminal.gg";
+      const url = bpUrl(canon?.item ?? m[0]);
       a.addEventListener("click", () => openLink(url));
       frag.appendChild(a);
       last = m.index + m[0].length;
@@ -388,7 +398,7 @@
     const parts = [];
     let idx = 0;
     const all = [];
-    text.replace(TOKEN_RE, (m, kind, name, at) => { all.push({ at, len: m.length, kind, name }); return m; });
+    text.replace(TOKEN_RE, (m, kind, name, id, at) => { all.push({ at, len: m.length, kind, name, id }); return m; });
     text.replace(MENTION_RE, (m, handle, at) => { all.push({ at, len: m.length, kind: "at", name: handle }); return m; });
     all.sort((a, b) => a.at - b.at);
     for (const t of all) {
@@ -414,8 +424,12 @@
       const a = document.createElement("span");
       a.className = "lk";
       a.textContent = p.name;
-      a.title = p.kind === "bp" ? "Open this blueprint on subliminal.gg" : "Look this up on starcitizen.tools";
-      const url = p.kind === "bp" ? bpUrl(p.name) : toolsUrl(p.name);
+      const url = p.kind === "mission" ? missionUrl(p.id ?? p.name)
+        : p.kind === "bp" ? bpUrl(p.id ?? bpCanon.get(p.name.toLowerCase())?.item ?? p.name)
+        : toolsUrl(p.name);
+      a.title = p.kind === "mission" ? "Open this mission on subliminal.gg"
+        : p.kind === "bp" ? "Open this blueprint on subliminal.gg"
+        : "Look this up on starcitizen.tools";
       a.addEventListener("click", () => openLink(url));
       frag.appendChild(a);
     }
@@ -470,7 +484,12 @@
     const el = $("sendInput");
     const pad = el.value && !el.value.endsWith(" ") ? " " : "";
     el.value = el.value + pad + "@" + handle + " ";
-    if (typing) el.focus(); else setTyping(true, "send");
+    // 🔑 Focus only — NEVER switch typing mode on from a helper. Typing mode asks the shell for
+    // a keyboard grab, and that grab makes the WHOLE canvas swallow clicks, so a mention or an
+    // emoji pick would silently take the mouse away from the game and nothing turned it back off
+    // (Sub, 2026-08-09: "the chat app is forcing me to click it"). The user turns it on
+    // deliberately with the pencil, and the pencil turns it off.
+    el.focus();
   }
   function closeCtx() { $("ctx").classList.remove("open"); }
   function openCtx(handle, clientX, clientY) {
@@ -742,7 +761,12 @@
     el.setSelectionRange(at, at);
     setEmojiPop(false);
     // Keep the keyboard grab: over a focused game, losing it sends the next keys to SC.
-    if (typing) el.focus(); else setTyping(true, "send");
+    // 🔑 Focus only — NEVER switch typing mode on from a helper. Typing mode asks the shell for
+    // a keyboard grab, and that grab makes the WHOLE canvas swallow clicks, so a mention or an
+    // emoji pick would silently take the mouse away from the game and nothing turned it back off
+    // (Sub, 2026-08-09: "the chat app is forcing me to click it"). The user turns it on
+    // deliberately with the pencil, and the pencil turns it off.
+    el.focus();
   }
   function setEmojiPop(on) {
     $("emojiPop").classList.toggle("open", !!on);
@@ -807,20 +831,47 @@
       run: (rest) => rest ? "[bp:" + rest + "]" : null },
     { cmd: "/item", args: "<item>", hint: "look it up on starcitizen.tools",
       run: (rest) => rest ? "[item:" + rest + "]" : null },
+    { cmd: "/mission", args: "<mission>", hint: "link a mission on subliminal.gg",
+      run: (rest) => rest ? "[mission:" + rest + "]" : null },
     { cmd: "/me", args: "<action>", hint: "speak in the third person",
       run: (rest) => rest ? "* " + (view?.you?.handle ?? "") + " " + rest : null },
     { cmd: "/shrug", args: "", hint: "¯\\_(ツ)_/¯", run: () => "¯\\_(ツ)_/¯" },
   ];
   /** Expand a leading slash command. Returns the text to send, or null to refuse. */
   function applyCommand(text) {
-    if (!text.startsWith("/")) return text;
-    const sp = text.indexOf(" ");
-    const name = (sp < 0 ? text : text.slice(0, sp)).toLowerCase();
-    const rest = sp < 0 ? "" : text.slice(sp + 1).trim();
-    const c = COMMANDS.find((x) => x.cmd === name);
-    if (!c) { sys("No command called " + name + ". Try " + COMMANDS.map((x) => x.cmd).join(", ") + "."); return null; }
-    const out = c.run(rest);
-    if (!out) { sys(c.cmd + " needs something after it - " + c.cmd + " " + c.args); return null; }
+    // /me and /shrug rewrite the WHOLE message, so they only count at the very start.
+    if (/^\/(me|shrug)\b/i.test(text)) {
+      const sp = text.indexOf(" ");
+      const name = (sp < 0 ? text : text.slice(0, sp)).toLowerCase();
+      const rest = sp < 0 ? "" : text.slice(sp + 1).trim();
+      const c = COMMANDS.find((x) => x.cmd === name);
+      const out = c?.run(rest);
+      if (!out) { sys(c.cmd + " needs something after it - " + c.cmd + " " + c.args); return null; }
+      return out;
+    }
+    // 🔑 The link commands are INLINE and are normally turned into a token by accepting a
+    // suggestion. A leftover "/bp something" — typed and sent without picking — is expanded
+    // here so it still links rather than being sent as literal slash text. Anywhere in the
+    // message, any number of times.
+    let out = text.replace(/(^|\s)\/(bp|item|mission)\s+([^[\]]+?)(?=\s\/|$)/gi, (m, pre, kind, rest) => {
+      const k = kind.toLowerCase();
+      const name = rest.trim();
+      if (!name) return m;
+      if (k === "bp") {
+        const hit = bpCanon.get(name.toLowerCase());
+        return pre + "[bp:" + (hit?.name ?? name) + (hit?.item ? "|" + hit.item : "") + "]";
+      }
+      if (k === "item") return pre + "[item:" + name + "]";
+      return pre + "[mission:" + name + "]";   // no key: the site resolves what it can
+    });
+    // An unknown slash word at the very start is a typo worth naming, not silent plain text.
+    if (/^\//.test(out) && !/^\[/.test(out)) {
+      const first = out.split(/\s/)[0].toLowerCase();
+      if (!COMMANDS.some((c) => c.cmd === first)) {
+        sys("No command called " + first + ". Try " + COMMANDS.map((c) => c.cmd).join(", ") + ".");
+        return null;
+      }
+    }
     return out;
   }
   // ── autocomplete ─────────────────────────────────────────────────────────
@@ -872,7 +923,12 @@
     const el = $("sendInput");
     el.value = el.value.slice(0, suggAt) + row.insert;
     closeSugg();
-    if (typing) el.focus(); else setTyping(true, "send");
+    // 🔑 Focus only — NEVER switch typing mode on from a helper. Typing mode asks the shell for
+    // a keyboard grab, and that grab makes the WHOLE canvas swallow clicks, so a mention or an
+    // emoji pick would silently take the mouse away from the game and nothing turned it back off
+    // (Sub, 2026-08-09: "the chat app is forcing me to click it"). The user turns it on
+    // deliberately with the pencil, and the pencil turns it off.
+    el.focus();
     // A command still needs its argument, so re-run the pass to offer the next thing.
     renderSlash(el.value);
   }
@@ -894,22 +950,40 @@
       })), 0);
       return;
     }
-    // 2. a blueprint / item name after /bp or /item — asked of the local dataset
-    const bp = text.match(/^\/(bp|item)\s+(.*)$/i);
+    // 2. a blueprint / item / mission name after its command — asked of the local dataset.
+    // 🔑 Matched ANYWHERE in the message, not just at the start (Sub: "type a message
+    // afterwards, or maybe even in the middle"). Accepting a suggestion replaces the command
+    // fragment IN PLACE with a finished token, so you carry on typing around it.
+    const bp = text.match(/(?:^|\s)\/(bp|item|mission)\s+([^/]*)$/i);
     if (bp) {
+      const kind = bp[1].toLowerCase();
       const frag = bp[2];
-      const start = text.length - frag.length;
+      const start = text.length - frag.length - bp[1].length - 2;   // back over "/cmd "
       clearTimeout(bpTimer);
       if (frag.trim().length < 2) { closeSugg(); return; }
       bpTimer = setTimeout(async () => {
         try {
+          if (kind === "mission") {
+            const d = await (await fetch("/api/mission-search?q=" + encodeURIComponent(frag))).json();
+            const rows = d.missions ?? [];
+            if (!rows.length) { closeSugg(); return; }
+            drawSugg(rows.map((m) => ({
+              label: m.title, mono: false, hint: "subliminal.gg",
+              insert: "[mission:" + m.title + "|" + m.key + "] ",
+            })), start);
+            return;
+          }
           const d = await (await fetch("/api/blueprint-search?q=" + encodeURIComponent(frag))).json();
-          const names = d.names ?? [];
-          if (!names.length) { closeSugg(); return; }
-          drawSugg(names.map((n) => ({
-            label: n, mono: false,
-            hint: bp[1].toLowerCase() === "bp" ? "subliminal.gg" : "starcitizen.tools",
-            insert: n,
+          const rows = d.names ?? [];
+          if (!rows.length) { closeSugg(); return; }
+          drawSugg(rows.map((r) => ({
+            label: r.name, mono: false,
+            hint: kind === "bp" ? "subliminal.gg" : "starcitizen.tools",
+            // The blueprint link needs the item UUID (the site's route); the wiki link needs
+            // only the name, and its page title is the name with underscores.
+            insert: kind === "bp"
+              ? "[bp:" + r.name + "|" + r.item + "] "
+              : "[item:" + r.name + "] ",
           })), start);
         } catch { closeSugg(); }
       }, 120);   // debounce: this fires on every keystroke
