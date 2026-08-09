@@ -1965,6 +1965,41 @@ const CHATLINKS = `(async () => {
   ok("a mention beside a token survives", mixed.querySelector(".at") !== null);
   ok("...and the token beside it still links", mixed.querySelector(".lnk") !== null);
 
+  // ── /build: an erkul loadout the sender names ───────────────────────────
+  // erkul's share link is an opaque hash and its old API host no longer exists, so nothing can
+  // look the ship up — the sender supplies the name.
+  ok("a valid link becomes a build token",
+     applyCommand("/build Vulture salvage fit https://erkul.games/s/akeei4v0")
+       === "[build:Vulture salvage fit|https://erkul.games/s/akeei4v0]",
+     applyCommand("/build Vulture salvage fit https://erkul.games/s/akeei4v0"));
+  ok("www and the older /loadout/ form both work",
+     applyCommand("/build Old one https://www.erkul.games/loadout/Zjbboonv")
+       === "[build:Old one|https://erkul.games/loadout/Zjbboonv]",
+     applyCommand("/build Old one https://www.erkul.games/loadout/Zjbboonv"));
+  ok("a non-erkul link is refused", applyCommand("/build Sneaky https://evil.example/s/abcd") === null);
+  ok("a name with no link is refused", applyCommand("/build just a name") === null);
+  ok("no arguments at all is refused", applyCommand("/build") === null);
+
+  const bt = render("[build:Vulture salvage fit|https://erkul.games/s/akeei4v0]");
+  ok("a build token renders tagged BUILD", bt.querySelector(".lkk").textContent === "BUILD",
+     bt.querySelector(".lkk").textContent);
+  ok("...showing the sender's name", bt.querySelector(".lkt").textContent === "Vulture salvage fit",
+     bt.querySelector(".lkt").textContent);
+  ok("...with the destination on hover, so you see where it goes",
+     (bt.querySelector(".lnk").title || "").indexOf("https://erkul.games/s/akeei4v0") >= 0,
+     bt.querySelector(".lnk").title);
+
+  // 🔴 The token arrives over the wire from another player, so validating only on SEND
+  // guarantees nothing. A hostile client must not be able to put an arbitrary URL — least of
+  // all a javascript: one — into somebody's real browser.
+  for (const nasty of ["javascript:alert(1)", "https://evil.example/s/abcd",
+                       "https://erkul.games.evil.example/s/abcd", "https://erkul.games/../etc"]) {
+    const n = render("[build:Click me|" + nasty + "]");
+    ok("a hostile build URL never becomes a link: " + nasty.slice(0, 34),
+       n.querySelector(".lnk") === null && n.textContent.indexOf("Click me") >= 0,
+       n.innerHTML.slice(0, 60));
+  }
+
   // ── the slash menu, mid-message ─────────────────────────────────────────
   const box = document.getElementById("slash");
   const input = document.getElementById("sendInput");

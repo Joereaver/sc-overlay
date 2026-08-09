@@ -496,7 +496,29 @@
   // plain [bp:Name] still renders (it just links by name).
   // 🔑 The site's routes are /blueprints/<ITEM UUID> and /missions/<CONTRACT KEY> — NOT the
   // display name. Linking by name 404s, which is exactly what Sub hit.
-  const TOKEN_RE = /\[(bp|item|mission):([^\]|]{1,80})(?:\|([^\]]{1,80}))?\]/g;
+  // `build:` is an erkul.games ship loadout the SENDER named — erkul's share links are an
+  // opaque hash with no ship in them, and its old API host (server.erkul.games) no longer
+  // exists, so there is nothing to look up. The person pasting it is the one who knows what
+  // it is. The id half is longer here because it holds a URL rather than a uuid.
+  // 🔑 ONE alternation-free pattern with three groups. A second top-level alternation for
+  // `build` would shift the capture-group positions the replace() callback reads by name, and
+  // the id length simply widens to fit a URL.
+  const TOKEN_RE = /\[(bp|item|mission|build):([^\]|]{1,80})(?:\|([^\]]{1,200}))?\]/g;
+
+  /** An erkul share link, or null. 🔴 Called on RENDER, not just on send: the token arrives
+   *  over the wire from another player, so "we validated it when we made it" guarantees
+   *  nothing. This is the allowlist that stops a chat message opening javascript: or any other
+   *  URL of a stranger's choosing in the user's real browser. */
+  function erkulUrl(raw) {
+    let u;
+    try { u = new URL(String(raw).trim()); } catch { return null; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    if (host !== "erkul.games") return null;
+    // /s/<id> is the current short link; /loadout/<id> is the older format still in the wild.
+    if (!/^\/(s|loadout)\/[A-Za-z0-9_-]{4,40}\/?$/.test(u.pathname)) return null;
+    return "https://" + host + u.pathname.replace(/\/$/, "");
+  }
   const bpUrl = (id) => "https://subliminal.gg/blueprints/" + encodeURIComponent(id);
   const missionUrl = (key) => "https://subliminal.gg/missions/" + encodeURIComponent(key);
   // starcitizen.tools page titles are the item name with underscores for spaces
@@ -508,11 +530,12 @@
   }
   // Every link out of chat is built here so the KIND TAG can never go missing on one path and
   // not another — which is exactly how [bp:…] and [item:…] came to look the same.
-  const KIND_TAG = { bp: "BP", item: "ITEM", mission: "MISSION" };
+  const KIND_TAG = { bp: "BP", item: "ITEM", mission: "MISSION", build: "BUILD" };
   const KIND_TITLE = {
     bp: "Open this blueprint on subliminal.gg",
     item: "Look this up on starcitizen.tools",
     mission: "Open this mission on subliminal.gg",
+    build: "Open this loadout on erkul.games",
   };
   function linkNode(kind, label, url, title) {
     const wrap = document.createElement("span");
@@ -594,6 +617,17 @@
         s.className = "at" + (isMe ? " me" : "");
         s.textContent = "@" + p.name;
         frag.appendChild(s);
+        continue;
+      }
+      if (p.kind === "build") {
+        // Refuse anything that isn't a real erkul link, and show it as PLAIN TEXT rather than
+        // dropping it — a message that silently loses part of itself is worse than one that
+        // shows a suspect link un-clickable.
+        const safe = erkulUrl(p.id ?? "");
+        if (!safe) { frag.appendChild(document.createTextNode(p.name)); continue; }
+        // The destination rides in the tooltip. Sub's ask: erkul's hash says nothing about the
+        // build, so the name is the sender's and hovering tells you where you're actually going.
+        frag.appendChild(linkNode("build", p.name, safe, p.name + " — " + safe));
         continue;
       }
       const url = p.kind === "mission" ? missionUrl(p.id ?? p.name)
@@ -1106,6 +1140,11 @@
       run: (rest) => rest ? "[item:" + rest + "]" : null },
     { cmd: "/mission", args: "<mission>", hint: "link a mission on subliminal.gg", inline: true,
       run: (rest) => rest ? "[mission:" + rest + "]" : null },
+    // Name it yourself: erkul's share link is an opaque hash and its old API host is gone, so
+    // nothing can look the ship up. `run` is unused — /build is expanded in applyCommand because
+    // it takes TWO arguments and has to validate the second.
+    { cmd: "/build", args: "<name> <erkul link>", hint: "share an erkul loadout", inline: true,
+      run: (rest) => rest ? null : null },
     { cmd: "/me", args: "<action>", hint: "speak in the third person",
       run: (rest) => rest ? "* " + (view?.you?.handle ?? "") + " " + rest : null },
     { cmd: "/shrug", args: "", hint: "¯\\_(ツ)_/¯", run: () => "¯\\_(ツ)_/¯" },
@@ -1121,6 +1160,25 @@
       const out = c?.run(rest);
       if (!out) { sys(c.cmd + " needs something after it - " + c.cmd + " " + c.args); return null; }
       return out;
+    }
+    // /build <name> <erkul link>. Two arguments, and the second has to be VALIDATED — so it is
+    // expanded here rather than through a one-argument `run`. The name is free text (it is the
+    // sender's description) and the URL is the last whitespace-separated word, which is how
+    // people paste links: "/build Vulture salvage fit https://erkul.games/s/akeei4v0".
+    // Refusing loudly matters: a silently-dropped link looks like the app ate the message.
+    {
+      const b = text.match(/^\/build\b\s*(.*)$/i);
+      if (b) {
+        const rest = (b[1] ?? "").trim();
+        const sp = rest.lastIndexOf(" ");
+        const name = sp < 0 ? "" : rest.slice(0, sp).trim();
+        const link = sp < 0 ? rest : rest.slice(sp + 1).trim();
+        const safe = erkulUrl(link);
+        if (!rest) { sys("/build needs a name and a link - /build Vulture salvage fit https://erkul.games/s/…"); return null; }
+        if (!safe) { sys("That doesn't look like an erkul.games loadout link. In erkul, hit Share and paste the link it gives you."); return null; }
+        if (!name) { sys("Give the build a name so people know what it is - /build Vulture salvage fit <link>"); return null; }
+        return "[build:" + name.replace(/[[\]|]/g, "") + "|" + safe + "]";
+      }
     }
     // 🔑 The link commands are INLINE and are normally turned into a token by accepting a
     // suggestion. A leftover "/bp something" — typed and sent without picking — is expanded
