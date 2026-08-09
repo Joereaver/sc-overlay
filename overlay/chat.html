@@ -121,9 +121,22 @@
   /* Friends float to the top of the member list and keep a marker. */
   .mrow .fav { flex: none; font-size: 9px; color: var(--gold); }
 
-  /* Create-a-room popover. Anchored to the rail foot and kept INSIDE the panel — anything that
-     hangs outside the widget's own rect is not hit-tested by the shell and cannot be clicked. */
-  #createPop { position: absolute; display: none; z-index: 9; left: 6px; right: 6px; bottom: calc(100% + 6px);
+  /* Create-a-room popover.
+     🔴 It is positioned against #panel by JS and CLAMPED inside it — never with a percentage
+     offset from its DOM parent. `.rail-foot` is not a positioned ancestor, so an earlier
+     `bottom: calc(100% + 6px)` resolved against #panel and put the whole box 6px ABOVE the
+     widget: off the canvas, invisible and unclickable (Sub, 2026-08-09: "whatever box is
+     supposed to pop up is up and out of the window"). Anything outside the widget's own rect
+     is not in the shell's hit-test region list, so it could never have been clicked even if
+     it had been visible. Same rule, same fix as #ctx. */
+  /* 🔑 PINNED to the panel's bottom-left, not positioned by arithmetic. #panel is the
+     positioned ancestor, so left/bottom put it inside the widget BY CONSTRUCTION — no
+     measuring, nothing to drift, and it lands right where the Create button is (bottom of the
+     left rail). Two measured attempts failed here: the box grows after the first measurement
+     when the hint line re-wraps, and a rAF correction never runs at all in the hidden test
+     window. max-height keeps it inside a short widget too. */
+  #createPop { position: absolute; display: none; z-index: 9; width: 250px;
+    left: 6px; bottom: 6px; max-height: calc(100% - 12px); overflow-y: auto;
     padding: 8px; border: 1px solid var(--border); border-radius: 8px;
     background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.55); }
   #createPop.open { display: block; }
@@ -269,6 +282,13 @@
       <button id="leftBtn" class="hbtn sm tog" type="button" title="Show or hide the channel list" aria-label="Channels">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
       </button>
+      <!-- Typing mode sits BETWEEN the two rail toggles (Sub, 2026-08-09). It used to live down
+           in the send bar; up here it is one of the three things you reach for constantly, and
+           an SVG on currentColor rather than a text glyph so it inherits the skin like its
+           neighbours do. -->
+      <button id="typeBtn" class="hbtn sm tog" type="button" title="Typing mode: grab keyboard focus so you can type in-game" aria-label="Typing mode">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.4 2.6a1.6 1.6 0 0 1 2.3 2.3L5.6 13H3.2v-2.4z"/><path d="M10.2 3.8l2 2"/></svg>
+      </button>
       <button id="rightBtn" class="hbtn sm tog" type="button" title="Show or hide who's here" aria-label="Members">
         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><path d="M11 3.6a2.5 2.5 0 0 1 0 4.3M12.4 9.9c1.4.5 2.3 1.8 2.3 3.6"/></svg>
       </button>
@@ -328,7 +348,6 @@
           <button id="emojiBtn" class="hbtn sm" type="button" title="Emoji" aria-label="Emoji">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.6 9.6a3 3 0 0 0 4.8 0"/><circle cx="6" cy="6.4" r=".9" fill="currentColor" stroke="none"/><circle cx="10" cy="6.4" r=".9" fill="currentColor" stroke="none"/></svg>
           </button>
-          <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
           <button id="sendBtn" class="hbtn sm" type="button">Send</button>
           <div id="emojiPop"></div>
           <div id="slash"></div>
@@ -1294,8 +1313,13 @@
     if (!sel.value) sel.value = sel.options[0]?.value ?? "";
     $("cpName").value = $("chanInput").value.trim();
     updateCreateHint();
-    $("cpName").focus();
+    // 🔑 preventScroll, and place AFTER focusing. A plain .focus() scrolls the focused field
+    // into view, which scrolls #panel under an absolutely-positioned popover and slid it back
+    // out of the widget after the clamp had already run.
+    $("cpName").focus({ preventScroll: true });
   }
+
+
   function updateCreateHint() {
     $("cpHint").textContent = $("cpPriv").value === "private"
       ? "Not listed anywhere. You'll get a code to share, and you can invite RSI handles by name."

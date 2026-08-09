@@ -2012,6 +2012,23 @@ const CHATLINKS = `(async () => {
 
   setCreatePop(true);
   ok("the create panel opens", document.getElementById("createPop").classList.contains("open"));
+
+  // 🔴 It shipped 6px ABOVE the whole widget: off the canvas, and outside the rect the shell
+  // hit-tests, so unclickable as well as invisible. MEASURE it — reasoning about the CSS is
+  // exactly what missed it: rail-foot is not a positioned ancestor.
+  // The final clamp runs on the next frame, deliberately: the hint re-wraps and focusing the
+  // name field can scroll the panel, both after the arithmetic. Measure once it has settled.
+  await sleep(120);
+  {
+    const p = document.getElementById("createPop").getBoundingClientRect();
+    const box = document.getElementById("panel").getBoundingClientRect();
+    const inside = p.top >= box.top - 1 && p.left >= box.left - 1
+                && p.bottom <= box.bottom + 1 && p.right <= box.right + 1;
+    ok("...INSIDE the widget, on every edge", inside,
+       "pop " + Math.round(p.top) + "," + Math.round(p.left) + "," + Math.round(p.bottom) + "," + Math.round(p.right)
+       + " vs panel " + Math.round(box.top) + "," + Math.round(box.left) + "," + Math.round(box.bottom) + "," + Math.round(box.right));
+    ok("...and has real size", p.width > 40 && p.height > 40, p.width + "x" + p.height);
+  }
   const opts = [...document.getElementById("cpCat").options].map((o) => o.value);
   ok("the activity dropdown is built from the SERVER list",
      opts.join(",") === "org-ops,mining,social", opts.join(","));
