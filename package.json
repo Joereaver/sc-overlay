@@ -8,9 +8,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "loadout": "tsx src/erkul-dump.ts",
     "overlay": "tsx src/overlay-server.ts",
-    "agent": "tsx src/agent.ts",
     "missions-dump": "tsx src/missions-dump.ts",
     "missions-replay": "tsx src/missions-replay.ts",
     "screen-read-dump": "tsx src/screen-read-dump.ts",

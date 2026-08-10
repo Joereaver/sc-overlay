@@ -149,9 +149,6 @@
   input[type=range]::-webkit-slider-thumb:hover { filter: brightness(1.1); }
   .presets { display: flex; gap: 8px; margin-top: 8px; }
   .presets button { flex: 1; padding: 7px 8px; font-size: 12.5px; }
-  /* Loadout-overlay settings (erkul URLs + ship auto-switch) are hidden for normal users —
-     they're Sub's stream-overlay feature. Revealed by the hidden unlock (title ×5). */
-  body:not(.show-loadout) .loadout-only { display: none; }
   /* Support links (Sub Club / Patreon / Twitch) */
   .support-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .support { display: flex; align-items: center; gap: 11px; padding: 11px 13px;
@@ -438,7 +435,6 @@
     </div>
     <div id="logWarn" class="hint" style="display:none; color:#ffb4a8"></div>
     <div id="detected" class="hint"></div>
-    <label class="opt loadout-only"><input type="checkbox" id="autoSwitch" /> Auto-switch the overlay when I spawn a ship in-game</label>
   </div>
 
   <div class="card">
@@ -762,15 +758,6 @@
 
   
 
-  <div class="card loadout-only">
-    <div class="label">Erkul Loadout URLs</div>
-    <div id="list"></div>
-    <div class="add">
-      <input type="text" id="newUrl" placeholder="https://www.erkul.games/loadout/XXXXXXXX" />
-      <button onclick="addUrl()">Add</button>
-    </div>
-    <div class="hint">Paste an erkul share URL per ship. The overlay reads the ship from each build automatically — when that ship spawns in-game, it switches to it. Click a row to make it the active overlay now.</div>
-  </div>
 
   <div style="margin-top:20px; display:flex; align-items:center;">
     <button class="amber" id="saveBtn" onclick="save()">Save</button>
@@ -793,7 +780,7 @@
 </div>
 
 <script>
-  let cfg = { urls: [], activeUrl: null, logPath: "", autoSwitch: true, resolved: [] };
+  let cfg = { logPath: "" };
 
   // FREE: Mobiglas + Auto (match my ship). SUBSCRIBER: pinning a specific manufacturer regardless of ship.
   const PREMIUM_THEMES = ["drake","anvil","greys","esperia","misc","banu","gatac","mirai","origin","aegis","crusader","rsi","kruger","argo"];
@@ -867,7 +854,6 @@
     }
     document.getElementById("logPath").value = cfg.logPath || "";
     checkLogPath();
-    document.getElementById("autoSwitch").checked = !!cfg.autoSwitch;
     document.getElementById("hwAccel").checked = !!cfg.hwAccel;
     document.getElementById("amdCompat").checked = !!cfg.amdCompat;
     document.getElementById("bindingPng").value = cfg.bindingPng || "";
@@ -881,7 +867,6 @@
     setOpacitySlider(Number.isFinite(cfg.unfocusedOpacity) ? Math.round(cfg.unfocusedOpacity * 100) : 100);
     document.getElementById("holdToInteract").checked = !!cfg.holdToInteract;
     document.getElementById("revertThemeOnFoot").checked = !!cfg.revertThemeOnFoot;
-    document.body.classList.toggle("show-loadout", !!cfg.showLoadout);
     document.getElementById("syncEnabled").checked = !!cfg.syncEnabled;
     document.getElementById("fabCapture").checked = !!cfg.fabCapture;
     document.getElementById("fabClaim").checked = !!cfg.fabClaim;
@@ -900,7 +885,6 @@
     const tokenEl = document.getElementById("syncToken");
     tokenEl.value = cfg.hasSyncToken ? cfg.syncTokenPreview : "";
     document.getElementById("syncStatus").textContent = cfg.hasSyncToken ? "" : "No token yet — paste one to connect.";
-    renderList();
     refreshAdmin();
   }
 
@@ -915,41 +899,6 @@
   }
   function restartAsAdmin() {
     if (window.overlayConfig && window.overlayConfig.restartAsAdmin) window.overlayConfig.restartAsAdmin();
-  }
-
-  function renderList() {
-    const host = document.getElementById("list");
-    host.innerHTML = "";
-    if (!cfg.urls.length) { host.innerHTML = '<div class="hint">No loadouts yet — add one below.</div>'; return; }
-    cfg.urls.forEach((u, i) => {
-      const r = (cfg.resolved || []).find((x) => x.url === u) || { ship: "…", ok: true };
-      const isActive = u === cfg.activeUrl;
-      const row = document.createElement("div");
-      row.className = "row";
-      row.innerHTML =
-        '<span class="ship' + (r.ok ? "" : " bad") + '">' + r.ship + "</span>" +
-        '<span class="u">' + u + "</span>" +
-        (isActive ? '<span class="active-tag">ACTIVE</span>' : '<button onclick="setActive(\'' + u + "')\">Set Active</button>") +
-        '<button class="danger" onclick="removeUrl(' + i + ')">✕</button>';
-      host.appendChild(row);
-    });
-  }
-
-  function addUrl() {
-    const el = document.getElementById("newUrl");
-    const v = el.value.trim();
-    if (!v) return;
-    if (!/loadout\/[A-Za-z0-9_-]+/.test(v)) {
-      alert("That's not a shareable build link. In erkul, click Share to save your build, then paste the /loadout/<id> URL it gives you.\n\nThe /live/calculator URL only exists in your browser and can't be loaded.");
-      return;
-    }
-    cfg.urls.push(v); el.value = ""; renderList(); save();
-  }
-  function removeUrl(i) { cfg.urls.splice(i, 1); renderList(); save(); }
-  async function setActive(url) {
-    const r = await (await fetch("/api/active", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) })).json();
-    if (!r.ok) { alert("Couldn't load that build — make sure it's a saved erkul /loadout/ link, not the calculator."); return; }
-    cfg.activeUrl = url; renderList();
   }
 
 
@@ -977,11 +926,8 @@
 
   async function save() {
     cfg.logPath = document.getElementById("logPath").value.trim();
-    cfg.autoSwitch = document.getElementById("autoSwitch").checked;
     const body = {
-      urls: cfg.urls,
       logPath: cfg.logPath,
-      autoSwitch: cfg.autoSwitch,
       hwAccel: document.getElementById("hwAccel").checked,
       amdCompat: document.getElementById("amdCompat").checked,
       unfocusedOpacity: Number(document.getElementById("unfocusedOpacity").value || 100) / 100,
@@ -1273,22 +1219,6 @@
     oc.onOverlayEnabledChanged && oc.onOverlayEnabledChanged((on) => { box.checked = !!on; });
   }
 
-  // Hidden unlock: tap the title 5× to reveal/hide the loadout-overlay settings.
-  // (They're Sub's erkul stream feature — off by default so normal users aren't confused.)
-  let titleTaps = 0, titleTapTimer = null;
-  document.getElementById("appTitle").addEventListener("click", async () => {
-    clearTimeout(titleTapTimer);
-    titleTapTimer = setTimeout(() => { titleTaps = 0; }, 1500);
-    if (++titleTaps < 5) return;
-    titleTaps = 0;
-    const next = !cfg.showLoadout;
-    await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ showLoadout: next }) });
-    await loadCfg();
-    const s = document.getElementById("saved");
-    s.textContent = next ? "Loadout settings shown" : "Loadout settings hidden";
-    s.classList.add("show"); setTimeout(() => { s.classList.remove("show"); s.textContent = "Saved ✓"; }, 1600);
-  });
-
   document.getElementById("logPath").addEventListener("input", checkLogPath);
   // ...and PERSIST it. `input` only validates as you type. Everything else on this page either
   // auto-saves or is deliberately manual (the sync token), which left a typed-by-hand game.log
@@ -1299,7 +1229,7 @@
   // Auto-save the plain checkboxes the instant they're toggled, so a change can never be lost by
   // closing/scrolling away without clicking Save. (Theme, hotkeys, hold-to-interact and the file
   // pickers already save on change; the sync token stays manual so a half-typed token isn't sent.)
-  ["syncEnabled", "shareLogs", "fabCapture", "fabClaim", "missionOcr", "miningAutoShow", "autoSwitch", "hwAccel", "amdCompat", "revertThemeOnFoot"]
+  ["syncEnabled", "shareLogs", "fabCapture", "fabClaim", "missionOcr", "miningAutoShow", "hwAccel", "amdCompat", "revertThemeOnFoot"]
     .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener("change", save); });
   // The sync field shows the truncated saved key; clear it on focus so a new token pastes
   // cleanly, and restore the preview on blur if nothing was typed.

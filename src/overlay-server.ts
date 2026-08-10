@@ -4,7 +4,6 @@ import { writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import { extname, join, dirname, basename, resolve, sep } from "node:path";
 
-import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
 import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
@@ -97,10 +96,7 @@ const dataDir = join(userDir, "data");
 const sharedLogStatePath = join(userDir, "shared-logs.json");
 
 interface Config {
-  urls: string[];
-  activeUrl: string | null;
   logPath: string;
-  autoSwitch: boolean;
   /** subliminal.gg device token (minted on /blueprints) for collection sync. */
   syncToken: string;
   /** Whether to push collected blueprints + tracked mission to subliminal.gg. */
@@ -259,10 +255,6 @@ interface Config {
   /** App version whose "what's new" card the user has dismissed. The card shows once per
    *  new version (when this !== the running version) and this is set on dismiss. */
   seenChangelog: string;
-  /** Reveal the loadout-overlay settings (Erkul URLs + ship auto-switch) in config.html.
-   *  Off by default — those are Sub's erkul stream-overlay feature, meaningless to normal
-   *  blueprint-tracker users. Unlocked by a hidden gesture (click the Settings title 5×). */
-  showLoadout: boolean;
   /** Overlay HUD declutter toggle (set from the overlay's settings cog): hide the
    *  fabricator category filter bar. Sent to the overlay via the mission view prefs.
    *  (Odds mode + Verify now live inside the cog itself, so the footer has no buttons.) */
@@ -312,10 +304,7 @@ interface Config {
 }
 
 const DEFAULTS: Config = {
-  urls: ["https://www.erkul.games/loadout/Zjbboonv"],
-  activeUrl: "https://www.erkul.games/loadout/Zjbboonv",
   logPath: "C:\\Program Files\\Roberts Space Industries\\StarCitizen\\GAME\\game.log",
-  autoSwitch: true,
   syncToken: "",
   syncEnabled: false,
   fabCapture: false,
@@ -372,7 +361,6 @@ const DEFAULTS: Config = {
   timeRelative: true,
   shareLogs: false,
   seenChangelog: "",
-  showLoadout: false,
   hideCatbar: false,
   theme: "mobiglas",
   overlayTwist: 0, // flat by default; the user can dial in a skew angle in the hub
@@ -613,57 +601,6 @@ function seedDataDir(): void {
   }
 }
 seedDataDir();
-
-// ── Loadout cache + ship index ──────────────────────────────────────────────
-const TTL = 60_000;
-const cache = new Map<string, { build: Build; at: number }>();
-async function getBuild(url: string): Promise<Build> {
-  const c = cache.get(url);
-  if (c && Date.now() - c.at < TTL) return c.build;
-  const build = await resolveLoadout(url);
-  cache.set(url, { build, at: Date.now() });
-  return build;
-}
-
-// ship localName (lowercase) -> erkul url, so a [VEHICLE SPAWN] can pick a build
-const shipIndex = new Map<string, string>();
-async function reindex(): Promise<void> {
-  shipIndex.clear();
-  for (const u of config.urls) {
-    try {
-      const b = await getBuild(u);
-      if (b.ship.localName) shipIndex.set(b.ship.localName.toLowerCase(), u);
-    } catch (e) {
-      console.error("[reindex] failed for", u, String(e));
-    }
-  }
-}
-
-// ── SSE broadcast of the active build ───────────────────────────────────────
-const clients = new Set<ServerResponse>();
-let activeBuild: Build | null = null;
-
-function broadcast(): void {
-  const data = `data: ${JSON.stringify(activeBuild)}\n\n`;
-  for (const res of clients) res.write(data);
-}
-
-async function setActive(url: string, reason: string): Promise<boolean> {
-  // Resolve FIRST — only commit if it actually loaded, so a bad/unresolvable
-  // URL never replaces a good active build with a silent stale fallback.
-  try {
-    const build = await getBuild(url);
-    activeBuild = build;
-    config.activeUrl = url;
-    void saveConfig();
-    console.log(`[active] ${build.ship.name} — ${reason}`);
-    broadcast();
-    return true;
-  } catch (e) {
-    console.error(`[active] could not resolve ${url}: ${String(e)}`);
-    return false;
-  }
-}
 
 // ── Mission / blueprint tracker ─────────────────────────────────────────────
 // remoteBaseUrl: pull a patch's pool data from subliminal.gg if it isn't bundled
@@ -1210,7 +1147,7 @@ function startWatcher(): void {
     if (me) { tracker.apply(me); party.apply(me); applyChatSignals(me); }
 
     // Theme auto-switch: track the manufacturer of the ship we're in; re-broadcast so the
-    // overlay retints live when theme="auto". Independent of the erkul loadout autoSwitch.
+    // overlay retints live when theme="auto".
     // Track the flown ship's manufacturer (drives theme="auto" AND the /api/ship signal). The PU
     // comms channel gives enter + EXIT with a ship name; AC's OnVehicleSpawned gives only a spawn.
     // Broadcast on any change so external overlays get it push-live even when theme != "auto"
@@ -1235,16 +1172,9 @@ function startWatcher(): void {
         broadcastMissions(); miningSend(miningAppearance());
       }
     }
-
-    if (!config.autoSwitch) return;
-    // Only the LOCAL player's ship is logged as "... by player 0".
-    const m = e.message.match(/OnVehicleSpawned\s+\d+\s+\(([A-Za-z0-9_]+?)_\d+\)\s+by player 0/);
-    if (!m) return;
-    const url = shipIndex.get(m[1].toLowerCase());
-    if (url && url !== config.activeUrl) void setActive(url, `log: ${m[1]}`);
   });
   watcher.start();
-  console.log(`[watcher] watching ${config.logPath} (autoSwitch=${config.autoSwitch})`);
+  console.log(`[watcher] watching ${config.logPath}`);
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -1533,20 +1463,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   if (sensitive && typeof origin === "string" && origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin)) {
     res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ error: "Cross-origin requests are not accepted." }));
-    return;
-  }
-
-  // Live event stream for the overlay.
-  if (url === "/events") {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    res.write("\n");
-    clients.add(res);
-    if (activeBuild) res.write(`data: ${JSON.stringify(activeBuild)}\n\n`);
-    req.on("close", () => clients.delete(res));
     return;
   }
 
@@ -2048,14 +1964,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     return;
   }
 
-  // The active, resolved build.
-  if (url === "/api/loadout") {
-    if (!activeBuild && config.activeUrl) await setActive(config.activeUrl, "on-demand");
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(activeBuild));
-    return;
-  }
-
   // Config read — includes resolved ship name per url for the config UI.
   if (url === "/api/config" && req.method === "GET") {
     // This machine's LAN IPv4 (private range), so the settings page can offer a browser-source
@@ -2069,16 +1977,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       }
       return null;
     })();
-    const urls = await Promise.all(
-      config.urls.map(async (u) => {
-        try {
-          const b = await getBuild(u);
-          return { url: u, ship: b.ship.name, ok: true };
-        } catch {
-          return { url: u, ship: "(unreachable)", ok: false };
-        }
-      }),
-    );
     // Never echo the raw token back to the page — only a truncated preview so the settings
     // page can show "the key is in" (scbp_1a2b…wxyz) without exposing the full secret.
     // Never echo real secrets back to a page. The Twitch USER TOKEN is one (it can post as the
@@ -2089,7 +1987,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     const { syncToken, twitchUserToken, twitchRefreshToken: _refresh, ...rest } = config;
     const syncTokenPreview = syncToken ? `${syncToken.slice(0, 9)}…${syncToken.slice(-4)}` : "";
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ...rest, premium: entitled(), hasSyncToken: !!syncToken, syncTokenPreview, hasTwitchLogin: !!twitchUserToken, resolved: urls, lanHost, port: PORT }));
+    res.end(JSON.stringify({ ...rest, premium: entitled(), hasSyncToken: !!syncToken, syncTokenPreview, hasTwitchLogin: !!twitchUserToken, lanHost, port: PORT }));
     return;
   }
 
@@ -2155,15 +2053,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // actually carried. Un-scoped, EVERY save — however small — re-ran a network fetch per loadout
     // URL, tore down and rebuilt the log watcher, and re-pushed the whole collection to
     // subliminal.gg, regardless of which field changed.
-    const touchedUrls = Array.isArray(body.urls);
     const touchedLogPath = typeof body.logPath === "string";
     const touchedSync = typeof body.syncEnabled === "boolean"
       || (typeof body.syncToken === "string" && body.syncToken.trim().length > 0)
       || body.clearToken === true;
     const touchedShareLogs = typeof body.shareLogs === "boolean";
-    if (touchedUrls) config.urls = body.urls.filter((u: unknown) => typeof u === "string" && u);
     if (touchedLogPath) config.logPath = body.logPath;
-    if (typeof body.autoSwitch === "boolean") config.autoSwitch = body.autoSwitch;
     // Apply the checkbox first, then let a freshly-pasted token force sync ON — pasting a
     // token IS the intent to sync, so it can't be left silently disabled. The token is only
     // overwritten when a non-empty one is sent (the page leaves the field blank/masked to keep
@@ -2294,7 +2189,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       config.unfocusedOpacity = Math.max(0.2, Math.min(1, Math.round(body.unfocusedOpacity * 100) / 100));
     if (typeof body.timeRelative === "boolean") config.timeRelative = body.timeRelative;
     if (typeof body.shareLogs === "boolean") config.shareLogs = body.shareLogs;
-    if (typeof body.showLoadout === "boolean") config.showLoadout = body.showLoadout;
     if (typeof body.hideCatbar === "boolean") config.hideCatbar = body.hideCatbar;
     if (typeof body.revertThemeOnFoot === "boolean") config.revertThemeOnFoot = body.revertThemeOnFoot;
     if (body.theme === "mobiglas" || body.theme === "drake" || body.theme === "anvil" || body.theme === "greys" || body.theme === "esperia" || body.theme === "misc" || body.theme === "banu" || body.theme === "gatac" || body.theme === "mirai" || body.theme === "origin" || body.theme === "aegis" || body.theme === "crusader" || body.theme === "rsi" || body.theme === "kruger" || body.theme === "argo" || body.theme === "cnou" || body.theme === "auto") {
@@ -2316,10 +2210,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     broadcastMissions();
     // The Mining Assistant window shares the same appearance (theme + skew + scale).
     miningSend(miningAppearance());
-    // Scoped to what actually changed (see touchedUrls etc. above) — a save that never touched
-    // these fields has no reason to refetch every loadout URL, tear down the log watcher mid-
+    // Scoped to what actually changed (see touched* flags above) — a save that never touched
+    // these fields has no reason to tear down the log watcher mid-
     // session, or push a sync/entitlement round-trip to subliminal.gg.
-    if (touchedUrls) await reindex();
     if (touchedLogPath) startWatcher();
     // Re-arm sync with the new settings and reconcile the full collection.
     if (touchedSync) {
@@ -2336,15 +2229,6 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     broadcastMissions();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  // Manual switch.
-  if (url === "/api/active" && req.method === "POST") {
-    const body = await readBody(req);
-    const ok = typeof body.url === "string" ? await setActive(body.url, "manual") : false;
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok, active: config.activeUrl }));
     return;
   }
 
@@ -2965,8 +2849,6 @@ server.listen(PORT, async () => {
   seedTrackerFromLog();
   // Push the existing collection + tracked mission once the log has been seeded.
   syncFull();
-  await reindex();
-  if (config.activeUrl) await setActive(config.activeUrl, "startup");
   startWatcher();
   // Arm chat AFTER the seed pass so the current shard (read from the log) rides the first
   // connection's loc frame instead of arriving as a later correction.
