@@ -2277,6 +2277,171 @@ const CHATLINKS = `(async () => {
      items.join(" | "));
   closeCtx();
 
+  // ── per-channel notification mute ────────────────────────────────────────
+  const savedMuted = localStorage.getItem("chatMuted");
+  mutedChans = new Set();
+  renderChannels();
+  const chRow = (label) => [...document.querySelectorAll("#chanList .crow")]
+    .find((r) => r.querySelector(".nm")?.textContent === label);
+  const gName = view.channels[0].label;
+  const wasActive = activeCh;
+  let bell = chRow(gName)?.querySelector(".bell");
+  ok("a joined channel carries a mute control", !!bell);
+  ok("...which is not muted to start with", !bell.classList.contains("off"));
+  bell.click();
+  ok("clicking it mutes that channel", isMuted(view.channels[0].ch));
+  ok("...without selecting the channel", activeCh === wasActive, activeCh);
+  ok("...and it is remembered",
+     JSON.parse(localStorage.getItem("chatMuted")).includes(view.channels[0].ch),
+     localStorage.getItem("chatMuted"));
+  bell = chRow(gName).querySelector(".bell");
+  ok("...and a muted channel SAYS so at rest, not only on hover", bell.classList.contains("off"));
+  ok("...with a slash, so it survives a skin that recolours it",
+     bell.querySelectorAll("svg path").length === 2);
+  bell.click();
+  ok("clicking again unmutes", !isMuted(view.channels[0].ch)
+     && !chRow(gName).querySelector(".bell").classList.contains("off"));
+  mutedChans = new Set(savedMuted ? JSON.parse(savedMuted) : []);
+  if (savedMuted === null) localStorage.removeItem("chatMuted"); else localStorage.setItem("chatMuted", savedMuted);
+
+  // ── the right rail's SECOND MODE: Friends (Sub, 2026-08-10 — a button, not a widget) ──
+  // 🔑 chatFriends / chatRight / chatRightMode are REAL user preferences on this origin, and this
+  // harness shares localStorage with the running overlay. Save them and hand them back.
+  const savedFriends = localStorage.getItem("chatFriends");
+  const savedRight = localStorage.getItem("chatRight");
+  const savedMode = localStorage.getItem("chatRightMode");
+  const railTitle = () => document.getElementById("memTitle").textContent;
+  const railClosed = () => document.getElementById("panel").classList.contains("no-right");
+  const whereOf = (h) => {
+    const r = [...document.querySelectorAll("#memList .mrow")]
+      .find((x) => x.querySelector(".nm")?.textContent === h);
+    return r ? (r.querySelector(".where")?.textContent ?? "") : null;
+  };
+  const gLabel = view.channels[0].label;
+
+  friends = [];
+  showRight = true; rightMode = "here"; renderMembers(); applyRails();
+  ok("the rail starts on the room's members", railTitle() === "Here", railTitle());
+
+  document.getElementById("friendsBtn").click();
+  ok("the friends button flips the SAME rail", railTitle() === "Friends", railTitle());
+  ok("...it is the rail that moved, not a second list",
+     document.querySelectorAll("#memList").length === 1 && !railClosed());
+  ok("...and only one of the two buttons reads active",
+     document.getElementById("friendsBtn").classList.contains("active")
+       && !document.getElementById("rightBtn").classList.contains("active"));
+  ok("...with an empty state that says how to add one",
+     /Right-click/i.test(document.querySelector("#memList .empty")?.textContent ?? ""),
+     document.querySelector("#memList .empty")?.textContent);
+
+  toggleFriend("Rytharr");        // a member of channels[0], so a shared room can see them
+  toggleFriend("NoOneSeesMe");    // in none of your channels
+  ok("a friend is listed", whereOf("Rytharr") !== null);
+  ok("...marked with the friend star",
+     document.querySelectorAll("#memList .mrow .fav").length === 2);
+  ok("...and named the channel that can see them", whereOf("Rytharr") === gLabel, whereOf("Rytharr"));
+  ok("a friend no shared room can see says NOTHING, never 'offline'",
+     whereOf("NoOneSeesMe") === "", whereOf("NoOneSeesMe"));
+  ok("...and the count counts friends, not the room",
+     document.getElementById("memCount").textContent === "2",
+     document.getElementById("memCount").textContent);
+
+  document.getElementById("rightBtn").click();
+  ok("the members button switches back rather than closing",
+     railTitle() === "Here" && !railClosed(), railTitle());
+  document.getElementById("friendsBtn").click();
+  ok("...and the chosen mode is remembered",
+     localStorage.getItem("chatRightMode") === "friends", localStorage.getItem("chatRightMode"));
+  document.getElementById("friendsBtn").click();
+  ok("clicking the mode already showing closes the rail", railClosed());
+
+  friends = savedFriends ? JSON.parse(savedFriends) : [];
+  for (const [k, v] of [["chatFriends", savedFriends], ["chatRight", savedRight], ["chatRightMode", savedMode]]) {
+    if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v);
+  }
+  showRight = true; rightMode = "here"; renderMembers(); applyRails();
+
+  // ── pinned notice + the message context menu ─────────────────────────────
+  // 🔑 Names here are suffixed because this suite is ONE scope: rows and items are already taken
+  // further up, and a duplicate const is a SyntaxError that kills the WHOLE suite before a single
+  // assertion runs. It surfaces as a bare "harness error" with no line, and node --check cannot
+  // see it, because every suite is a template literal and only the STRING is malformed.
+  const gCh = view.channels[0];
+  const myHandle = view.you.handle;
+  activeCh = gCh.ch;
+  gCh.msgs = [
+    { id: 41, from: { handle: "Rytharr", verified: true }, text: "meet at Checkmate", at: new Date().toISOString() },
+    { id: 42, from: { handle: myHandle, verified: true }, text: "on my way", at: new Date().toISOString() },
+  ];
+  gCh.pin = null;
+  renderPin(); renderLog();
+  ok("no pin means no notice bar", document.getElementById("pinbar").hidden);
+
+  gCh.pin = { ch: gCh.ch, id: 41, handle: "Rytharr", text: "meet at Checkmate", by: "Rytharr", at: Date.now() };
+  renderPin();
+  const pinbar = document.getElementById("pinbar");
+  ok("a pin shows the notice bar", !pinbar.hidden);
+  ok("...naming who said it and what they said",
+     /Rytharr/.test(pinbar.textContent) && /Checkmate/.test(pinbar.textContent), pinbar.textContent);
+  // 🔑 The bare attribute is not enough when a rule sets display — this is the 0.1.38 bug.
+  gCh.pin = null; renderPin();
+  ok("the [hidden] guard really hides it, not just the attribute",
+     getComputedStyle(document.getElementById("pinbar")).display === "none",
+     getComputedStyle(document.getElementById("pinbar")).display);
+
+  gCh.pin = { ch: gCh.ch, id: 41, handle: "Rytharr", text: "meet at Checkmate", by: "Rytharr", at: Date.now() };
+  renderPin();
+  ok("you cannot clear a pin in a room you do not own", document.getElementById("pinX").hidden);
+  // A custom room you own is the case where the widget may pin.
+  const owned = { ch: "custom:mine", kind: "custom", label: "Mine", count: 1, members: [], msgs: gCh.msgs,
+                  owner: myHandle.toLowerCase(), privacy: "public", category: "social",
+                  pin: { ch: "custom:mine", id: 41, handle: "Rytharr", text: "meet at Checkmate", by: myHandle, at: Date.now() } };
+  view.channels.push(owned);
+  activeCh = "custom:mine";
+  renderPin();
+  ok("...but you can in one you do", !document.getElementById("pinX").hidden);
+
+  renderLog();
+  const msgRows = [...document.querySelectorAll("#log .msg")];
+  const theirMsg = msgRows.find((r) => /Checkmate/.test(r.textContent));
+  const myMsg = msgRows.find((r) => /on my way/.test(r.textContent));
+  const menuOf = () => [...document.getElementById("ctx").querySelectorAll("button")].map((b) => b.textContent);
+  ok("messages rendered for the menu test", !!theirMsg && !!myMsg);
+  theirMsg.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 120 }));
+  let menu = menuOf();
+  ok("right-clicking a MESSAGE offers report", menu.some((t) => /Report this message/i.test(t)), menu.join(" | "));
+  ok("...and pin, because this room is yours", menu.some((t) => /Pin this message/i.test(t)), menu.join(" | "));
+  ok("...and it is NOT the person menu", !menu.some((t) => /Open their profile/i.test(t)), menu.join(" | "));
+  // The confirmation is a second MENU, never a native modal over a click-through overlay.
+  [...document.getElementById("ctx").querySelectorAll("button")]
+    .find((b) => /Report this message/i.test(b.textContent)).click();
+  menu = menuOf();
+  ok("reporting asks first, in a menu rather than a dialog",
+     menu.some((t) => /Yes, report it/i.test(t)) && menu.some((t) => /Cancel/i.test(t)), menu.join(" | "));
+  ok("...and says the reporter is not named",
+     /not told who reported/i.test(document.querySelector("#ctx .ct-note")?.textContent ?? ""),
+     document.querySelector("#ctx .ct-note")?.textContent);
+  closeCtx();
+
+  myMsg.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 120 }));
+  menu = menuOf();
+  ok("you are not offered a way to report yourself",
+     !menu.some((t) => /Report this message/i.test(t)), menu.join(" | "));
+  closeCtx();
+
+  // 🔑 The NAME keeps its own menu — the row handler must not swallow it.
+  theirMsg.querySelector(".nm")
+    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 120 }));
+  menu = menuOf();
+  ok("right-clicking the NAME still opens the person menu",
+     menu.some((t) => /Open their profile/i.test(t)) && !menu.some((t) => /Report this message/i.test(t)),
+     menu.join(" | "));
+  closeCtx();
+  view.channels.pop();
+  activeCh = gCh.ch;
+  gCh.pin = null;
+  renderPin();
+
   // Conversations the server knows about but that aren't open tabs.
   view.dmThreads = [{ other: "zed", lastAt: new Date().toISOString() }];
   renderChannels();

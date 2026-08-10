@@ -67,15 +67,19 @@ function fileStore(dir, log) {
     try { mkdirSync(dir, { recursive: true }); writeFileSync(p, JSON.stringify(v, null, 2)); }
     catch (e) { log.error?.("[store] write failed", p, e?.message); }
   };
+  const pinsPath = join(dir, "pins.json");
+  const reportsPath = join(dir, "reports.json");
   let rooms = new Map();
   let bans = new Set();
+  let pins = new Map();
 
   return {
     mode: "file",
     async init() {
       bans = new Set(Object.values(readJson(bansPath, [])).map((h) => String(h).toLowerCase()));
       rooms = new Map(Object.entries(readJson(channelsPath, {})).map(([slug, m]) => [slug, roomRow(slug, m)]));
-      return { rooms, bans, reserved: new Set(), maxMessageId: 0 };
+      pins = new Map(Object.entries(readJson(pinsPath, {})));
+      return { rooms, bans, pins, reserved: new Set(), maxMessageId: 0 };
     },
     // Scrollback is memory-only here: a test that wants durable history wants the pg backend.
     async loadHistory() { return []; },
@@ -93,6 +97,17 @@ function fileStore(dir, log) {
     },
     saveBan(h) { bans.add(h); writeJson(bansPath, [...bans]); },
     deleteBan(h) { bans.delete(h); writeJson(bansPath, [...bans]); },
+
+    savePin(p) { pins.set(p.ch, p); writeJson(pinsPath, Object.fromEntries(pins)); },
+    deletePin(ch) { pins.delete(ch); writeJson(pinsPath, Object.fromEntries(pins)); },
+    // Reports are APPENDED, never replaced — two people reporting the same message is two
+    // reports, and the second one is the signal.
+    saveReport(r) {
+      const all = readJson(reportsPath, []);
+      all.push(r);
+      writeJson(reportsPath, all);
+    },
+    async listReports(limit = 200) { return readJson(reportsPath, []).slice(-limit).reverse(); },
 
     touchDm() {},
     async dmThreads() { return []; },
@@ -141,10 +156,15 @@ function pgStore(url, dir, schema, log) {
       const namesQ = await pool.query("SELECT name FROM known_names");
       const bansQ = await pool.query("SELECT handle FROM bans");
       const maxQ = await pool.query("SELECT coalesce(max(id), 0)::bigint m FROM messages");
+      const pinsQ = await pool.query("SELECT ch, msg_id, handle, text, by, at FROM pins");
       return {
         rooms,
         reserved: new Set(namesQ.rows.map((r) => r.name)),
         bans: new Set(bansQ.rows.map((b) => b.handle)),
+        pins: new Map(pinsQ.rows.map((p) => [p.ch, {
+          ch: p.ch, id: p.msg_id === null ? null : Number(p.msg_id),
+          handle: p.handle, text: p.text, by: p.by, at: +p.at,
+        }])),
         // 🔑 Seed the id counter from the DB. It restarts at 1 otherwise, and a fresh message
         // then collides with a loaded one — clients key off the id, so that shows up as a
         // message that will not render or one that replaces another.
@@ -202,6 +222,30 @@ function pgStore(url, dir, schema, log) {
     },
     saveBan(h) { bg("ban", pool.query("INSERT INTO bans (handle) VALUES ($1) ON CONFLICT DO NOTHING", [h])); },
     deleteBan(h) { bg("unban", pool.query("DELETE FROM bans WHERE handle = $1", [h])); },
+
+    savePin(p) {
+      bg("pin", pool.query(`
+        INSERT INTO pins (ch, msg_id, handle, text, by, at)
+        VALUES ($1, $2, $3, $4, $5, to_timestamp($6/1000.0))
+        ON CONFLICT (ch) DO UPDATE SET
+          msg_id = excluded.msg_id, handle = excluded.handle,
+          text = excluded.text, by = excluded.by, at = excluded.at`,
+        [p.ch, p.id, p.handle, p.text, p.by, p.at]));
+    },
+    deletePin(ch) { bg("unpin", pool.query("DELETE FROM pins WHERE ch = $1", [ch])); },
+    saveReport(r) {
+      bg("report", pool.query(
+        "INSERT INTO reports (ch, about, by, reason, msg_id, msg_text) VALUES ($1, $2, $3, $4, $5, $6)",
+        [r.ch, r.about, r.by, r.reason, r.id, r.text]));
+    },
+    async listReports(limit = 200) {
+      const { rows } = await pool.query(
+        "SELECT ch, about, by, reason, msg_id, msg_text, at FROM reports ORDER BY at DESC LIMIT $1", [limit]);
+      return rows.map((r) => ({
+        ch: r.ch, about: r.about, by: r.by, reason: r.reason,
+        id: r.msg_id === null ? null : Number(r.msg_id), text: r.msg_text, at: +r.at,
+      }));
+    },
 
     touchDm(a, b, at) {
       bg("touch dm", pool.query(`

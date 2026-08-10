@@ -78,6 +78,22 @@ interface ChannelState {
   owner?: string | null;
   /** Only ever present for a private room you are INSIDE — it is what admits the next person. */
   code?: string;
+  /** The room's pinned message, or null. Held on the CHANNEL rather than pushed straight at the
+   *  widget, because a widget iframe reloads on every regroup — a pin delivered only as an event
+   *  would vanish the first time someone stacked the chat widget and not come back until it was
+   *  re-pinned. State the widget can re-read survives that; an event does not. */
+  pin?: ChatPin | null;
+}
+
+/** A pinned message. `id` is null when a moderator pinned free text rather than an existing
+ *  message (the loopback /admin/pin route), so it can never be assumed to reference scrollback. */
+export interface ChatPin {
+  ch: string;
+  id: number | null;
+  handle: string;
+  text: string;
+  by: string;
+  at: number;
 }
 
 const HISTORY_KEEP = 200;
@@ -359,6 +375,24 @@ export class ChatClient extends EventEmitter {
         }
         return;
       }
+      case "pin": {
+        // 🔑 `pin: null` is an UNPIN, not a missing field — the server sends it deliberately, so
+        // this must write null through rather than treat it as "nothing to do", or a cleared
+        // notice would sit on every client until they reconnected.
+        const c = this.ensureChannel(f.ch);
+        c.pin = f.pin ?? null;
+        this.pushState();
+        return;
+      }
+      case "reported":
+        // Reporting is silent by design on the server — nothing is broadcast and nothing changes
+        // in the room — so this acknowledgement is the ONLY feedback the reporter ever gets.
+        // Without it the button looks broken and people press it again.
+        this.emit("sse", {
+          type: "notice", level: "info",
+          text: `Reported ${f.handle}. Thanks — it's been logged for review.`,
+        });
+        return;
       case "error":
         // banned / bad_auth close the socket right after; surface the reason, don't hammer.
         this.lastError = f.message ?? f.code ?? "chat error";
@@ -479,6 +513,35 @@ export class ChatClient extends EventEmitter {
     return { ok: true };
   }
 
+  /** Pin a message in a room you own. The server refuses anyone else, and refuses the ownerless
+   *  system rooms outright — those are pinned by a moderator over the loopback admin route. */
+  pin(ch: string, id: number): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    if (!Number.isFinite(id)) return { ok: false, message: "Which message?" };
+    this.wsSend({ t: "pin", ch, id });
+    return { ok: true };
+  }
+
+  /** Clear a room's pin. Owner only, same as setting it. */
+  unpin(ch: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "unpin", ch });
+    return { ok: true };
+  }
+
+  /** Report a player. Deliberately produces no visible change in the room — see the server. */
+  report(ch: string, handle: string, id?: number | null, reason?: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const h = handle.trim();
+    if (!h) return { ok: false, message: "Report who?" };
+    this.wsSend({
+      t: "report", ch, handle: h,
+      ...(Number.isFinite(id as number) ? { id } : {}),
+      ...(reason ? { reason } : {}),
+    });
+    return { ok: true };
+  }
+
   /** Leave a custom room (the server refuses auto/org channels). */
   leave(ch: string): { ok: boolean; message?: string } {
     if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
@@ -495,6 +558,7 @@ export class ChatClient extends EventEmitter {
       .map((c) => ({
         ch: c.ch, kind: c.kind, label: c.label, count: c.count, members: c.members, msgs: c.msgs,
         category: c.category, privacy: c.privacy, owner: c.owner, code: c.code,
+        pin: c.pin ?? null,
       }));
     return {
       status: this.status,

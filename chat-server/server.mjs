@@ -97,6 +97,10 @@ const loaded = await store.init();
 const bans = loaded.bans;
 /** slug → { label, category, privacy, code, owner, created, lastActive, invites } */
 const customDir = loaded.rooms;
+/** ch → { ch, id, handle, text, by, at } — at most one pinned message per room.
+ *  🔑 The pinned TEXT is held here, not looked up in scrollback. Scrollback is pruned and a pin
+ *  is meant to outlive it; a pin that silently emptied itself would be worse than no pin. */
+const pins = loaded.pins ?? new Map();
 /** Slugs a custom room may NOT be called: org SIDs and verified handles the server has seen.
  *  🔴 A room named "irregs" renders in the browse list looking like the IRREGS org channel, so
  *  a member joins the fake one and talks freely to whoever is listening. NOTHING technical is
@@ -284,6 +288,9 @@ function joinRoom(conn, ch, label, kind) {
   // store answers. They were always separate frames, and the client appends rather than
   // waiting on the pair, so a cold room costs a beat of empty scrollback and nothing else.
   conn.send({ t: "joined", ch, ...(label ? { label } : {}), ...(kind ? { kind } : {}) });
+  // A pin is room state, not scrollback — send it on the way in or a joiner sees the notice only
+  // if someone happens to re-pin while they are watching.
+  if (pins.has(ch)) conn.send({ t: "pin", ch, pin: pins.get(ch) });
   hydrate(ch).then((h) => {
     if (conn.channels.has(ch)) conn.send({ t: "history", ch, msgs: h.history.slice(-HISTORY_SEND) });
   });
@@ -294,10 +301,18 @@ function joinRoom(conn, ch, label, kind) {
  *  🔑 Channel messages and DMs both come through here — the rate limit, the control-char strip
  *  and the code-point truncation are rules about MESSAGES, not about channels, and a second
  *  copy of them is a second place for them to drift. */
-function deliver(conn, ch, raw) {
+/** The per-connection rate window, shared by messages and reports so the rule lives in ONE place.
+ *  🔑 Checking and STAMPING are separate on purpose: an empty message is rejected without
+ *  spending quota, and that has to stay true now a second caller uses the same window. */
+function underRate(conn) {
   const now = Date.now();
   conn.stamps = conn.stamps.filter((s) => now - s < RATE_WINDOW_MS);
-  if (conn.stamps.length >= RATE_N) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return null; }
+  return conn.stamps.length < RATE_N;
+}
+
+function deliver(conn, ch, raw) {
+  const now = Date.now();
+  if (!underRate(conn)) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return null; }
   // Strip control chars; the widget renders via textContent so markup is inert anyway.
   // 🔑 Truncate by CODE POINT, not by .slice(): an emoji is a surrogate PAIR, and slicing
   // between its halves emits a lone surrogate — the black-diamond "�" every client would
@@ -314,6 +329,17 @@ function deliver(conn, ch, raw) {
   roomSend(ch, { t: "msg", ...msg });
   store.saveMessage(msg);
   return msg;
+}
+
+/** Set or clear a room's pin, tell the room, and persist behind it.
+ *  Used by the owner's pin verb AND the loopback admin route, so an ownerless system room ends
+ *  up in exactly the same state as a custom one — the same reason destroyRoom is shared. */
+function setPin(ch, pin) {
+  if (pin) { pins.set(ch, pin); store.savePin(pin); }
+  else { pins.delete(ch); store.deletePin(ch); }
+  // 🔑 `pin: null` is a real value here, not an omission — an unpin has to REACH clients, and a
+  // frame that simply left the field out would leave the old banner sitting there forever.
+  roomSend(ch, { t: "pin", ch, pin: pin ?? null });
 }
 
 /** Wipe a custom room: evict everyone, drop it from the directory, delete it and its messages.
@@ -501,6 +527,34 @@ const server = createServer(async (req, res) => {
     destroyRoom(slug, meta.label);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, deleted: slug, rooms: customDir.size }));
+    return;
+  }
+  // The reports queue. Read-only — acting on a report means banning, and that route already
+  // exists; this one only answers "what has been reported".
+  if (url === "/admin/reports" && req.method === "GET") {
+    const list = await store.listReports(200);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(list));
+    return;
+  }
+  // Pinning for the rooms nobody owns — global, region, Nearby, org. Same shape as the
+  // owner's verb; `text` is given directly rather than looked up, because a notice in Global
+  // is usually something a moderator is WRITING, not a message someone already sent.
+  if (url === "/admin/pin" && req.method === "POST") {
+    const b = await readBody(req);
+    const ch = String(b.ch ?? "");
+    const text = String(b.text ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim();
+    if (!ch || !text) { res.writeHead(400, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, error: "ch and text required" })); return; }
+    setPin(ch, { ch, id: null, handle: String(b.handle ?? "Moderator"), text: [...text].slice(0, MSG_MAX).join(""), by: "admin", at: Date.now() });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, ch }));
+    return;
+  }
+  if (url === "/admin/unpin" && req.method === "POST") {
+    const ch = String((await readBody(req)).ch ?? "");
+    setPin(ch, null);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, ch }));
     return;
   }
   res.writeHead(404); res.end();
@@ -694,6 +748,54 @@ wss.on("connection", (ws) => {
       if (!meta) { conn.send({ t: "error", code: "no_such_channel", message: "No such channel." }); return; }
       if (meta.owner !== conn.handleLower) { conn.send({ t: "error", code: "not_owner", message: "Only the person who made the room can delete it." }); return; }
       destroyRoom(slug, meta.label);
+      return;
+    }
+
+    // ── pins ─────────────────────────────────────────────────────────────
+    // Custom rooms: the OWNER pins, the same authority that can invite and delete. Global,
+    // region, Nearby and org rooms have no owner at all, so they are pinned over the loopback
+    // /admin/pin route instead — exactly the gap room deletion already had, where an ownerless
+    // room could never be touched by the owner-gated path.
+    if (f.t === "pin" || f.t === "unpin") {
+      const ch = String(f.ch ?? "");
+      if (!conn.channels.has(ch)) { conn.send({ t: "error", code: "not_member", message: "Not in that channel." }); return; }
+      const slug = ch.startsWith("custom:") ? ch.slice("custom:".length) : "";
+      const meta = slug ? customDir.get(slug) : null;
+      if (!meta || meta.owner !== conn.handleLower) {
+        conn.send({ t: "error", code: "not_owner", message: "Only the person who made the room can pin here." });
+        return;
+      }
+      if (f.t === "unpin") { setPin(ch, null); return; }
+      const id = Number(f.id);
+      const src = room(ch).history.find((m) => m.id === id);
+      if (!src) { conn.send({ t: "error", code: "bad_msg", message: "That message is no longer here." }); return; }
+      setPin(ch, { ch, id, handle: src.from.handle, text: src.text, by: conn.handle, at: Date.now() });
+      return;
+    }
+
+    // ── reporting a player ───────────────────────────────────────────────
+    // 🔑 Nothing is broadcast and nothing changes in the room. A report that visibly did
+    // something would be a weapon: it tells the reported player who reported them, and it hands
+    // anyone a way to make a room look moderated. It lands in the store for review, and the
+    // reporter gets an acknowledgement so they know it went somewhere.
+    if (f.t === "report") {
+      const ch = String(f.ch ?? "");
+      if (!conn.channels.has(ch)) { conn.send({ t: "error", code: "not_member", message: "Not in that channel." }); return; }
+      const about = String(f.handle ?? "").trim();
+      if (!HANDLE_RE.test(about)) { conn.send({ t: "error", code: "bad_handle", message: "That doesn't look like an RSI handle." }); return; }
+      if (about.toLowerCase() === conn.handleLower) { conn.send({ t: "error", code: "bad_handle", message: "You can't report yourself." }); return; }
+      // Same window the message limiter uses — a report costs a message's worth of quota, so the
+      // button can't be held down to flood the table.
+      if (!underRate(conn)) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return; }
+      conn.stamps.push(Date.now());
+      const id = Number.isFinite(Number(f.id)) ? Number(f.id) : null;
+      const src = id === null ? null : room(ch).history.find((m) => m.id === id);
+      store.saveReport({
+        ch, about: about.toLowerCase(), by: conn.handleLower,
+        reason: typeof f.reason === "string" ? f.reason.slice(0, 300) : null,
+        id, text: src ? src.text : null, at: Date.now(),
+      });
+      conn.send({ t: "reported", ch, handle: about });
       return;
     }
 

@@ -354,6 +354,16 @@
   .sec-h .badge { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 
   /* Scanner readout */
+  /* Location strip: quiet by default -- it is context, not a readout. The player only
+     needs to notice it when it disagrees with where they actually are. */
+  .place-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin: 2px 0 6px; font-size: 10.5px; color: var(--faint); }
+  .place-name { color: var(--cyan-dim); font-weight: 600; }
+  .place-age { opacity: .7; }
+  .place-modes { margin-left: auto; display: flex; gap: 3px; }
+  .place-modes .pm { font: inherit; cursor: pointer; padding: 1px 6px; border-radius: 4px;
+    border: 1px solid var(--divider); background: transparent; color: var(--faint); }
+  .place-modes .pm.on { color: var(--cyan); border-color: var(--cyan-dim); }
   .scan-now { margin: 4px 0 8px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--divider);
     background: rgba(var(--accent-rgb), 0.05); transition: background .2s, border-color .2s; }
   .scan-now.empty { color: var(--faint); font-size: 11.5px; text-align: center; padding: 14px 12px; }
@@ -452,6 +462,7 @@
     <div class="sec">
       <div class="sec-h" data-sec="scan"><span class="car">▾</span>Signature Scanner<span class="badge" id="scanBadge"></span></div>
       <div id="scanBody">
+        <div class="place-bar" id="placeBar"></div>
         <div class="scan-now empty" id="scanNow">Scan a rock — I'll name it here.</div>
         <div class="tgt-lbl">Hunting for <span id="tgtCount"></span></div>
         <div class="targets" id="targets"></div>
@@ -653,9 +664,15 @@
       // number of salvage panels, and anything else is a real scan of something we can't name —
       // saying "Debris" for that is the guess this replaced.
       const unknown = verdictOf(sc) === "unknown";
-      el.innerHTML = '<div class="rock" style="color:var(--cyan-dim)">' + (unknown ? "Unknown" : "Debris") + '</div>' +
+      // 🔑 A 2,000-step value is NOT necessarily debris. Every harvestable plant in the
+      // game sits at exactly 2,000 too, so the count is certain and the kind is not.
+      // `view.wording` is the server's call on how to say that (it knows where you are);
+      // falling back to "Debris" only when it has nothing to offer.
+      const w = view.wording;
+      el.innerHTML = '<div class="rock" style="color:var(--cyan-dim)">' +
+          (unknown ? "Unknown" : escapeHtml(w ? w.lead : "Debris")) + '</div>' +
         '<div class="meta">' + (unknown ? "Not ore — and not a debris signature either"
-                                       : "Salvageable — not a mineable rock") + '</div>' +
+                                       : escapeHtml(w ? w.detail : "Salvageable — not a mineable rock")) + '</div>' +
         sig + '</div>';
       return;
     }
@@ -675,6 +692,38 @@
       (rest.length ? ' · or ' + rest.map(x => escapeHtml(x.name) + " ×" + x.count).join(", ") : '') + '</div>' +
       could + sig + (isTarget ? ' · TARGET' : '') + '</div>';
   }
+
+  // Where the app thinks you are, and the override. Shown ALWAYS -- including when it
+  // does not know -- because the player has to be able to see that the app is guessing
+  // wrong before they can distrust anything it says off the back of it.
+  const PLACE_MODES = [["auto", "Auto"], ["planet", "Planet"], ["space", "Space"]];
+  function renderPlace() {
+    const el = $("placeBar"); if (!el) return;
+    const p = view.place || { kind: "unknown" };
+    const mode = view.placeMode || "auto";
+    let label = "Location unknown";
+    if (p.kind === "planet") label = escapeHtml(p.name || "Planet-side");
+    else if (p.kind === "space") label = "In space";
+    // Age matters: the log prints this about every 10 minutes, so a reading can be that
+    // old. Saying WHEN is what lets the player judge it.
+    let age = "";
+    if (mode === "auto" && view.placeAgeMs != null) {
+      const m = Math.round(view.placeAgeMs / 60000);
+      age = ' <span class="place-age">' + (m < 1 ? "just now" : m + "m ago") + '</span>';
+    } else if (mode !== "auto") {
+      age = ' <span class="place-age">set by you</span>';
+    }
+    el.innerHTML = '<span class="place-name">' + label + '</span>' + age +
+      '<span class="place-modes">' + PLACE_MODES.map(([k, t]) =>
+        '<button class="pm' + (mode === k ? " on" : "") + '" data-pm="' + k + '">' + t + '</button>').join("") + '</span>';
+  }
+
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("button.pm");
+    if (!b) return;
+    fetch("/api/mining/place-mode", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: b.dataset.pm }) }).catch(() => {});
+  });
 
   function renderTargets() {
     $("tgtCount").textContent = targetSet.size ? "(" + targetSet.size + ")" : "(none — tap a rock)";
@@ -706,7 +755,7 @@
     }).join("");
   }
 
-  function renderAll() { renderScan(); renderTargets(); renderJobs(); }
+  function renderAll() { renderPlace(); renderScan(); renderTargets(); renderJobs(); }
 
   // Tick the countdowns client-side (server only pushes on change).
   setInterval(() => {

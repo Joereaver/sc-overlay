@@ -69,6 +69,16 @@
   .crow .x { flex: none; opacity: 0; font-size: 11px; color: var(--faint); padding: 0 2px; }
   .crow:hover .x { opacity: 1; }
   .crow .x:hover { color: var(--red, #ff6b5e); }
+  /* Per-channel notification mute. 🔑 Inline SVG on currentColor, not a 🔔 — the OS colour font
+     paints an emoji and ignores the manufacturer skin entirely (that is how ☰/👥 came out purple
+     on Sub's). A MUTED bell stays visible without hover: a channel that has been silenced must
+     say so at rest, or you cannot tell silence from nobody-talking. */
+  .crow .bell { flex: none; opacity: 0; color: var(--cyan-dim); padding: 0 1px; display: flex; }
+  .crow:hover .bell { opacity: 1; }
+  .crow .bell.off { opacity: 1; color: var(--faint); }
+  .crow .bell:hover { color: var(--cyan-bright); }
+  .crow .bell svg { width: 12px; height: 12px; display: block; fill: none; stroke: currentColor;
+    stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .empty { padding: 8px 10px; font-size: 10.5px; font-style: italic; color: var(--faint); line-height: 1.5; }
 
   /* left rail: the join/create form */
@@ -218,6 +228,10 @@
   #ctx .ct-who { padding: 5px 8px 6px; font-size: 10px; font-weight: 700; letter-spacing: .06em;
     color: var(--gold); border-bottom: 1px solid var(--divider); margin-bottom: 3px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The one place this menu explains itself: the report confirmation. Wraps, unlike .ct-who —
+     a truncated warning is not a warning. */
+  #ctx .ct-note { max-width: 190px; padding: 0 8px 6px; font-size: 10px; line-height: 1.4;
+    color: var(--faint); }
   #ctx button { display: block; width: 100%; text-align: left; font-family: var(--sans); font-size: 11.5px;
     color: var(--cyan-text); background: none; border: 0; border-radius: 5px; padding: 6px 8px; cursor: pointer; }
   #ctx button:hover { background: rgba(var(--accent-rgb), 0.18); color: var(--cyan-bright); }
@@ -269,6 +283,12 @@
   .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mrow .vf { flex: none; font-size: 8px; font-weight: 800; color: var(--green, #38d980); }
   .mrow.you .nm { color: var(--gold); font-weight: 700; }
+  /* Friends mode: where a friend currently IS, when a channel you share can see them.
+     🔑 Silence is NOT "offline" — presence only covers rooms you are both in, so a friend
+     with no note may simply be somewhere you can't see. The row never claims otherwise. */
+  .mrow .where { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--cyan-dim); }
 
   /* header (thin — the tabs carry the identity, so this stays out of the way) */
   .head { flex: none; display: flex; align-items: center; gap: 7px; padding: 6px 10px;
@@ -320,6 +340,23 @@
     stroke: #ffb03c; stroke-width: 1.4; stroke-linejoin: round; }
   #dmWarn b { color: var(--cyan-text); }
 
+  /* The pinned notice. 🔑 `#pinbar[hidden]` is NOT optional: an author rule that sets `display`
+     beats the UA stylesheet's `[hidden] { display: none }`, which is exactly the shipped 0.1.38
+     bug where Unlock Alerts showed its claim prompt on every receipt. Every `hidden` in these
+     pages needs its guard. */
+  #pinbar { display: flex; align-items: center; gap: 6px; flex: none; padding: 5px 9px;
+    border-bottom: 1px solid var(--divider); background: rgba(var(--accent-rgb), 0.12);
+    font-size: 10.5px; line-height: 1.35; color: var(--cyan-text); }
+  #pinbar[hidden] { display: none; }
+  #pinbar svg { flex: none; width: 12px; height: 12px; fill: none; stroke: var(--gold);
+    stroke-width: 1.4; stroke-linejoin: round; }
+  /* One line only. A pinned notice competing with the conversation for height is a notice
+     people close; the full text is in the tooltip. */
+  #pinbar #pinText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pinbar .who { color: var(--cyan-dim); }
+  #pinbar #pinX { flex: none; padding: 1px 5px; font-size: 10px; }
+  #pinbar #pinX[hidden] { display: none; }
+
 </style>
 </head>
 <body>
@@ -340,6 +377,11 @@
       </button>
       <button id="rightBtn" class="hbtn sm tog" type="button" title="Show or hide who's here" aria-label="Members">
         <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><path d="M11 3.6a2.5 2.5 0 0 1 0 4.3M12.4 9.9c1.4.5 2.3 1.8 2.3 3.6"/></svg>
+      </button>
+      <!-- Friends is NOT its own widget (Sub, 2026-08-10): it is a second MODE of the right rail,
+           sitting beside the members toggle. Same rail, same rows, different list. -->
+      <button id="friendsBtn" class="hbtn sm tog" type="button" title="Show or hide your friends" aria-label="Friends">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l1.85 3.75 4.15.6-3 2.93.71 4.12L8 11.25l-3.71 1.95.71-4.12-3-2.93 4.15-.6z"/></svg>
       </button>
     </div>
 
@@ -401,6 +443,13 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 1.4 13.2h13.2z"/><path d="M8 6.4v3.1"/><circle cx="8" cy="11.4" r=".75" fill="currentColor" stroke="none"/></svg>
           <span>Direct messages are private from other players, <b>not</b> encrypted. Treat anything you type here as readable — don't share passwords or anything you'd mind being seen.</span>
         </div>
+        <!-- The room's pinned notice. Sits ABOVE the log and outside it, so it stays put while
+             the scrollback moves — a pin that scrolls away is just an old message. -->
+        <div id="pinbar" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.8 1.6 14.4 6.2 12 7l-1.1 3.5-4.4-4.4L10 5z"/><path d="M6.5 9.5 2.2 13.8"/></svg>
+          <span id="pinText"></span>
+          <button id="pinX" class="hbtn sm" type="button" title="Remove this pin">✕</button>
+        </div>
         <div id="log"></div>
         <div id="sendbar">
           <input id="sendInput" type="text" placeholder="Say something…  (try :o7: or :thumbsup:)" maxlength="400" autocomplete="off" spellcheck="false" />
@@ -414,7 +463,7 @@
       </div>
 
       <div id="right" class="rail">
-        <div class="rail-head">Here <span id="memCount" class="n"></span></div>
+        <div class="rail-head"><span id="memTitle">Here</span> <span id="memCount" class="n"></span></div>
         <div id="memList" class="rail-body"></div>
       </div>
     </div>
@@ -495,6 +544,12 @@
   // something you open when you want it, not the bulk of the rail on every launch.
   let collapsed = new Set(listPref("chatCollapsed", ["browse"]));
   let hiddenRooms = new Set(listPref("chatHiddenRooms", []));
+  /* Channels whose mentions must not SPEAK. 🔑 Muting a channel silences the call-out only —
+     the gold mention highlight and the unread dot stay, because "notify me less" is not the same
+     ask as "hide this from me", and the survey lists spotting important messages as its own
+     requirement. */
+  let mutedChans = new Set(listPref("chatMuted", []));
+  const isMuted = (ch) => mutedChans.has(ch);
 
   /* A DM you have opened but not yet sent into. The room does not exist server-side until the
      first message, so the tab is local until then — otherwise clicking "Message" would create
@@ -510,6 +565,9 @@
   const railPref = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v === "1"; } catch { return d; } };
   let showLeft = railPref("chatLeft", true);
   let showRight = railPref("chatRight", true);
+  /* Which list the right rail is showing: "here" (this room's members) or "friends".
+     One rail, two modes — a friends list is not worth a second rail, let alone a widget. */
+  let rightMode = (() => { try { return localStorage.getItem("chatRightMode") === "friends" ? "friends" : "here"; } catch { return "here"; } })();
 
   // ── rendering ────────────────────────────────────────────────────────────
   const atBottom = () => {
@@ -699,8 +757,14 @@
     nm.className = "nm";
     nm.textContent = who;
     nm.style.color = handleColor(who);
-    // Right-click a name in the log for the same menu as the member list.
-    nm.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(who, e.clientX, e.clientY); });
+    // Right-click a name in the log for the same menu as the member list. 🔑 stopPropagation, or
+    // the ROW's message menu fires straight after and replaces it — the name is the more specific
+    // target and has to win.
+    nm.addEventListener("contextmenu", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      openCtx(who, e.clientX, e.clientY);
+    });
+    row.addEventListener("contextmenu", (e) => { e.preventDefault(); openMsgCtx(m, e.clientX, e.clientY); });
     row.appendChild(nm);
     if (m.from?.verified) {
       const v = document.createElement("span");
@@ -762,8 +826,21 @@
     add("Mention in chat", () => mention(handle));
     add(isFriend(handle) ? "Remove from friends" : "Add to friends", () => toggleFriend(handle));
     add("Open their profile", () => openLink("https://subliminal.gg/citizens/" + encodeURIComponent(handle)));
-    // Position INSIDE the panel — this popover hangs over the message list, and a menu that
-    // runs off the widget is a menu the shell never hit-tests.
+    placeCtx(clientX, clientY);
+  }
+
+  /** Add one row to the open context menu. */
+  function ctxAdd(label, fn) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label;
+    b.addEventListener("click", () => { closeCtx(); fn(); });
+    $("ctx").appendChild(b);
+  }
+
+  /** Position INSIDE the panel — this popover hangs over the message list, and a menu that
+   *  runs off the widget is a menu the shell never hit-tests. */
+  function placeCtx(clientX, clientY) {
+    const ctx = $("ctx");
     const box = $("panel").getBoundingClientRect();
     ctx.classList.add("open");
     const w = ctx.offsetWidth, h = ctx.offsetHeight;
@@ -773,6 +850,56 @@
     ctx.style.left = x + "px";
     ctx.style.top = y + "px";
     try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
+  /* Right-click a MESSAGE. Deliberately a different menu from right-clicking a NAME: that one is
+     about the person (DM, mention, friend, profile), this one is about the message in front of
+     you. Reporting lives here because what you are reporting is a specific thing that was said. */
+  function openMsgCtx(m, clientX, clientY) {
+    const ctx = $("ctx");
+    ctx.textContent = "";
+    const who = document.createElement("div");
+    who.className = "ct-who";
+    who.textContent = m.from?.handle ?? "message";
+    ctx.appendChild(who);
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    const from = (m.from?.handle ?? "");
+    if (canPin(activeCh)) {
+      const pinned = chanOf(activeCh)?.pin;
+      ctxAdd("Pin this message", () => post("/api/chat/pin", { ch: activeCh, id: m.id }));
+      if (pinned) ctxAdd("Remove the current pin", () => post("/api/chat/unpin", { ch: activeCh }));
+    }
+    ctxAdd("Copy text", () => { try { navigator.clipboard.writeText(m.text); } catch { /* no clipboard */ } });
+    // 🔑 You cannot report yourself (the server refuses it too) — offering it would just be a
+    // button that always errors.
+    if (from && from.toLowerCase() !== me) {
+      ctxAdd("Report this message…", () => openReportConfirm(m, clientX, clientY));
+    }
+    placeCtx(clientX, clientY);
+  }
+
+  /* Reporting is SILENT on the server: nothing is broadcast, nothing changes in the room, and
+     the reported player is never told. An action with no visible consequence is one people fire
+     by accident and then cannot take back, so it asks first.
+     🔑 A second MENU, not `confirm()` — a native modal dialog over a transparent, always-on-top,
+     click-through overlay is exactly the class of thing that traps a user, and the room bar's
+     delete button already established the two-step idiom here. */
+  function openReportConfirm(m, clientX, clientY) {
+    const ctx = $("ctx");
+    ctx.textContent = "";
+    const who = document.createElement("div");
+    who.className = "ct-who";
+    who.textContent = "Report " + (m.from?.handle ?? "") + "?";
+    ctx.appendChild(who);
+    const note = document.createElement("div");
+    note.className = "ct-note";
+    note.textContent = "Goes to the moderators for review. They are not told who reported it.";
+    ctx.appendChild(note);
+    ctxAdd("Yes, report it", () => post("/api/chat/report", {
+      ch: activeCh, handle: m.from?.handle ?? "", id: m.id,
+    }));
+    ctxAdd("Cancel", () => { /* closing is the whole action */ });
+    placeCtx(clientX, clientY);
   }
 
   const chans = () => view?.channels ?? [];
@@ -794,6 +921,34 @@
       b.addEventListener("click", () => select(c.ch));
       tabs.appendChild(b);
     }
+  }
+
+  /** The per-channel mute toggle that rides each joined row. */
+  function bellFor(c) {
+    const b = document.createElement("span");
+    const off = isMuted(c.ch);
+    b.className = "bell" + (off ? " off" : "");
+    b.title = off ? "Muted — mentions here stay silent. Click to unmute." : "Mute mention call-outs for this channel";
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("aria-hidden", "true");
+    const bell = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    bell.setAttribute("d", "M8 2a4 4 0 0 0-4 4c0 3-1.2 4-1.2 4h10.4S12 9 12 6a4 4 0 0 0-4-4zM6.6 12.5a1.6 1.6 0 0 0 2.8 0");
+    svg.appendChild(bell);
+    if (off) {
+      // The slash is what says "silenced" at a glance; colour alone would not survive a skin.
+      const slash = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      slash.setAttribute("d", "M2.5 2.5l11 11");
+      svg.appendChild(slash);
+    }
+    b.appendChild(svg);
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();   // the row itself selects the channel
+      if (off) mutedChans.delete(c.ch); else mutedChans.add(c.ch);
+      listSave("chatMuted", [...mutedChans]);
+      renderChannels();
+    });
+    return b;
   }
 
   /** "N hidden — show" row. Hiding is only useful if getting them back is obvious. */
@@ -886,6 +1041,7 @@
           row.appendChild(ct);
         }
         row.addEventListener("click", () => select(c.ch));
+        row.appendChild(bellFor(c));
         // Custom rooms and DMs can be closed — the rest follow your log and your org.
         if (c.kind === "custom" || c.kind === "dm") {
           const x = document.createElement("span");
@@ -1004,7 +1160,69 @@
     $("rbInviteGo").hidden = !secret;
   }
 
+  /* ── pinned notice ────────────────────────────────────────────────────────
+     Only a custom room's OWNER may pin, which is the same authority that invites and deletes.
+     The ownerless rooms (Global, the region, Nearby, org) are pinned by a moderator over the
+     server's loopback route, so they can still SHOW a pin here — they just can't be pinned from
+     the widget, and the ✕ hides itself rather than offering something the server will refuse. */
+  const canPin = (ch) => {
+    const c = chanOf(ch);
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    return !!c && c.kind === "custom" && !!me && (c.owner ?? "") === me;
+  };
+  function renderPin() {
+    const bar = $("pinbar");
+    const pin = chanOf(activeCh)?.pin ?? null;
+    bar.hidden = !pin;
+    if (!pin) return;
+    $("pinText").textContent = "";
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = pin.handle + ": ";
+    $("pinText").appendChild(who);
+    $("pinText").appendChild(document.createTextNode(pin.text));
+    // The full text lives in the tooltip because the bar is deliberately one line.
+    bar.title = pin.handle + ": " + pin.text + "  — pinned by " + pin.by;
+    $("pinX").hidden = !canPin(activeCh);
+  }
+
+  /** One person row, shared by both rail modes so a name reads the same in either. */
+  function personRow(handle, { you = false, verified = false, star = false, where = "" } = {}) {
+    const row = document.createElement("div");
+    row.className = "mrow" + (you ? " you" : "");
+    row.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(handle, e.clientX, e.clientY); });
+    row.title = "Right-click for mention, friends and profile";
+    const nm = document.createElement("span");
+    nm.className = "nm"; nm.textContent = handle;
+    // Same colour the name carries in the log, so a member list and its messages agree.
+    if (!you) nm.style.color = handleColor(handle);
+    row.appendChild(nm);
+    if (star) {
+      const f = document.createElement("span");
+      f.className = "fav"; f.textContent = "★"; f.title = "Friend";
+      row.appendChild(f);
+    }
+    if (verified) {
+      const v = document.createElement("span");
+      v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
+      row.appendChild(v);
+    }
+    if (where) {
+      const w = document.createElement("span");
+      w.className = "where"; w.textContent = where;
+      w.title = "In " + where + " right now";
+      row.appendChild(w);
+    }
+    return row;
+  }
+
+  /** The right rail has two modes and one body. `rightMode` decides which list fills it. */
   function renderMembers() {
+    $("memTitle").textContent = rightMode === "friends" ? "Friends" : "Here";
+    if (rightMode === "friends") renderFriendList(); else renderHere();
+  }
+
+  function renderHere() {
     const list = $("memList");
     list.textContent = "";
     const c = chanOf(activeCh);
@@ -1021,26 +1239,45 @@
     // You first, then friends, then everyone alphabetically.
     const rank = (h) => (h.toLowerCase() === me ? 0 : isFriend(h) ? 1 : 2);
     for (const m of [...members].sort((a, b) => rank(a.handle) - rank(b.handle) || a.handle.localeCompare(b.handle))) {
-      const row = document.createElement("div");
-      row.className = "mrow" + (m.handle.toLowerCase() === me ? " you" : "");
-      row.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(m.handle, e.clientX, e.clientY); });
-      row.title = "Right-click for mention, friends and profile";
-      const nm = document.createElement("span");
-      nm.className = "nm"; nm.textContent = m.handle;
-      // Same colour the name carries in the log, so a member list and its messages agree.
-      if (m.handle.toLowerCase() !== me) nm.style.color = handleColor(m.handle);
-      row.appendChild(nm);
-      if (isFriend(m.handle)) {
-        const f = document.createElement("span");
-        f.className = "fav"; f.textContent = "★"; f.title = "Friend";
-        row.appendChild(f);
+      list.appendChild(personRow(m.handle, {
+        you: m.handle.toLowerCase() === me,
+        verified: !!m.verified,
+        star: isFriend(m.handle),
+      }));
+    }
+  }
+
+  /* Your friends, and which channel can currently SEE each one.
+     🔑 A friend with no channel beside them is NOT offline. Presence only covers rooms you are
+     both in, so "offline" would be a confident lie about someone who may be sitting in a room
+     you never joined. The row says nothing rather than something wrong — same rule that killed
+     the per-handle status dot. */
+  function renderFriendList() {
+    const list = $("memList");
+    list.textContent = "";
+    $("memCount").textContent = friends.length ? String(friends.length) : "";
+    if (!friends.length) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No friends yet. Right-click anyone in chat and pick “Add to friends”.";
+      list.appendChild(e);
+      return;
+    }
+    // handle → the first channel of yours they turn up in; tabs run in this order, so it matches.
+    const seen = new Map();
+    for (const c of chans()) {
+      for (const m of c.members ?? []) {
+        const k = m.handle.toLowerCase();
+        if (!seen.has(k)) seen.set(k, { label: c.label, verified: !!m.verified });
       }
-      if (m.verified) {
-        const v = document.createElement("span");
-        v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
-        row.appendChild(v);
-      }
-      list.appendChild(row);
+    }
+    // The ones you can see right now first, then the rest alphabetically.
+    for (const h of [...friends].sort((a, b) => {
+      const sa = seen.has(a.toLowerCase()) ? 0 : 1, sb = seen.has(b.toLowerCase()) ? 0 : 1;
+      return sa - sb || a.localeCompare(b);
+    })) {
+      const hit = seen.get(h.toLowerCase());
+      list.appendChild(personRow(h, { verified: !!hit?.verified, star: true, where: hit?.label ?? "" }));
     }
   }
 
@@ -1058,7 +1295,7 @@
   function select(ch) {
     activeCh = ch;
     unread.delete(ch);
-    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderLog();
+    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderPin(); renderLog();
   }
 
   /** Open a conversation with someone. Local until the first message — see `pendingDm`. */
@@ -1076,7 +1313,10 @@
     $("panel").classList.toggle("no-left", !showLeft);
     $("panel").classList.toggle("no-right", !showRight);
     $("leftBtn").classList.toggle("active", showLeft);
-    $("rightBtn").classList.toggle("active", showRight);
+    // Each rail-mode button lights only when the rail is BOTH open and showing its list —
+    // otherwise two buttons look active while one list is on screen.
+    $("rightBtn").classList.toggle("active", showRight && rightMode === "here");
+    $("friendsBtn").classList.toggle("active", showRight && rightMode === "friends");
   }
 
   function renderAll() {
@@ -1095,7 +1335,7 @@
     // Once the real room exists the placeholder has done its job.
     if (pendingCh && chanOf(pendingCh)) pendingDm = null;
     applyRails();
-    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderLog();
+    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderPin(); renderLog();
     if (view?.status === "error" && view.error) sys(view.error);
     else if (view?.status === "connecting") sys("Connecting…");
     else if (view && view.status === "off" && view.hasIdentity) sys("Chat is off. Open the Chat widget on the overlay to connect.");
@@ -1116,7 +1356,11 @@
         // you are looking at it, and never for your own messages.
         const me = (view?.you?.handle ?? "").toLowerCase();
         const namesMe = me && new RegExp("@" + me.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&") + "\\b", "i").test(f.msg.text);
-        if (namesMe && (f.msg.from?.handle ?? "").toLowerCase() !== me) announceMention(f.msg.from?.handle ?? "Someone", f.msg.ch);
+        // A muted channel still HIGHLIGHTS the mention and still marks unread — it just doesn't
+        // speak. Silencing a call-out is not the same request as hiding the message.
+        if (namesMe && (f.msg.from?.handle ?? "").toLowerCase() !== me && !isMuted(f.msg.ch)) {
+          announceMention(f.msg.from?.handle ?? "Someone", f.msg.ch);
+        }
         if (f.msg.ch === activeCh) append(msgRow(f.msg));
         else { unread.add(f.msg.ch); renderTabs(); renderChannels(); }
       }
@@ -1699,16 +1943,32 @@
     try { localStorage.setItem("chatLeft", showLeft ? "1" : "0"); } catch { /* private mode */ }
     applyRails();
   });
-  $("rightBtn").addEventListener("click", () => {
-    showRight = !showRight;
+  /* Both right-rail buttons behave the same way: bring me YOUR list, or close the rail if it is
+     already showing it. Reaching a friends list must never cost two clicks, and neither button
+     may strand the other's list on screen while looking inactive. */
+  function pickRight(mode) {
+    if (showRight && rightMode === mode) {
+      showRight = false;
+    } else {
+      showRight = true;
+      rightMode = mode;
+      try { localStorage.setItem("chatRightMode", mode); } catch { /* private mode */ }
+    }
     try { localStorage.setItem("chatRight", showRight ? "1" : "0"); } catch { /* private mode */ }
+    renderMembers();
     applyRails();
-  });
+  }
+  $("rightBtn").addEventListener("click", () => pickRight("here"));
+  $("friendsBtn").addEventListener("click", () => pickRight("friends"));
+  $("pinX").addEventListener("click", () => post("/api/chat/unpin", { ch: activeCh }));
 
   // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
   applyRails();
+  // The rail head is owned by renderMembers, so a saved "friends" mode would otherwise sit under
+  // a "Here" heading until the first connection painted it.
+  renderMembers();
   buildEmojiPicker();
   loadAutoLinks();
   load();

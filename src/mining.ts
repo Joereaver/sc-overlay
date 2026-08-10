@@ -65,14 +65,14 @@ const DEBRIS_STEP = 2000;
  *    has to go look regardless.
  *  - `debris` — a whole number of panels, no rock at that value.
  *  - `unknown` — in range, but neither. The game never draws a signature that isn't one of the
- *    203 legal values, so this is always a misread or a number off some other part of the HUD.
+ *    166 legal values, so this is always a misread or a number off some other part of the HUD.
  *    It is REFUSED — shown in the scan-read box, never announced (see applyMineableRead).
  *  A read outside [MIN_SIGNATURE, maxSignature] gets no verdict at all — see classifySignature. */
 export type ScanVerdict = "ore" | "ore-or-debris" | "debris" | "unknown";
 
 /** Is this value a whole number of debris panels? Replaces the old "2,000 or anything ≥4,000"
  *  rule, which let every large stray HUD number through as debris. Between 2,000 and the ceiling
- *  there are only 14 debris values, so this is a far tighter filter than a floor ever was. */
+ *  there are only 12 debris values, so this is a far tighter filter than a floor ever was. */
 export function isDebrisValue(signature: number): boolean {
   return signature >= DEBRIS_STEP && signature % DEBRIS_STEP === 0;
 }
@@ -114,7 +114,7 @@ const CONFUSABLE_DIGITS: Record<string, string> = { "6": "8", "8": "6" };
 /** Fix confused digits by CONSTRAINING the read to values the game can actually show.
  *
  *  This is the answer to "can you train it better": the OCR can't be trained, but it doesn't need to
- *  be. A signature is one of only ~203 legal values spread over 2,000–29,400 — **0.74% of that
+ *  be. A signature is one of only ~166 legal values spread over 2,000–25,800 — **0.70% of that
  *  range** — so a wrong digit almost always lands on a number that cannot exist, and usually exactly
  *  one legal value is one or two 6/8 swaps away.
  *
@@ -190,6 +190,17 @@ export class MiningTracker extends EventEmitter {
    *  2,000 (so the biggest field this will accept is 12 panels). Every rejection is logged, so if
    *  a real field ever reads higher, sidecar.log will say so and this can be raised on evidence
    *  instead of a guess. */
+  /** Celestial-body key -> display name (`pyro2` -> "Monox"), from the dataset so it
+   *  refreshes per patch. Empty when the table predates the map. */
+  bodyNames(): Record<string, string> {
+    return (this.data as unknown as { bodies?: Record<string, string> })?.bodies ?? {};
+  }
+
+  /** The harvestable plants that share the debris step, for the widget's wording. */
+  harvestPlants(): string[] {
+    return (this.data as unknown as { harvest?: { plants?: string[] } })?.harvest?.plants ?? [];
+  }
+
   maxSignature(): number {
     if (this.maxSig === null) {
       this.maxSig = Math.max(0, ...(this.data?.rocks ?? []).flatMap((r) => r.sigs));
@@ -235,11 +246,11 @@ export class MiningTracker extends EventEmitter {
     }
     // 🔑 THE VALUE IS THE EVIDENCE, AND `unknown` HAS NONE (Sub, 2026-08-09, superseding the
     // glyph-gate below it). Ore and debris are both self-evident: they are values the game can
-    // actually draw — 191 rock signatures plus 14 whole-panel debris counts, 203 of the 27,401
-    // numbers in the band, 0.74%. (Was 165/23,801 = 0.69% when the table was the 26 hand-typed
-    // rocks; the datacore-generated table added the hand-mined gems and the six asteroid types,
-    // which widened the band to 29,400. Recount when mineables.json is regenerated — this is a
-    // measured claim, and the whole argument below rests on the number staying tiny.)
+    // actually draw — 156 rock signatures plus 12 whole-panel debris counts, 166 of the 23,801
+    // numbers in the band, 0.70%. 🔑 RECOUNT THIS whenever mineables.json is regenerated: it has
+    // already moved twice in one day (26 hand-typed rocks -> +gems +asteroid types -> asteroid
+    // types pulled again as legacy). It is a measured claim and the whole argument below rests on
+    // the number staying tiny, so a stale one here is worse than none.
     // An `unknown` read is by definition NOT one of them, so it is
     // never a real contact: it is an OCR misread the 6/8 repair couldn't rescue, or a number off
     // some other part of the HUD entirely. Announcing it meant the glyph check alone decided,

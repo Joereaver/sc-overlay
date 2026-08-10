@@ -71,6 +71,38 @@ CREATE TABLE IF NOT EXISTS dm_threads (
 CREATE INDEX IF NOT EXISTS dm_threads_a ON dm_threads (a, last_at DESC);
 CREATE INDEX IF NOT EXISTS dm_threads_b ON dm_threads (b, last_at DESC);
 
+-- Player reports. Chat is gated on an RSI-verified identity, so unlike most SC chat surfaces a
+-- report here resolves to a real, bannable person — which is what makes reviewing them worth the
+-- table. Reviewed over the loopback /admin/reports route, the same way bans are managed.
+-- 🔑 `msg_text` is SNAPSHOTTED rather than joined to messages(id): scrollback is pruned and a
+-- reported message is exactly the one someone wants deleted, so a foreign key would let the
+-- evidence disappear with it.
+CREATE TABLE IF NOT EXISTS reports (
+  id       bigserial PRIMARY KEY,
+  ch       text        NOT NULL,
+  about    text        NOT NULL,        -- lowercase handle being reported
+  by       text        NOT NULL,        -- lowercase handle doing the reporting
+  reason   text,
+  msg_id   bigint,                      -- the message complained about, when there is one
+  msg_text text,
+  at       timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS reports_at ON reports (at DESC);
+
+-- One pinned message per room. Custom rooms: the owner pins. Global/region/Nearby/org have no
+-- owner, so those are pinned over the loopback /admin/pin route instead — same reasoning as
+-- room deletion, where the ownerless rooms needed an admin path or they could never be touched.
+-- 🔑 The pinned TEXT is snapshotted for the same reason reports snapshot theirs: a pin has to
+-- outlive the scrollback prune, or the busiest rooms would silently lose their notice.
+CREATE TABLE IF NOT EXISTS pins (
+  ch     text PRIMARY KEY,
+  msg_id bigint,
+  handle text        NOT NULL,          -- who wrote the pinned message
+  text   text        NOT NULL,
+  by     text        NOT NULL,          -- who pinned it
+  at     timestamptz NOT NULL DEFAULT now()
+);
+
 -- Names that a custom room may NOT be called: org SIDs and verified handles the server has
 -- seen. A room called "irregs" renders in the browse list looking like the IRREGS org channel,
 -- so a member can join the fake one and talk freely to whoever is listening. No technical

@@ -8,6 +8,7 @@ import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
 import { parseLine } from "./parser.js";
 import { parseMissionEvent } from "./missions-parser.js";
+import { PlaceWatcher, debrisStepWording, type Place } from "./location.js";
 import { PartyTracker, ownHandleFromLog } from "./party.js";
 import { MissionTracker } from "./missions.js";
 import { collectLogPaths } from "./log-paths.js";
@@ -962,6 +963,39 @@ function applyChatSignals(ev: import("./missions-parser.js").MissionEvent): void
 }
 
 const miningClients = new Set<ServerResponse>();
+// ── Where the player is ─────────────────────────────────────────────────────
+// The body-name map rides in the dataset (`pyro2` -> "Monox"), so it refreshes per
+// patch with everything else rather than being a hard-coded list here.
+const place = new PlaceWatcher(mining.bodyNames());
+// User override. `auto` trusts the log; the other two are the player saying "I know
+// where I am, stop guessing" -- which matters because the log reading can be ten
+// minutes old and a forced value is never stale.
+type PlaceMode = "auto" | "planet" | "space";
+function placeMode(): PlaceMode {
+  const m = (config as { miningPlaceMode?: string }).miningPlaceMode;
+  return m === "planet" || m === "space" ? m : "auto";
+}
+/** The place the widget should actually use, after the override. */
+function effectivePlace(): Place {
+  const mode = placeMode();
+  if (mode === "planet") return { kind: "planet", body: "manual", name: "(set by you)", at: Date.now() };
+  if (mode === "space") return { kind: "space", at: Date.now() };
+  return place.current();
+}
+function miningViewWithPlace() {
+  const v = mining.view();
+  const p = effectivePlace();
+  // 🔑 The debris/harvestable wording is decided HERE, not in the widget. Both step by
+  // exactly 2,000 so the COUNT is never in doubt -- only the kind is -- and the rule for
+  // wording that lives in location.ts. Computing it in the renderer would be the same
+  // rule in two places, which is how the verdict logic drifted before.
+  const sig = v.scan?.signature ?? 0;
+  const wording = v.scan && sig % 2000 === 0 && v.scan.verdict !== "ore"
+    ? debrisStepWording(sig / 2000, p)
+    : null;
+  return { ...v, place: p, placeMode: placeMode(), placeAgeMs: place.ageMs(), wording };
+}
+
 function miningSend(msg: unknown): void {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
   for (const res of miningClients) res.write(data);
@@ -971,7 +1005,7 @@ function miningSend(msg: unknown): void {
 function miningAppearance(): { kind: "appearance"; theme: string; overlayTwist: number; overlayScale: number } {
   return { kind: "appearance", theme: effectiveTheme(), overlayTwist: config.overlayTwist, overlayScale: config.overlayScale };
 }
-mining.on("change", () => miningSend({ kind: "state", view: mining.view() }));
+mining.on("change", () => miningSend({ kind: "state", view: miningViewWithPlace() }));
 // Transient alerts the overlay turns into TTS + sound + a flash.
 mining.on("target-hit", (hit) => miningSend({ kind: "target-hit", hit }));
 mining.on("refinery-done", (job) => miningSend({ kind: "refinery-done", job }));
@@ -1139,6 +1173,10 @@ function startWatcher(): void {
   watcher.on("event", (e) => {
     // Feed the mission/blueprint tracker on every line (independent of ship auto-switch).
     tracker.detectPatch(e.raw);
+    // Planet-side vs space, off the engine's terrain-streaming report. A HINT only —
+    // it is printed about every 10 minutes, so it can be that stale. It orders the
+    // wording of an ambiguous 2,000-step signature; it never suppresses anything.
+    if (place.push(e.raw)) { miningSend({ kind: "state", view: miningViewWithPlace() }); }
     const me = parseMissionEvent(e);
     if (me) { tracker.apply(me); party.apply(me); applyChatSignals(me); }
 
@@ -1840,8 +1878,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Joining/creating and leaving custom rooms, inviting, and DMs — same loopback rule as
   // sending: every one of these ACTS with the user's chat identity, so the LAN must not be
   // able to drive them. (A DM in particular is a message sent as him to a named person.)
+  // 🔑 pin/unpin/report belong in THIS group, not a laxer one: a pin speaks to a whole room in
+  // his name and a report accuses a named player as him. Both are the "acts with the user's
+  // identity" case, so the LAN (which the sidecar serves for OBS) must not be able to drive them.
   if ((url === "/api/chat/join" || url === "/api/chat/leave" || url === "/api/chat/invite"
        || url === "/api/chat/dm" || url === "/api/chat/dmlist"
+       || url === "/api/chat/pin" || url === "/api/chat/unpin" || url === "/api/chat/report"
        || url === "/api/chat/delete-room") && req.method === "POST") {
     if (!fromThisMachine(req)) {
       res.writeHead(403, { "Content-Type": "application/json" });
@@ -1859,6 +1901,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       : url.endsWith("/delete-room") ? chat.deleteRoom(String(body.ch ?? ""))
       : url.endsWith("/dmlist") ? chat.dmList()
       : url.endsWith("/dm") ? chat.dm(String(body.to ?? ""), String(body.text ?? ""))
+      : url.endsWith("/pin") ? chat.pin(String(body.ch ?? ""), Number(body.id))
+      : url.endsWith("/unpin") ? chat.unpin(String(body.ch ?? ""))
+      : url.endsWith("/report") ? chat.report(
+        String(body.ch ?? ""), String(body.handle ?? ""),
+        Number.isFinite(Number(body.id)) ? Number(body.id) : null,
+        body.reason ? String(body.reason) : undefined)
       : chat.leave(String(body.ch ?? ""));
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify(out));
@@ -1915,7 +1963,20 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   }
   if (url === "/api/mining" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(mining.view()));
+    res.end(JSON.stringify(miningViewWithPlace()));
+    return;
+  }
+  // The player's planet/space override. Persisted like any other pref so it survives
+  // a restart -- someone who mines on foot should not have to re-set it every launch.
+  if (url === "/api/mining/place-mode" && req.method === "POST") {
+    const body = await readBody(req);
+    const m = String((body as { mode?: string })?.mode ?? "");
+    if (m !== "auto" && m !== "planet" && m !== "space") { res.writeHead(400); res.end('{"error":"bad mode"}'); return; }
+    (config as { miningPlaceMode?: string }).miningPlaceMode = m;
+    saveConfig();
+    miningSend({ kind: "state", view: miningViewWithPlace() });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, placeMode: m }));
     return;
   }
   if (url === "/api/mining/target" && req.method === "POST") {

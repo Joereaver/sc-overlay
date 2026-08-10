@@ -493,6 +493,65 @@ try {
   const kept = await nosy.next((f) => f.t === "error" && f.code === "not_member", "outsiders can't post into a DM");
   assert(kept, "DM membership is enforced by the same not_member rule as every other room");
 
+  // ── pins: owner only, and the ownerless rooms refuse outright ────────────
+  const pinOwner = client();
+  await pinOwner.open();
+  pinOwner.send({ t: "hello", handle: "Owner" });
+  await pinOwner.next((f) => f.t === "welcome", "welcome Owner");
+  pinOwner.send({ t: "join", name: "Pin Room", mode: "create" });
+  const room = await pinOwner.next((f) => f.t === "joined" && f.kind === "custom", "the room is created");
+  pinOwner.send({ t: "msg", ch: room.ch, text: "meet at Checkmate" });
+  const pinMe = await pinOwner.next((f) => f.t === "msg" && f.text === "meet at Checkmate", "a message to pin");
+
+  const guest2 = client();
+  await guest2.open();
+  guest2.send({ t: "hello", handle: "Guest2" });
+  await guest2.next((f) => f.t === "welcome", "welcome Guest2");
+  guest2.send({ t: "join", name: "Pin Room" });
+  await guest2.next((f) => f.t === "joined" && f.ch === room.ch, "the guest joins it");
+
+  guest2.send({ t: "pin", ch: room.ch, id: pinMe.id });
+  await guest2.next((f) => f.t === "error" && f.code === "not_owner", "a guest cannot pin");
+
+  pinOwner.send({ t: "pin", ch: room.ch, id: pinMe.id });
+  const pinned = await guest2.next((f) => f.t === "pin" && f.pin, "the pinOwner's pin reaches the room");
+  assert.equal(pinned.pin.text, "meet at Checkmate", "the pinned TEXT is carried, not just an id");
+  assert.equal(pinned.pin.by, "Owner", "the pin records who pinned it");
+
+  // A joiner must be told about an existing pin, or a notice is only ever seen by whoever
+  // happened to be watching when it was set.
+  const lateJoiner = client();
+  await lateJoiner.open();
+  lateJoiner.send({ t: "hello", handle: "Latecomer" });
+  await lateJoiner.next((f) => f.t === "welcome", "welcome Latecomer");
+  lateJoiner.send({ t: "join", name: "Pin Room" });
+  const onJoin = await lateJoiner.next((f) => f.t === "pin" && f.ch === room.ch, "the pin arrives on join");
+  assert.equal(onJoin.pin.text, "meet at Checkmate", "and it is the same notice");
+
+  // 🔑 An unpin must REACH clients as an explicit null, or a cleared notice sits there forever.
+  pinOwner.send({ t: "unpin", ch: room.ch });
+  const cleared = await guest2.next((f) => f.t === "pin" && f.pin === null, "an unpin broadcasts pin:null");
+  assert.equal(cleared.pin, null, "pin:null is a value, not an omitted field");
+
+  // Global has no pinOwner at all, so the widget path must refuse rather than half-work.
+  pinOwner.send({ t: "pin", ch: "global", id: pinMe.id });
+  await pinOwner.next((f) => f.t === "error" && f.code === "not_owner", "nobody owns Global, so nobody pins it here");
+
+  // ── reporting ─────────────────────────────────────────────────────────────
+  guest2.send({ t: "report", ch: room.ch, handle: "Owner", id: pinMe.id });
+  const ack = await guest2.next((f) => f.t === "reported", "the reporter gets an acknowledgement");
+  assert.equal(ack.handle, "Owner", "the acknowledgement names who was reported");
+  // 🔑 Nothing may reach the room. A report that announced itself would tell the reported player
+  // who reported them, which is the one thing a report must never do.
+  await wait(150);
+  assert(!pinOwner.frames.some((f) => f.t === "reported" || (f.t === "notice" && /report/i.test(f.text ?? ""))),
+    "the reported player is told NOTHING");
+
+  guest2.send({ t: "report", ch: room.ch, handle: "Guest2" });
+  await guest2.next((f) => f.t === "error" && f.code === "bad_handle", "you cannot report yourself");
+  guest2.send({ t: "report", ch: room.ch, handle: "not a handle!" });
+  await guest2.next((f) => f.t === "error" && f.code === "bad_handle", "a malformed handle is refused");
+
   console.log("chat-server tests passed");
 } finally {
   server.kill();
