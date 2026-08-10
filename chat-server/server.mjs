@@ -403,11 +403,15 @@ function locChannels(loc) {
   const shard = typeof loc.shard === "string" ? loc.shard : "";
   const dgs = typeof loc.dgs === "string" ? loc.dgs.toLowerCase() : "";
   if (REGION_RE.test(region)) out.push(`region:${region}`);
-  if (SHARD_RE.test(shard) && shard !== "local_shard") out.push(`shard:${shard.toLowerCase()}`);
-  // The DGS - the Dynamic Game Server running your area. Three tiers, finest last:
-  //   region  use1b            everyone in US East
-  //   shard   pub_use1b_..040  the persistent universe instance you are in
-  //   dgs     <hash>           the server actually running where you ARE
+  // 🔑 NO shard room. Dropped 2026-08-09 on Sub's call. Two location tiers, not three:
+  //   region  use1b   everyone on US East 1B — the LETTER is part of the key, so 1A and 1B
+  //                   are different rooms and someone on 1A never sees this one
+  //   dgs     <hash>  the Dynamic Game Server actually running where you are — who is around
+  //                   you right now
+  // The shard sat between them with no meaning a player could act on: it is an implementation
+  // detail of how CIG splits a region, and it kept showing three people when only one was
+  // genuinely nearby. `shard` is still ACCEPTED in the frame because it salts the DGS hash and
+  // v1 clients send it; it just no longer opens a room of its own.
   // 🔑 The client sends a HASH of ip:port, never the endpoint, so this server never learns and
   // never rebroadcasts a CIG address. Shape-checked so the key space stays exactly what the
   // client can produce and a crafted value cannot smuggle in a prefix.

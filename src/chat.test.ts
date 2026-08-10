@@ -77,17 +77,22 @@ async function testCustom(): Promise<void> {
     const wb = connected(b);
     b.configure(opts("WingmanTest"), true);
     await wb;
-    a.applyShard(SHARD);
+    // TWO location tiers, not three (2026-08-09): the region key carries the AZ letter, so
+    // "region:use1b" already means everyone on US East 1B specifically. The shard sat between
+    // that and the DGS with nothing a player could act on.
+    a.applyShard(SHARD, "1.2.3.4:64304");
+    b.applyShard(SHARD, "1.2.3.4:64304");
 
-    await until(a, (f) => f.type === "state" && f.view.channels.some((c: any) => c.kind === "shard"), "A in shard channel");
-    await until(b, (f) => f.type === "state" && f.view.channels.some((c: any) => c.kind === "shard"), "B in shard channel");
+    await until(a, (f) => f.type === "state" && f.view.channels.some((c: any) => c.kind === "dgs"), "A in the DGS channel");
+    await until(b, (f) => f.type === "state" && f.view.channels.some((c: any) => c.kind === "dgs"), "B in the DGS channel");
     const va = a.view();
-    assert.deepEqual(va.channels.map((c) => c.kind), ["global", "region", "shard"], "hierarchy order");
+    assert.deepEqual(va.channels.map((c) => c.kind), ["global", "region", "dgs"], "hierarchy order");
     assert.equal(va.channels[1].label, "US East 1B");
-    assert.equal(va.channels[2].label, "Shard 040");
+    assert.equal(va.channels[2].label, "Nearby");
+    assert(!va.channels.some((c) => c.kind === "shard"), "no shard channel exists any more");
 
-    const heard = until(b, (f) => f.type === "msg" && f.msg.text === "meet at Seraphim?", "B hears A's shard message");
-    assert.equal(a.send(`shard:${SHARD.toLowerCase()}`, "meet at Seraphim?").ok, true);
+    const heard = until(b, (f) => f.type === "msg" && f.msg.text === "meet at Seraphim?", "B hears A in the region");
+    assert.equal(a.send("region:use1b", "meet at Seraphim?").ok, true);
     const got = await heard;
     assert.equal(got.msg.from.handle, "SubTest");
 
