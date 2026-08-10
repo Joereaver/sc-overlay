@@ -97,6 +97,20 @@ const loaded = await store.init();
 const bans = loaded.bans;
 /** slug → { label, category, privacy, code, owner, created, lastActive, invites } */
 const customDir = loaded.rooms;
+/** Slugs a custom room may NOT be called: org SIDs and verified handles the server has seen.
+ *  🔴 A room named "irregs" renders in the browse list looking like the IRREGS org channel, so
+ *  a member joins the fake one and talks freely to whoever is listening. NOTHING technical is
+ *  broken — org:irregs and custom:irregs are different keys and org traffic never leaks — which
+ *  is precisely why it has to be stopped at the NAME. Demonstrated on Sub's own server
+ *  (2026-08-09): a tester created irregs, sabreraven, ltx, sbb and imc-subliminallianori. */
+const reservedNames = loaded.reserved ?? new Set();
+/** Learn a name so nobody can take it. Called for every org and handle that connects. */
+function reserveName(name, kind) {
+  const n = String(name ?? "").toLowerCase();
+  if (!n || reservedNames.has(n)) return;
+  reservedNames.add(n);
+  store.rememberName(n, kind);
+}
 let nextMsgId = loaded.maxMessageId + 1;
 
 /** A room is "active" whenever someone speaks in it or its membership changes — that timestamp
@@ -529,6 +543,9 @@ wss.on("connection", (ws) => {
       conn.handleLower = id.handle.toLowerCase();
       conn.verified = id.verified;
       conn.orgSid = id.org ? id.org.sid.toLowerCase() : null;
+      // Every real handle and org that connects becomes a name nobody can impersonate.
+      reserveName(conn.handleLower, "handle");
+      if (conn.orgSid) reserveName(conn.orgSid, "org");
       // Kept solely to RE-ASK the site later (see the org recheck). Never logged, never sent.
       conn.token = typeof f.token === "string" ? f.token : null;
       // The category list rides the welcome frame so the widget's dropdown is rendered from the
@@ -621,6 +638,13 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      // 🔴 The impersonation guard. Checked at CREATE only: an existing room keeps working, and
+      // the answer can only ever get stricter as more orgs and handles connect.
+      if (reservedNames.has(slug)) {
+        conn.send({ t: "error", code: "name_reserved",
+          message: `“${typed}” is the name of an org or a player, so a room can't be called that. Pick something else.` });
+        return;
+      }
       const category = CATEGORY_SLUGS.has(f.category) ? f.category : DEFAULT_CATEGORY;
       const privacy = f.privacy === "private" ? "private" : "public";
       const code = privacy === "private" ? makeCode() : null;

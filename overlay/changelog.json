@@ -1,4 +1,49 @@
 {
+  "0.1.42": {
+    "date": "2026-08-10T02:38:21Z",
+    "notes": [
+      {
+        "kind": "fixed",
+        "label": "Security: update as soon as you can",
+        "text": "This release closes two holes in the app's local service that anything on your network could reach. The worse one let a request walk out of the overlay's own folder and read files from your disk — including the file holding your subliminal.gg sync token. The second let an unauthenticated request rewrite your settings, which could be chained to point chat at somebody else's server and hand them that token. Both are fixed: the service now refuses any request from another machine for anything that carries credentials or changes a setting, and refuses page-initiated requests from a website open in the Web Page widget. Widget pages still serve to OBS on a second PC, so browser sources are unaffected. Found and reported by a viewer during a stream — thank you."
+      },
+      {
+        "kind": "new",
+        "label": "Chat: your own rooms, private ones, and direct messages",
+        "text": "Create a room and say what it is FOR — Org Operations, Mining, Salvage, Bounty Hunting, twelve activities in all — and the room browser groups by that, so you can see what people are actually doing rather than a flat list of names. Rooms can be private: a private room is not listed anywhere, and you let people in with a six-character join code or by inviting their RSI handle. And you can now message a player directly: right-click any name, in the chat or in the member list, and pick Send a direct message. Conversations wait for you if you were offline. You can delete a room you made, which removes it for everyone in it."
+      },
+      {
+        "kind": "new",
+        "label": "Chat: Nearby replaces the Shard channel",
+        "text": "There are now two location channels instead of three. Your region channel (US East 1B, EU West 1A and so on) is everyone on that exact server. Nearby is the Dynamic Game Server actually running the area you are in — the people who could genuinely be around you. The old Shard channel sat between the two and reported far more people than were anywhere near you, so it is gone. Nearby is worked out from your game log and follows you as server meshing hands you between DGSs."
+      },
+      {
+        "kind": "improved",
+        "label": "Chat: scrollback survives, and the channel list calms down",
+        "text": "Conversations are no longer lost when the chat service restarts — history, your rooms and your invites all persist now. The left rail splits into the channels you are IN and a Browse rooms list you can roll up, every group collapses with a click, and you can hide rooms from the browser you are not interested in. Links you share are labelled BP, ITEM or MISSION so a blueprint and a wiki lookup no longer look identical, the slash-command menu now appears mid-sentence instead of only at the start of a message, and a new /build command shares an erkul loadout under a name you choose. Direct messages carry a standing note that they are private from other players but not encrypted."
+      },
+      {
+        "kind": "fixed",
+        "label": "One blueprint no longer shows as two on the mission report",
+        "text": "If you ran contracts back to back, a blueprint awarded by the mission you finished earlier could appear on the NEXT mission's report as well — one unlock, two pictures. The report now refuses to reach back past the previous completion, so each card shows only what that contract actually paid out. Where two missions finish so close together that the log genuinely cannot say which one paid, the card now shows nothing rather than guessing."
+      },
+      {
+        "kind": "fixed",
+        "label": "The mission report waits while you answer it",
+        "text": "Picking an answer and then alt-tabbing into the game could leave you coming back to a card that had already closed, with the remaining questions unanswerable. The card now only counts down while you are away from it — pointer off it and the overlay not focused — so you can go and fly and come back to finish."
+      },
+      {
+        "kind": "fixed",
+        "label": "The Mining Scanner stopped calling out numbers that are not rocks",
+        "text": "It could announce a reading while you were flying nowhere near a rock, triggered by an ordinary number on your flight HUD. The game only ever draws 165 legal signature values, so anything that is not one of them cannot be a contact — those are now refused outright instead of being talked into a call-out by the scan marker beside them. The number still appears in the scan box, dimmed and struck through, so you can see what was read and thrown away."
+      },
+      {
+        "kind": "improved",
+        "label": "Missions now say whether they are Verified",
+        "text": "Mission pages on subliminal.gg show whether a contract is Verified or Unverified, the same way the mobiGlas Contract Manager does, and the blueprint tracker can filter by it. 704 of the 4,075 contracts in the current patch are unverified."
+      }
+    ]
+  },
   "0.1.41": {
     "date": "2026-08-08T23:18:09Z",
     "notes": [

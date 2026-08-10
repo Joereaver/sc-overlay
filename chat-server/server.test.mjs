@@ -350,6 +350,28 @@ try {
   assert(!rival.frames.some((f) => f.t === "msg" && f.text === "org secret"),
     "🔴 the rival NEVER sees org traffic");
 
+  // ── impersonation guard ───────────────────────────────────────────────────
+  // 🔴 Demonstrated on Sub's own server: a tester made rooms called irregs, sabreraven, ltx,
+  // sbb and imc-subliminallianori. Nothing technical broke — the harm is that a member joins
+  // the fake "irregs" thinking it is the org channel and talks freely in it.
+  rival.send({ t: "join", name: "IRREGS", mode: "create" });
+  const taken = await rival.next((f) => f.t === "error" && f.code === "name_reserved", "org name is reserved");
+  assert.match(taken.message, /org or a player/, "and it says why");
+
+  rival.send({ t: "join", name: "OrgPilot", mode: "create" });
+  await rival.next((f) => f.t === "error" && f.code === "name_reserved", "a player's handle is reserved too");
+
+  // Its OWN org counts as well — you cannot squat your own org's name either, because the room
+  // would still be mistaken for the real channel by everyone else in it.
+  rival.send({ t: "join", name: "RIVALS", mode: "create" });
+  await rival.next((f) => f.t === "error" && f.code === "name_reserved", "your own org is reserved");
+
+  // Ordinary names are unaffected — the guard must not turn into "no rooms allowed".
+  rival.send({ t: "join", name: "Sunday Salvage", mode: "create" });
+  await rival.next((f) => f.t === "joined" && f.ch === "custom:sunday-salvage", "a normal name still works");
+  rival.send({ t: "deleteRoom", ch: "custom:sunday-salvage" });
+  await rival.next((f) => f.t === "left" && f.ch === "custom:sunday-salvage", "cleaned up");
+
   // ── the DGS tier, and the rate limit on access attempts ───────────────────
   // region -> shard -> dgs. The DGS key is a HASH of the server's ip:port produced by the
   // client, so this server never sees or rebroadcasts a CIG address.

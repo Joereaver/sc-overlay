@@ -75,7 +75,7 @@ function fileStore(dir, log) {
     async init() {
       bans = new Set(Object.values(readJson(bansPath, [])).map((h) => String(h).toLowerCase()));
       rooms = new Map(Object.entries(readJson(channelsPath, {})).map(([slug, m]) => [slug, roomRow(slug, m)]));
-      return { rooms, bans, maxMessageId: 0 };
+      return { rooms, bans, reserved: new Set(), maxMessageId: 0 };
     },
     // Scrollback is memory-only here: a test that wants durable history wants the pg backend.
     async loadHistory() { return []; },
@@ -96,6 +96,7 @@ function fileStore(dir, log) {
 
     touchDm() {},
     async dmThreads() { return []; },
+    rememberName() {},
     async close() {},
   };
 }
@@ -137,10 +138,12 @@ function pgStore(url, dir, schema, log) {
           created: +r.created, lastActive: +r.last_active, invites: r.invites,
         });
       }
+      const namesQ = await pool.query("SELECT name FROM known_names");
       const bansQ = await pool.query("SELECT handle FROM bans");
       const maxQ = await pool.query("SELECT coalesce(max(id), 0)::bigint m FROM messages");
       return {
         rooms,
+        reserved: new Set(namesQ.rows.map((r) => r.name)),
         bans: new Set(bansQ.rows.map((b) => b.handle)),
         // 🔑 Seed the id counter from the DB. It restarts at 1 otherwise, and a fresh message
         // then collides with a loaded one — clients key off the id, so that shows up as a
@@ -211,6 +214,12 @@ function pgStore(url, dir, schema, log) {
         SELECT CASE WHEN a = $1 THEN b ELSE a END AS other, last_at
         FROM dm_threads WHERE a = $1 OR b = $1 ORDER BY last_at DESC LIMIT $2`, [handle, limit]);
       return rows.map((r) => ({ other: r.other, lastAt: new Date(r.last_at).toISOString() }));
+    },
+    /** Record an org SID or verified handle so a custom room can never be named after it. */
+    rememberName(name, kind) {
+      bg("remember name", pool.query(
+        "INSERT INTO known_names (name, kind) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING",
+        [name, kind]));
     },
     async close() { await pool?.end(); },
   };

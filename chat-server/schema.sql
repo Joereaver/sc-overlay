@@ -70,3 +70,15 @@ CREATE TABLE IF NOT EXISTS dm_threads (
 );
 CREATE INDEX IF NOT EXISTS dm_threads_a ON dm_threads (a, last_at DESC);
 CREATE INDEX IF NOT EXISTS dm_threads_b ON dm_threads (b, last_at DESC);
+
+-- Names that a custom room may NOT be called: org SIDs and verified handles the server has
+-- seen. A room called "irregs" renders in the browse list looking like the IRREGS org channel,
+-- so a member can join the fake one and talk freely to whoever is listening. No technical
+-- boundary is crossed — org:irregs and custom:irregs are different keys — which is exactly why
+-- it needs blocking at the NAME, not at the membership check.
+-- Populated as people connect, so it covers the orgs and handles that actually use the app.
+CREATE TABLE IF NOT EXISTS known_names (
+  name text PRIMARY KEY,        -- lowercased slug form
+  kind text NOT NULL,           -- 'org' | 'handle'
+  seen timestamptz NOT NULL DEFAULT now()
+);
