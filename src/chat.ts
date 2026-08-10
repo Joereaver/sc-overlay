@@ -130,6 +130,16 @@ export class ChatClient extends EventEmitter {
   private shard: string | null = null; // full id from the log; region derives from it
   /** "<ip>:<port>" of the DGS. Kept ONLY to derive the hashed room key — never sent. */
   private dgs: string | null = null;
+  /** shard id → the endpoint last seen joining it.
+   *  🔑 This exists because of the ORDER the game logs a shard hop:
+   *      <Join PU> …address…port…shard[X]     ← the only line with the endpoint
+   *      <Channel Destroyed> map="megamap"    ← reads as sessionEnd, clears location
+   *      <Update Shard Id> New Shard Id: X    ← re-establishes the shard, no endpoint
+   *  So the endpoint is always learned and then thrown away moments later, and the trailing
+   *  line can never restore it on its own. Measured on Sub's real log: every one of his four
+   *  shard events ended with dgs=null for exactly this reason, and no Nearby room appeared.
+   *  Bounded — a session touches a handful of shards, not thousands. */
+  private dgsForShard = new Map<string, string>();
   private channels = new Map<string, ChannelState>();
   /** Public custom-room directory as the server last broadcast it. Private rooms are never in
    *  it — the server omits them, so there is nothing to filter here. */
@@ -177,7 +187,14 @@ export class ChatClient extends EventEmitter {
     // one shard, so a change with the same shard id is a real move to different neighbours and
     // must re-key the room. Update Shard Id carries no endpoint, so `undefined` means "no news"
     // and keeps the current value; an explicit null means we left the PU.
-    const nextDgs = dgs === undefined ? this.dgs : dgs;
+    // Learn the endpoint whenever a line actually carries one.
+    if (shard && dgs) {
+      this.dgsForShard.set(shard, dgs);
+      if (this.dgsForShard.size > 8) this.dgsForShard.delete(this.dgsForShard.keys().next().value as string);
+    }
+    // `undefined` means "this line named no endpoint" — fall back to the one we learned for
+    // THIS shard rather than to whatever is currently held, which a sessionEnd may have wiped.
+    const nextDgs = dgs === undefined ? (shard ? this.dgsForShard.get(shard) ?? null : null) : dgs;
     if (shard === this.shard && nextDgs === this.dgs) return;
     this.shard = shard;
     this.dgs = shard ? nextDgs : null;

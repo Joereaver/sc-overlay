@@ -92,6 +92,19 @@ async function testCustom(): Promise<void> {
     assert.equal(got.msg.from.handle, "SubTest");
 
     // Leaving the PU drops region+shard, keeps global (and its history).
+    // 🔑 The REAL shard-hop ordering, taken from Sub's log. The endpoint only ever appears on
+    // <Join PU>; a <Channel Destroyed> (sessionEnd) lands between that and <Update Shard Id>,
+    // which re-establishes the shard carrying no endpoint. Before the per-shard memory, this
+    // exact sequence left dgs=null every time and no Nearby room was ever created.
+    a.applyShard(SHARD, "1.2.3.4:64304");   // Join PU
+    a.applyShard(null, null);               // Channel Destroyed -> sessionEnd
+    a.applyShard(SHARD);                    // Update Shard Id, no endpoint
+    await wait(150);
+    const nearby = a.view().channels.filter((c) => c.kind === "dgs");
+    assert.equal(nearby.length, 1, "the DGS survives a shard hop's sessionEnd");
+    assert.match(nearby[0].ch, /^dgs:[0-9a-f]{10}$/, "and it is a hashed key, never the endpoint");
+    assert(!JSON.stringify(a.view()).includes("1.2.3.4"), "the raw endpoint NEVER leaves the client");
+
     a.applyShard(null);
     await until(a, (f) => f.type === "state" && f.view.channels.length === 1 && f.view.channels[0].kind === "global", "A back to global only");
 
