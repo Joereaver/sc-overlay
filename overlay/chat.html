@@ -454,6 +454,14 @@
     { kind: "dgs", title: "Nearby" },
     { kind: "org", title: "Organisation" },
     { kind: "custom", title: "Your channels" },
+    // 🔴 SEPARATE from "Your channels". These two used to share one group, so the directory of
+    // every public room ANYONE had made was listed under a heading that said they were yours —
+    // Sub, 2026-08-09: "the only thing that should be under my channels are custom servers that
+    // I made… I just have a bunch of stuff in there and I don't know where it came from and I
+    // don't have a way to delete it." He was right: they were other people's rooms, and the
+    // heading was lying about it. A browser and a membership list are different things and the
+    // rail now says so.
+    { kind: "browse", title: "Browse rooms" },
     { kind: "dm", title: "Direct messages" },
   ];
 
@@ -480,7 +488,9 @@
      choice and must never leave or join anything on the server. Persisted per machine. */
   const listPref = (k, d) => { try { return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; } catch { return d; } };
   const listSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
-  let collapsed = new Set(listPref("chatCollapsed", []));
+  // Browse starts ROLLED UP. It is a catalogue of other people's rooms, so it should be
+  // something you open when you want it, not the bulk of the rail on every launch.
+  let collapsed = new Set(listPref("chatCollapsed", ["browse"]));
   let hiddenRooms = new Set(listPref("chatHiddenRooms", []));
 
   /* A DM you have opened but not yet sent into. The room does not exist server-side until the
@@ -810,7 +820,7 @@
     list.textContent = "";
     for (const g of GROUPS) {
       const mine = chans().filter((c) => c.kind === g.kind);
-      let avail = g.kind === "custom" ? (view?.directory ?? []) : [];
+      let avail = g.kind === "browse" ? (view?.directory ?? []) : [];
       // Conversations the server knows about that aren't open as tabs — including any that
       // arrived while the app was closed, which is the case DMs exist for.
       // A DM opened from the right-click menu has no server room yet, so it lives here.

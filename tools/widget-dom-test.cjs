@@ -2107,10 +2107,31 @@ const CHATLINKS = `(async () => {
     { ch: "custom:b", label: "Quant Run", category: "mining", count: 1 },
     { ch: "custom:c", label: "Sunday Ops", category: "org-ops", count: 9 },
   ];
+  // Browse is collapsed by default, so open it before asserting on its contents.
+  localStorage.removeItem("chatCollapsed");
+  collapsed = new Set();
   renderChannels();
   const subs = [...document.querySelectorAll("#chanList .subgrp")].map((e) => e.textContent);
   ok("rooms you could join are grouped by activity", subs.length === 2, subs.join(" | "));
   ok("...busiest activity first", subs[0] === "Org Operations", subs.join(" | "));
+
+  // 🔴 The heading has to tell the truth: other people's rooms are NOT "Your channels".
+  const groupOf = (label) => {
+    const g = [...document.querySelectorAll("#chanList .grp")].find((x) => x.textContent.indexOf(label) >= 0);
+    const out = [];
+    for (let n = g && g.nextElementSibling; n && !n.classList.contains("grp"); n = n.nextElementSibling) {
+      const nm = n.querySelector(".nm"); if (nm) out.push(nm.textContent);
+    }
+    return out;
+  };
+  ok("browsable rooms live under Browse rooms",
+     groupOf("Browse rooms").indexOf("Sunday Ops") >= 0, groupOf("Browse rooms").join(","));
+  ok("...and NOT under Your channels",
+     groupOf("Your channels").indexOf("Sunday Ops") < 0, groupOf("Your channels").join(","));
+  // Real check, not a tautology: with no stored preference the default must roll Browse up.
+  localStorage.removeItem("chatCollapsed");
+  ok("Browse is rolled up by default", listPref("chatCollapsed", ["browse"]).indexOf("browse") >= 0,
+     JSON.stringify(listPref("chatCollapsed", ["browse"])));
 
   // ── the private-room bar ────────────────────────────────────────────────
   const bar = document.getElementById("roomBar");
