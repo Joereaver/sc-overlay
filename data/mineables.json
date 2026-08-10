@@ -1,7 +1,45 @@
 {
- "schema": "sc-mineables/1",
- "source": "SubliminalsTV mining signature table",
+ "schema": "sc-mineables/2",
+ "source": "p4k datacore 4.9.0-LIVE.12344265",
+ "note": "Generated from the p4k datacore (entities/mineable signature arrays). Supersedes the hand-typed table, whose 26 values were all confirmed correct against this source. `contains` lists what a shared signature can be — a read at that value cannot narrow it.",
+ "maxCluster": 6,
+ "gemMaxCluster": 1,
+ "excluded": [
+  {
+   "signature": 4000,
+   "reason": "collides with debris at every cluster size (4000/8000/…/24000 are all multiples of DEBRIS_STEP=2000), and identifies only 'a surface deposit' with no ore — it would make every debris read ambiguous for no gain",
+   "entities": 2
+  }
+ ],
+ "debrisAmbiguous": [
+  {
+   "signature": 16000,
+   "rock": "Savrilium"
+  },
+  {
+   "signature": 18000,
+   "rock": "Bexalite"
+  }
+ ],
  "rocks": [
+  {
+   "name": "Hand-mined Gem",
+   "rarity": "Gem",
+   "base": 3000,
+   "sigs": [
+    3000
+   ],
+   "contains": [
+    "Aphorite",
+    "Carinite",
+    "Dolivine",
+    "Hadanite",
+    "Jaclium",
+    "Janalite",
+    "Sadaryx",
+    "Saldynium"
+   ]
+  },
   {
    "name": "Quantainium",
    "rarity": "Legendary",
@@ -339,9 +377,170 @@
     21500,
     25800
    ]
+  },
+  {
+   "name": "C-type Asteroid",
+   "rarity": "Asteroid",
+   "base": 4700,
+   "sigs": [
+    4700,
+    9400,
+    14100,
+    18800,
+    23500,
+    28200
+   ],
+   "contains": [
+    "Aluminum",
+    "Copper",
+    "Corundum",
+    "Iron",
+    "Quartz",
+    "Silicon",
+    "Tin",
+    "Titanium",
+    "Tungsten"
+   ]
+  },
+  {
+   "name": "S-type Asteroid",
+   "rarity": "Asteroid",
+   "base": 4720,
+   "sigs": [
+    4720,
+    9440,
+    14160,
+    18880,
+    23600,
+    28320
+   ],
+   "contains": [
+    "Aluminum",
+    "Copper",
+    "Corundum",
+    "Iron",
+    "Quartz",
+    "Silicon",
+    "Tin",
+    "Titanium",
+    "Tungsten"
+   ]
+  },
+  {
+   "name": "P-type Asteroid",
+   "rarity": "Asteroid",
+   "base": 4750,
+   "sigs": [
+    4750,
+    9500,
+    14250,
+    19000,
+    23750,
+    28500
+   ],
+   "contains": [
+    "Aluminum",
+    "Copper",
+    "Corundum",
+    "Iron",
+    "Quartz",
+    "Silicon",
+    "Tin",
+    "Titanium",
+    "Tungsten"
+   ]
+  },
+  {
+   "name": "M-type Asteroid",
+   "rarity": "Asteroid",
+   "base": 4850,
+   "sigs": [
+    4850,
+    9700,
+    14550,
+    19400,
+    24250,
+    29100
+   ],
+   "contains": [
+    "Aluminum",
+    "Copper",
+    "Corundum",
+    "Iron",
+    "Quartz",
+    "Silicon",
+    "Tin",
+    "Titanium",
+    "Tungsten"
+   ]
+  },
+  {
+   "name": "Q-type Asteroid",
+   "rarity": "Asteroid",
+   "base": 4870,
+   "sigs": [
+    4870,
+    9740,
+    14610,
+    19480,
+    24350,
+    29220
+   ],
+   "contains": [
+    "Aluminum",
+    "Copper",
+    "Corundum",
+    "Iron",
+    "Quartz",
+    "Silicon",
+    "Tin",
+    "Titanium",
+    "Tungsten"
+   ]
+  },
+  {
+   "name": "E-type Asteroid",
+   "rarity": "Asteroid",
+   "base": 4900,
+   "sigs": [
+    4900,
+    9800,
+    14700,
+    19600,
+    24500,
+    29400
+   ],
+   "contains": [
+    "Aluminum",
+    "Copper",
+    "Corundum",
+    "Iron",
+    "Quartz",
+    "Silicon",
+    "Tin",
+    "Titanium",
+    "Tungsten"
+   ]
   }
  ],
  "index": {
+  "3000": [
+   {
+    "name": "Hand-mined Gem",
+    "rarity": "Gem",
+    "count": 1,
+    "contains": [
+     "Aphorite",
+     "Carinite",
+     "Dolivine",
+     "Hadanite",
+     "Jaclium",
+     "Janalite",
+     "Sadaryx",
+     "Saldynium"
+    ]
+   }
+  ],
   "3170": [
    {
     "name": "Quantainium",
@@ -522,6 +721,114 @@
     "name": "Ice",
     "rarity": "Common",
     "count": 1
+   }
+  ],
+  "4700": [
+   {
+    "name": "C-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 1,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "4720": [
+   {
+    "name": "S-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 1,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "4750": [
+   {
+    "name": "P-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 1,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "4850": [
+   {
+    "name": "M-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 1,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "4870": [
+   {
+    "name": "Q-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 1,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "4900": [
+   {
+    "name": "E-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 1,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ],
   "6340": [
@@ -706,6 +1013,60 @@
     "count": 2
    }
   ],
+  "9400": [
+   {
+    "name": "C-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 2,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "9440": [
+   {
+    "name": "S-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 2,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "9500": [
+   {
+    "name": "P-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 2,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
   "9510": [
    {
     "name": "Quantainium",
@@ -725,6 +1086,60 @@
     "name": "Savrilium",
     "rarity": "Legendary",
     "count": 3
+   }
+  ],
+  "9700": [
+   {
+    "name": "M-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 2,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "9740": [
+   {
+    "name": "Q-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 2,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "9800": [
+   {
+    "name": "E-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 2,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ],
   "10110": [
@@ -930,11 +1345,45 @@
     "count": 4
    }
   ],
+  "14100": [
+   {
+    "name": "C-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 3,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
   "14160": [
    {
     "name": "Beryl",
     "rarity": "Rare",
     "count": 4
+   },
+   {
+    "name": "S-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 3,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ],
   "14220": [
@@ -942,6 +1391,24 @@
     "name": "Taranite",
     "rarity": "Rare",
     "count": 4
+   }
+  ],
+  "14250": [
+   {
+    "name": "P-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 3,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ],
   "14280": [
@@ -963,6 +1430,60 @@
     "name": "Bexalite",
     "rarity": "Rare",
     "count": 4
+   }
+  ],
+  "14550": [
+   {
+    "name": "M-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 3,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "14610": [
+   {
+    "name": "Q-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 3,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "14700": [
+   {
+    "name": "E-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 3,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ],
   "15300": [
@@ -1147,6 +1668,60 @@
     "count": 5
    }
   ],
+  "18800": [
+   {
+    "name": "C-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 4,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "18880": [
+   {
+    "name": "S-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 4,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "19000": [
+   {
+    "name": "P-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 4,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
   "19020": [
    {
     "name": "Quantainium",
@@ -1194,6 +1769,24 @@
     "count": 5
    }
   ],
+  "19400": [
+   {
+    "name": "M-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 4,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
   "19425": [
    {
     "name": "Agricium",
@@ -1201,11 +1794,47 @@
     "count": 5
    }
   ],
+  "19480": [
+   {
+    "name": "Q-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 4,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
   "19500": [
    {
     "name": "Torite",
     "rarity": "Uncommon",
     "count": 5
+   }
+  ],
+  "19600": [
+   {
+    "name": "E-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 4,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ],
   "20220": [
@@ -1369,6 +1998,114 @@
     "count": 6
    }
   ],
+  "23500": [
+   {
+    "name": "C-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 5,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "23600": [
+   {
+    "name": "S-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 5,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "23750": [
+   {
+    "name": "P-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 5,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "24250": [
+   {
+    "name": "M-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 5,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "24350": [
+   {
+    "name": "Q-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 5,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "24500": [
+   {
+    "name": "E-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 5,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
   "25080": [
    {
     "name": "Hephaestanite",
@@ -1430,6 +2167,114 @@
     "name": "Ice",
     "rarity": "Common",
     "count": 6
+   }
+  ],
+  "28200": [
+   {
+    "name": "C-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 6,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "28320": [
+   {
+    "name": "S-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 6,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "28500": [
+   {
+    "name": "P-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 6,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "29100": [
+   {
+    "name": "M-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 6,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "29220": [
+   {
+    "name": "Q-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 6,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
+   }
+  ],
+  "29400": [
+   {
+    "name": "E-type Asteroid",
+    "rarity": "Asteroid",
+    "count": 6,
+    "contains": [
+     "Aluminum",
+     "Copper",
+     "Corundum",
+     "Iron",
+     "Quartz",
+     "Silicon",
+     "Tin",
+     "Titanium",
+     "Tungsten"
+    ]
    }
   ]
  }

@@ -12,10 +12,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import type { RefineryRead } from "./screen-read.js";
 
-interface Mineable { name: string; rarity: string; base: number; sigs: number[]; }
+/** `contains` is set only when a signature is SHARED — every hand-mined gem reads 3,000,
+ *  every C-type asteroid 4,700 — so the read names a family and this is what it could be. */
+interface Mineable { name: string; rarity: string; base: number; sigs: number[]; contains?: string[]; }
 interface MineablesData {
   rocks: Mineable[];
-  index: Record<string, { name: string; rarity: string; count: number }[]>;
+  index: Record<string, { name: string; rarity: string; count: number; contains?: string[] }[]>;
 }
 
 /** A tracked refinery job (an active PROCESSING order). `endAt` is absolute so the
@@ -39,7 +41,7 @@ export interface MiningView {
   // real scan rather than being a number the OCR happened to find (see applyMineableRead).
   // `verdict`: what the number MEANS — see classifySignature. The widget renders and speaks off
   // this rather than re-deriving it from `matches.length`, so there is one rule, not two.
-  scan: { signature: number; matches: { name: string; rarity: string; count: number }[]; at: number; confirmed: boolean; verdict: ScanVerdict } | null;
+  scan: { signature: number; matches: { name: string; rarity: string; count: number; contains?: string[] }[]; at: number; confirmed: boolean; verdict: ScanVerdict } | null;
   jobs: {
     id: string; station: string | null; material: string | null; yieldScu: number | null;
     endAt: number; remainingSec: number; done: boolean;
@@ -63,14 +65,14 @@ const DEBRIS_STEP = 2000;
  *    has to go look regardless.
  *  - `debris` — a whole number of panels, no rock at that value.
  *  - `unknown` — in range, but neither. The game never draws a signature that isn't one of the
- *    165 legal values, so this is always a misread or a number off some other part of the HUD.
+ *    203 legal values, so this is always a misread or a number off some other part of the HUD.
  *    It is REFUSED — shown in the scan-read box, never announced (see applyMineableRead).
  *  A read outside [MIN_SIGNATURE, maxSignature] gets no verdict at all — see classifySignature. */
 export type ScanVerdict = "ore" | "ore-or-debris" | "debris" | "unknown";
 
 /** Is this value a whole number of debris panels? Replaces the old "2,000 or anything ≥4,000"
  *  rule, which let every large stray HUD number through as debris. Between 2,000 and the ceiling
- *  there are only 13 debris values, so this is a far tighter filter than a floor ever was. */
+ *  there are only 14 debris values, so this is a far tighter filter than a floor ever was. */
 export function isDebrisValue(signature: number): boolean {
   return signature >= DEBRIS_STEP && signature % DEBRIS_STEP === 0;
 }
@@ -112,7 +114,7 @@ const CONFUSABLE_DIGITS: Record<string, string> = { "6": "8", "8": "6" };
 /** Fix confused digits by CONSTRAINING the read to values the game can actually show.
  *
  *  This is the answer to "can you train it better": the OCR can't be trained, but it doesn't need to
- *  be. A signature is one of only ~165 legal values spread over 2,000–25,800 — **0.69% of that
+ *  be. A signature is one of only ~203 legal values spread over 2,000–29,400 — **0.74% of that
  *  range** — so a wrong digit almost always lands on a number that cannot exist, and usually exactly
  *  one legal value is one or two 6/8 swaps away.
  *
@@ -233,8 +235,12 @@ export class MiningTracker extends EventEmitter {
     }
     // 🔑 THE VALUE IS THE EVIDENCE, AND `unknown` HAS NONE (Sub, 2026-08-09, superseding the
     // glyph-gate below it). Ore and debris are both self-evident: they are values the game can
-    // actually draw — 155 rock signatures plus 13 whole-panel debris counts, 165 of the 23,801
-    // numbers in the band, 0.69%. An `unknown` read is by definition NOT one of them, so it is
+    // actually draw — 191 rock signatures plus 14 whole-panel debris counts, 203 of the 27,401
+    // numbers in the band, 0.74%. (Was 165/23,801 = 0.69% when the table was the 26 hand-typed
+    // rocks; the datacore-generated table added the hand-mined gems and the six asteroid types,
+    // which widened the band to 29,400. Recount when mineables.json is regenerated — this is a
+    // measured claim, and the whole argument below rests on the number staying tiny.)
+    // An `unknown` read is by definition NOT one of them, so it is
     // never a real contact: it is an OCR misread the 6/8 repair couldn't rescue, or a number off
     // some other part of the HUD entirely. Announcing it meant the glyph check alone decided,
     // and the glyph check is a brightness-and-shape heuristic that any bright pin-sized mark

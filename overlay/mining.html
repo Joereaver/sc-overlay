@@ -658,10 +658,15 @@
     const main = m.find(x => targetSet.has(x.name)) || m[0];
     const rest = m.filter(x => x !== main);
     const maybe = verdictOf(sc) === "ore-or-debris" ? '<span class="maybe">or debris</span>' : '';
+    // A SHARED signature names a family, not a rock — every hand-mined gem reads 3,000 and
+    // every C-type asteroid 4,700. `contains` is the only thing that makes those reads useful,
+    // so it goes on its own line rather than being squeezed into the cluster meta.
+    const could = main.contains?.length
+      ? '<div class="meta">could be ' + main.contains.map(escapeHtml).join(", ") + '</div>' : '';
     el.innerHTML = '<div class="rock">' + escapeHtml(main.name) + maybe + rarPill(main.rarity) + '</div>' +
       '<div class="meta">' + main.count + (main.count > 1 ? " rocks" : " rock") + ' in cluster' +
       (rest.length ? ' · or ' + rest.map(x => escapeHtml(x.name) + " ×" + x.count).join(", ") : '') + '</div>' +
-      sig + (isTarget ? ' · TARGET' : '') + '</div>';
+      could + sig + (isTarget ? ' · TARGET' : '') + '</div>';
   }
 
   function renderTargets() {
