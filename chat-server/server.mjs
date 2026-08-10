@@ -74,6 +74,12 @@ const RATE_N = 5, RATE_WINDOW_MS = 10_000; // msgs per window per connection
 // client sends a handful of joins on connect and then almost none; a code-guesser sends
 // thousands. 12 per 30s is far above real use and far below useful brute force.
 const ACT_N = 12, ACT_WINDOW_MS = 30_000;
+// 🔴 Org chat is the thing Sub cares most about keeping shut ("I don't want someone to be able
+// to spy on a rival org"). Membership is resolved from the VERIFIED RSI dossier — but only once,
+// at hello. A client that stays connected for days keeps whatever org it had when it connected,
+// so someone who joins an org on RSI, verifies, and then leaves would hold the room open
+// indefinitely. Re-resolve periodically and move them when the answer changes.
+const ORG_RECHECK_MS = 15 * 60 * 1000;
 
 // CHAT_DATA_DIR: tests point this at a scratch dir so their bans/rooms never touch real state.
 const dataDir = process.env.CHAT_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), "data");
@@ -495,6 +501,7 @@ wss.on("connection", (ws) => {
     ws,
     handle: null, handleLower: null, verified: false,
     channels: new Set(),
+    orgSid: null, token: null, // org membership + the token used to re-check it
     stamps: [], // send timestamps for the message rate limit
     acts: [],   // and for access attempts (join / dm / invite / delete)
     alive: true,
@@ -517,6 +524,9 @@ wss.on("connection", (ws) => {
       conn.handle = id.handle;
       conn.handleLower = id.handle.toLowerCase();
       conn.verified = id.verified;
+      conn.orgSid = id.org ? id.org.sid.toLowerCase() : null;
+      // Kept solely to RE-ASK the site later (see the org recheck). Never logged, never sent.
+      conn.token = typeof f.token === "string" ? f.token : null;
       // The category list rides the welcome frame so the widget's dropdown is rendered from the
       // server's list rather than a copy that drifts. v1 clients ignore the extra field.
       conn.send({ t: "welcome", you: { handle: conn.handle, verified: conn.verified }, categories: ROOM_CATEGORIES });
@@ -723,6 +733,26 @@ wss.on("connection", (ws) => {
     }
   });
 });
+
+// Re-resolve org membership for live connections, and move anyone whose org changed.
+// 🔑 Site mode only: `dev` trusts hello.org, so there is nothing to re-check and re-checking
+// would just churn. A failed lookup (site down, network blip) changes NOTHING — losing your org
+// room because of a transient 500 would be worse than the staleness this closes.
+setInterval(() => {
+  if (AUTH_MODE !== "site") return;
+  for (const c of conns) {
+    if (!c.handle || !c.token) continue;
+    verifyIdentity({ token: c.token }).then((id) => {
+      if (!id || !id.verified) return;                       // transient failure — leave it alone
+      const next = id.org ? id.org.sid.toLowerCase() : null;
+      if (next === c.orgSid) return;
+      if (c.orgSid) leaveRoom(c, `org:${c.orgSid}`);
+      c.orgSid = next;
+      if (next) joinRoom(c, `org:${next}`, id.org.name, "org");
+      console.log(`[chat-server] org changed for ${c.handle}: ${c.orgSid ?? "none"}`);
+    }).catch(() => { /* transient — keep the current membership */ });
+  }
+}, ORG_RECHECK_MS).unref();
 
 // Reap dead connections (a yanked network cable never sends close).
 setInterval(() => {

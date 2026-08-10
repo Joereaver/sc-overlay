@@ -306,6 +306,46 @@ try {
   const junk = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:junk-cat", "junk category");
   assert.equal(junk.category, "social", "an unknown category falls back rather than failing the create");
 
+  // ── ORG ISOLATION ─────────────────────────────────────────────────────────
+  // 🔴 Sub's stated top priority: "I don't want someone to be able to spy on a rival org."
+  // Org membership comes ONLY from the verified RSI dossier at hello — there is no frame that
+  // joins an org room, and these assertions are what keep it that way.
+  const rival = client();
+  await rival.open();
+  rival.send({ t: "hello", handle: "RivalSpy", org: { sid: "RIVALS", name: "Rival Corp" } });
+  await rival.next((f) => f.t === "welcome", "welcome rival");
+  await rival.next((f) => f.t === "joined" && f.ch === "org:rivals", "rival lands in its OWN org");
+
+  // Reading someone else's org is refused by membership, like any other room.
+  rival.send({ t: "msg", ch: "org:irregs", text: "listening in" });
+  await rival.next((f) => f.t === "error" && f.code === "not_member", "cannot post into another org");
+
+  // There is no join verb for orgs — the custom-room one slugifies the colon away, so it can
+  // only ever create `custom:orgirregs`, never `org:irregs`.
+  rival.send({ t: "join", name: "org:IRREGS" });
+  await wait(300);
+  assert(!rival.frames.some((f) => f.t === "joined" && f.ch === "org:irregs"),
+    "the custom-room join cannot reach an org room");
+
+  // 🔑 And `loc` cannot either. It is the one frame whose channel names come from the client,
+  // so it is the natural place to try to smuggle a prefix. region/shard/dgs are all shape-checked
+  // and none of the patterns permits a colon.
+  rival.send({ t: "loc", region: "org:irregs", shard: "org:irregs", dgs: "org:irregs" });
+  await wait(300);
+  assert(!rival.frames.some((f) => f.t === "joined" && String(f.ch).startsWith("org:") && f.ch !== "org:rivals"),
+    "a crafted loc cannot smuggle its way into an org room");
+
+  // The org room really is carrying traffic for its own members only.
+  const orgMate = client();
+  await orgMate.open();
+  orgMate.send({ t: "hello", handle: "OrgMate", org: { sid: "IRREGS", name: "7th Nul Irregulars" } });
+  await orgMate.next((f) => f.t === "joined" && f.ch === "org:irregs", "org mate joins");
+  o.send({ t: "msg", ch: "org:irregs", text: "org secret" });
+  await orgMate.next((f) => f.t === "msg" && f.text === "org secret", "org mates hear each other");
+  await wait(200);
+  assert(!rival.frames.some((f) => f.t === "msg" && f.text === "org secret"),
+    "🔴 the rival NEVER sees org traffic");
+
   // ── the DGS tier, and the rate limit on access attempts ───────────────────
   // region -> shard -> dgs. The DGS key is a HASH of the server's ip:port produced by the
   // client, so this server never sees or rebroadcasts a CIG address.

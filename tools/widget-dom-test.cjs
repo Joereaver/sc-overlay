@@ -2168,8 +2168,18 @@ const CHATLINKS = `(async () => {
   ok("the other person is read back out of the key",
      dmOther("dm:imc-subliminal|rytharr") === "rytharr");
 
+  // Sub's call: DMs carry a standing disclaimer. Private from other PLAYERS, not encrypted.
+  ok("no DM warning on an ordinary channel",
+     !document.getElementById("dmWarn").classList.contains("show"));
+
   openDm("Rytharr");
   ok("opening a DM selects it", activeCh === "dm:imc-subliminal|rytharr", activeCh);
+  ok("...and the DM shows the privacy disclaimer",
+     document.getElementById("dmWarn").classList.contains("show"));
+  ok("...which says it plainly, and cannot be dismissed",
+     /not.{0,4}encrypted/i.test(document.getElementById("dmWarn").textContent)
+       && document.getElementById("dmWarn").querySelector("button") === null,
+     document.getElementById("dmWarn").textContent.slice(0, 70));
   const dmRows = [...document.querySelectorAll("#chanList .crow .nm")].map((e) => e.textContent);
   ok("...and it appears in the rail before any message exists", dmRows.indexOf("Rytharr") >= 0,
      dmRows.join(","));
