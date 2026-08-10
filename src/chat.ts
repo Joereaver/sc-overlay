@@ -20,6 +20,7 @@
 // widget open/close within a run.
 
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { regionOfShard } from "./missions-parser.js";
 
 export interface ChatIdentity { handle: string; verified: boolean }
@@ -36,29 +37,80 @@ export interface ChatOptions {
   url: string;          // ws:// or wss:// endpoint of the chat server
   handle: string;       // dev-mode identity; production auth is the sync token
   token: string;        // overlay sync token (site-mode auth on the chat server)
+  /** Custom rooms (display names) to rejoin on every connect — the user's chosen channels,
+   *  persisted by the sidecar so an app restart lands them back where they were. */
+  channels: string[];
 }
+
+export type ChannelKind = "global" | "region" | "shard" | "dgs" | "org" | "custom" | "dm";
+
+/** Hash a DGS endpoint into a channel key.
+ *
+ *  Sub asked the fair question: the game server's IP is not a secret, so why hash it? Two
+ *  reasons, and neither is player privacy - it is CIG's address, not a player's.
+ *  1. A channel key is BROADCAST to every connected user. Raw, it would publish a live,
+ *     continuously-updated map of which DGSs are up and who is on them. That is someone
+ *     else's infrastructure and a targeting vector; it is not ours to hand out.
+ *  2. Our own log-sharing strips IPs. Re-publishing them through chat would quietly undo that.
+ *  It costs nothing: keys are only ever compared for EQUALITY, so a hash groups people
+ *  identically. 10 hex chars is 40 bits - collision-free at any plausible server count.
+ *  Salted with the shard id, so the same endpoint in two shards cannot be conflated and the
+ *  digest is not a plain rainbow-table lookup of "ip:port". */
+export function dgsKey(shard: string | null, dgs: string | null): string | null {
+  if (!shard || !dgs) return null;
+  return createHash("sha256").update(shard + "|" + dgs).digest("hex").slice(0, 10);
+}
+
+/** The activity a custom room is for. The list is the SERVER's (welcome frame) — this type is
+ *  just "some slug", so adding a category server-side needs no client release. */
+export interface RoomCategory { slug: string; label: string }
 
 interface ChannelState {
   ch: string;
-  kind: "global" | "region" | "shard";
+  kind: ChannelKind;
   label: string;
-  count: number | null; // unique handles, when the backend reports presence
+  count: number | null;         // unique handles, when the server reports presence
+  members: ChatIdentity[];      // who's here (capped server-side; count stays exact)
   msgs: ChatMsg[];
+  // Custom rooms only, from the roominfo frame.
+  category?: string;
+  privacy?: "public" | "private";
+  owner?: string | null;
+  /** Only ever present for a private room you are INSIDE — it is what admits the next person. */
+  code?: string;
 }
 
 const HISTORY_KEEP = 200;
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
-/** "use1b" → "US East 1B" — the label players recognise. Unknown codes pass through raw. */
+/** "use1b" → "US East 1B" — the label players recognise. Unknown codes pass through raw.
+ *  🔑 The prefix list is MEASURED, not guessed: across 480 shared logs from 42 players the
+ *  live regions are use1b (29 players), euw1b (21), ape1a (7) and apse2a (6). `ape` was
+ *  missing from the first version, so 7 players' server channel read "APE1A". Longest
+ *  prefixes are tried first — `apse` must win over `aps`. */
+const REGION_NAMES: Record<string, string> = {
+  use: "US East", usw: "US West", usc: "US Central",
+  eue: "EU East", euw: "EU West",
+  ape: "Asia-Pacific East", apse: "Asia-Pacific SE", apne: "Asia-Pacific NE",
+  apsw: "Asia-Pacific SW", aps: "Asia-Pacific S", apn: "Asia-Pacific N",
+  au: "Australia", ause: "Australia SE",
+};
 export function regionLabel(region: string | null): string {
   if (!region) return "Server";
-  const m = region.toLowerCase().match(/^(use|usw|eue|euw|apse|apne|aps|apn)(\d+)([a-z])$/);
+  const r = region.toLowerCase();
+  const m = r.match(/^([a-z]+?)(\d+)([a-z]?)$/);
   if (!m) return region.toUpperCase();
-  const NAMES: Record<string, string> = {
-    use: "US East", usw: "US West", eue: "EU East", euw: "EU West",
-    apse: "Asia SE", apne: "Asia NE", aps: "Asia S", apn: "Asia N",
-  };
-  return `${NAMES[m[1]] ?? m[1].toUpperCase()} ${m[2]}${m[3].toUpperCase()}`;
+  const name = REGION_NAMES[m[1]];
+  if (!name) return region.toUpperCase();
+  return `${name} ${m[2]}${m[3].toUpperCase()}`;
+}
+
+/** The region FAMILY behind a channel key, for the spoken call-out — "use1b" → "use". The
+ *  voice names the region but not the digits (Sub: "you don't have to mention the number"). */
+export function regionFamily(region: string | null): string | null {
+  const r = (region ?? "").toLowerCase();
+  const m = r.match(/^([a-z]+?)\d/);
+  return m && REGION_NAMES[m[1]] ? m[1] : null;
 }
 
 /** "pub_use1b_12326004_040" → "Shard 040". */
@@ -76,7 +128,29 @@ export class ChatClient extends EventEmitter {
   private lastError: string | null = null;
   private you: ChatIdentity | null = null;
   private shard: string | null = null; // full id from the log; region derives from it
+  /** "<ip>:<port>" of the DGS. Kept ONLY to derive the hashed room key — never sent. */
+  private dgs: string | null = null;
+  /** shard id → the endpoint last seen joining it.
+   *  🔑 This exists because of the ORDER the game logs a shard hop:
+   *      <Join PU> …address…port…shard[X]     ← the only line with the endpoint
+   *      <Channel Destroyed> map="megamap"    ← reads as sessionEnd, clears location
+   *      <Update Shard Id> New Shard Id: X    ← re-establishes the shard, no endpoint
+   *  So the endpoint is always learned and then thrown away moments later, and the trailing
+   *  line can never restore it on its own. Measured on Sub's real log: every one of his four
+   *  shard events ended with dgs=null for exactly this reason, and no Nearby room appeared.
+   *  Bounded — a session touches a handful of shards, not thousands. */
+  private dgsForShard = new Map<string, string>();
   private channels = new Map<string, ChannelState>();
+  /** Public custom-room directory as the server last broadcast it. Private rooms are never in
+   *  it — the server omits them, so there is nothing to filter here. */
+  private directory: { ch: string; label: string; category?: string; count: number }[] = [];
+  /** The activity list the room-creation dropdown is built from; the server's, via welcome. */
+  private categories: RoomCategory[] = [];
+  /** DM conversations, newest first — including ones that arrived while the app was closed. */
+  private dmThreads: { other: string; lastAt: string }[] = [];
+  /** Custom rooms (display names) we are — or want to be — in; rejoined on every welcome.
+   *  Changes emit "channels" so the sidecar can persist them across app restarts. */
+  private customRooms: string[] = [];
   private retry = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private closingDeliberately = false;
@@ -87,8 +161,14 @@ export class ChatClient extends EventEmitter {
   /** (Re)configure and set whether a connection is WANTED. Safe to call repeatedly with the
    *  same values — only a real change tears the socket down. */
   configure(opts: ChatOptions, active: boolean): void {
-    const changed = JSON.stringify(this.opts) !== JSON.stringify(opts);
+    // The channel list seeds customRooms but is NOT part of the change check — the sidecar
+    // echoes our own "channels" events back through config, and treating that echo as a
+    // change would bounce the socket on every join/leave.
+    const { channels: seedChannels, ...rest } = opts;
+    const prev = this.opts ? (({ channels: _c, ...r }) => r)(this.opts) : null;
+    const changed = JSON.stringify(prev) !== JSON.stringify(rest);
     this.opts = opts;
+    if (this.customRooms.length === 0 && Array.isArray(seedChannels)) this.customRooms = [...seedChannels];
     if (changed || active !== this.active) {
       this.active = active;
       this.teardown();
@@ -102,9 +182,22 @@ export class ChatClient extends EventEmitter {
   }
 
   /** The parser saw a shard change (null = left the PU). Region/shard channels follow. */
-  applyShard(shard: string | null): void {
-    if (shard === this.shard) return;
+  applyShard(shard: string | null, dgs?: string | null): void {
+    // 🔑 The DGS moves on its own. Server meshing hands you between DGSs as you travel WITHIN
+    // one shard, so a change with the same shard id is a real move to different neighbours and
+    // must re-key the room. Update Shard Id carries no endpoint, so `undefined` means "no news"
+    // and keeps the current value; an explicit null means we left the PU.
+    // Learn the endpoint whenever a line actually carries one.
+    if (shard && dgs) {
+      this.dgsForShard.set(shard, dgs);
+      if (this.dgsForShard.size > 8) this.dgsForShard.delete(this.dgsForShard.keys().next().value as string);
+    }
+    // `undefined` means "this line named no endpoint" — fall back to the one we learned for
+    // THIS shard rather than to whatever is currently held, which a sessionEnd may have wiped.
+    const nextDgs = dgs === undefined ? (shard ? this.dgsForShard.get(shard) ?? null : null) : dgs;
+    if (shard === this.shard && nextDgs === this.dgs) return;
     this.shard = shard;
+    this.dgs = shard ? nextDgs : null;
     this.sendLoc();
     this.pushState(); // labels update even while disconnected
   }
@@ -170,7 +263,13 @@ export class ChatClient extends EventEmitter {
 
   private sendLoc(): void {
     if (this.status !== "connected") return;
-    this.wsSend({ t: "loc", region: regionOfShard(this.shard), shard: this.shard });
+    // 🔑 The HASH goes on the wire, never the endpoint. The server keys the room on whatever
+    // it is given, so if the raw ip:port ever left this process it would be published to every
+    // user of the channel.
+    this.wsSend({
+      t: "loc", region: regionOfShard(this.shard), shard: this.shard,
+      dgs: dgsKey(this.shard, this.dgs),
+    });
   }
 
   // ── The chat-server protocol (chat-server/server.mjs) ─────────────────────
@@ -181,15 +280,65 @@ export class ChatClient extends EventEmitter {
         this.status = "connected";
         this.retry = 0;
         this.you = f.you ?? null;
+        if (Array.isArray(f.categories)) this.categories = f.categories;
         this.sendLoc();
+        // Rejoin the user's custom rooms — this is what makes a reconnect (or app restart)
+        // land back in the same channels instead of just Global.
+        for (const name of this.customRooms) this.wsSend({ t: "join", name });
         this.pushState();
         return;
-      case "joined":
-        this.ensureChannel(f.ch);
+      case "joined": {
+        const c = this.ensureChannel(f.ch, f.kind);
+        if (typeof f.label === "string" && f.label) c.label = f.label;
+        if (c.kind === "custom" && !this.customRooms.includes(c.label)) {
+          this.customRooms.push(c.label);
+          this.emit("channels", [...this.customRooms]);
+        }
         this.pushState();
         return;
-      case "left":
+      }
+      case "left": {
+        const gone = this.channels.get(f.ch);
         this.channels.delete(f.ch);
+        if (gone?.kind === "custom") {
+          this.customRooms = this.customRooms.filter((n) => n.toLowerCase() !== gone.label.toLowerCase());
+          this.emit("channels", [...this.customRooms]);
+        }
+        this.pushState();
+        return;
+      }
+      case "dir":
+        this.directory = Array.isArray(f.channels) ? f.channels : [];
+        this.emit("sse", { type: "dir", channels: this.directory });
+        return;
+      case "roominfo": {
+        // Category / privacy / owner, and for a private room you're inside, the join code.
+        const c = this.ensureChannel(f.ch, "custom");
+        c.category = f.category;
+        c.privacy = f.privacy;
+        c.owner = f.owner ?? null;
+        if (typeof f.code === "string") c.code = f.code;
+        this.pushState();
+        return;
+      }
+      case "notice":
+        // A plain server-to-user message. Today: "that room was deleted" — which the user has
+        // to be told, or a channel disappearing reads as a connection fault.
+        this.emit("sse", { type: "notice", level: f.level ?? "info", text: String(f.text ?? "") });
+        return;
+      case "invited":
+        this.emit("sse", { type: "notice", level: "info", text: `Invited ${f.handle}.` });
+        return;
+      case "roominvite":
+        // Someone opened a private room to you. A notice, not an auto-join: being pulled into a
+        // room without asking is how the org-ops room ends up full of people who didn't want it.
+        this.emit("sse", {
+          type: "notice", level: "info",
+          text: `${f.from} invited you to “${f.label}” — join it by name to accept.`,
+        });
+        return;
+      case "dms":
+        this.dmThreads = Array.isArray(f.threads) ? f.threads : [];
         this.pushState();
         return;
       case "history": {
@@ -203,7 +352,11 @@ export class ChatClient extends EventEmitter {
         return;
       case "presence": {
         const c = this.channels.get(f.ch);
-        if (c) { c.count = f.count; this.emit("sse", { type: "presence", ch: f.ch, count: f.count }); }
+        if (c) {
+          c.count = f.count;
+          if (Array.isArray(f.members)) c.members = f.members;
+          this.emit("sse", { type: "presence", ch: f.ch, count: f.count, members: c.members });
+        }
         return;
       }
       case "error":
@@ -217,20 +370,41 @@ export class ChatClient extends EventEmitter {
 
   // ── Shared state plumbing ─────────────────────────────────────────────────
 
-  private ensureChannel(ch: string): ChannelState {
+  private ensureChannel(ch: string, kindHint?: string): ChannelState {
     let c = this.channels.get(ch);
     if (!c) {
-      const kind = ch === "global" ? "global" : ch.startsWith("region:") ? "region" : "shard";
-      c = { ch, kind, label: this.labelFor(ch, kind), count: null, msgs: [] };
+      const kind: ChannelKind =
+        kindHint === "org" || kindHint === "custom" || kindHint === "dm" ? kindHint
+        : ch === "global" ? "global"
+        : ch.startsWith("region:") ? "region"
+        : ch.startsWith("shard:") ? "shard"
+        : ch.startsWith("dgs:") ? "dgs"
+        : ch.startsWith("org:") ? "org"
+        : ch.startsWith("dm:") ? "dm"
+        : ch.startsWith("custom:") ? "custom"
+        : "custom";
+      c = { ch, kind, label: this.labelFor(ch, kind), count: null, members: [], msgs: [] };
       this.channels.set(ch, c);
     }
     return c;
   }
 
-  private labelFor(ch: string, kind: ChannelState["kind"]): string {
+  private labelFor(ch: string, kind: ChannelKind): string {
     if (kind === "global") return "Global";
     if (kind === "region") return regionLabel(ch.slice("region:".length));
-    return shardLabel(ch.slice("shard:".length));
+    if (kind === "shard") return shardLabel(ch.slice("shard:".length));
+    // The key is a digest, so it can't be rendered — and it would mean nothing to a player if
+    // it could. What matters is what it MEANS: these are the people around you right now.
+    if (kind === "dgs") return "Nearby";
+    // A DM is titled with the OTHER person. The key holds both handles lowercased, so pick the
+    // one that isn't you; the server's joined frame carries their real casing and overwrites it.
+    if (kind === "dm") {
+      const pair = ch.slice("dm:".length).split("|");
+      const me = (this.you?.handle ?? "").toLowerCase();
+      return pair.find((h) => h !== me) ?? pair[0] ?? ch;
+    }
+    // org/custom labels come from the server on the joined frame; the raw key is the fallback.
+    return ch.split(":").slice(1).join(":");
   }
 
   private pushMsg(msg: ChatMsg): void {
@@ -254,12 +428,74 @@ export class ChatClient extends EventEmitter {
     return { ok: true };
   }
 
+  /** Join (or create) a custom room. Membership lands via the joined frame.
+   *  `name` doubles as the JOIN CODE box: a private room has no name anyone can look up, so the
+   *  server tries a code first when the text is code-shaped.
+   *  `category` and `privacy` apply only when CREATING — joining an existing room can't restyle
+   *  it, which would otherwise let anyone flip someone else's private room public. */
+  join(name: string, mode?: "join" | "create", category?: string, privacy?: "public" | "private"):
+    { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const n = name.trim();
+    if (!n) return { ok: false, message: "Name a channel first." };
+    this.wsSend({
+      t: "join", name: n,
+      ...(mode ? { mode } : {}),
+      ...(mode === "create" && category ? { category } : {}),
+      ...(mode === "create" && privacy ? { privacy } : {}),
+    });
+    return { ok: true };
+  }
+
+  /** Delete a room you own. Everyone in it is evicted and its scrollback goes with it. */
+  deleteRoom(ch: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "deleteRoom", ch });
+    return { ok: true };
+  }
+
+  /** Admit an RSI handle to a private room you own. */
+  invite(ch: string, handle: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const h = handle.trim();
+    if (!h) return { ok: false, message: "Who do you want to invite?" };
+    this.wsSend({ t: "invite", ch, handle: h });
+    return { ok: true };
+  }
+
+  /** Message one player directly. The conversation opens on both ends. */
+  dm(to: string, text: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const t = text.trim();
+    if (!t) return { ok: false, message: "Empty message." };
+    this.wsSend({ t: "dm", to: to.trim(), text: t });
+    return { ok: true };
+  }
+
+  /** Refresh the conversation list (it also arrives unasked on connect). */
+  dmList(): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "dmlist" });
+    return { ok: true };
+  }
+
+  /** Leave a custom room (the server refuses auto/org channels). */
+  leave(ch: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "leave", ch });
+    return { ok: true };
+  }
+
   /** Widget bootstrap + /api/chat/state. Channel order is the fixed hierarchy. */
   view() {
-    const order = { global: 0, region: 1, shard: 2 } as const;
+    // DMs sort last: they're a conversation list, not part of the channel hierarchy.
+    const order = { global: 0, region: 1, shard: 2, dgs: 3, org: 4, custom: 5, dm: 6 } as const;
     const channels = [...this.channels.values()]
       .sort((a, b) => order[a.kind] - order[b.kind] || a.ch.localeCompare(b.ch))
-      .map((c) => ({ ch: c.ch, kind: c.kind, label: c.label, count: c.count, msgs: c.msgs }));
+      .map((c) => ({
+        ch: c.ch, kind: c.kind, label: c.label, count: c.count, members: c.members, msgs: c.msgs,
+        category: c.category, privacy: c.privacy, owner: c.owner, code: c.code,
+      }));
     return {
       status: this.status,
       error: this.lastError,
@@ -269,6 +505,15 @@ export class ChatClient extends EventEmitter {
       regionLabel: regionLabel(regionOfShard(this.shard)),
       shardLabel: shardLabel(this.shard),
       channels,
+      // The browsable directory of custom rooms, minus the ones already joined (the left
+      // rail lists "channels you could join", not a duplicate of your tabs).
+      directory: this.directory.filter((d) => !this.channels.has(d.ch)),
+      // The activity list the create-room dropdown renders from, straight from the server.
+      categories: this.categories,
+      // Conversations that exist but aren't open as tabs — the ones with something waiting.
+      dmThreads: this.dmThreads.filter((t) => !this.channels.has(`dm:${[
+        (this.you?.handle ?? "").toLowerCase(), t.other.toLowerCase(),
+      ].sort().join("|")}`)),
     };
   }
 }

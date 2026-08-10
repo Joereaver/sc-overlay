@@ -2,7 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
-import { extname, join, dirname, basename } from "node:path";
+import { extname, join, dirname, basename, resolve, sep } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
@@ -236,6 +236,14 @@ interface Config {
   holdToInteract: boolean;
   /** Global hotkey that toggles arrange/move mode (Electron accelerator syntax). */
   moveHotkey: string;
+  /** How opaque the overlay is while you are NOT focused on it — i.e. while you are playing.
+   *  1 = off (the default, so nobody's overlay changes appearance on update); clamped 0.2–1 in
+   *  the UI, the server AND the shell, because an overlay faded to nothing is one you can't
+   *  find to turn back up. Read by electron/main.cjs, which applies it as WINDOW opacity. */
+  unfocusedOpacity: number;
+  /** Global hotkey that forces full opacity regardless of focus (and back). Lets you read the
+   *  overlay mid-fight without alt-tabbing to it. Empty = no hotkey. */
+  opacityHotkey: string;
   /** Hotkey that CONFIRMS a fabricator claim prompt. A hotkey rather than only a click
    *  because the overlay is click-through over the game — confirming with the mouse means
    *  entering hold-to-interact mid-kiosk, which is exactly when you can least afford it. */
@@ -284,6 +292,10 @@ interface Config {
    *  the site resolves it to the RSI-VERIFIED handle, and unverified accounts get no chat
    *  (Sub's rule: chat identities must be bannable). */
   chatHandle: string;
+  /** Custom chat rooms the user has joined, by DISPLAY NAME. Rejoined on every connect, so a
+   *  restart lands you back in the same channels. The client owns this list; the sidecar only
+   *  persists what it reports. */
+  chatChannels: string[];
   /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
    *  wizard is finished; the wizard never auto-opens again once true. */
   setupDone: boolean;
@@ -354,6 +366,8 @@ const DEFAULTS: Config = {
   holdToInteract: false,
   moveHotkey: "Ctrl+Alt+M",
   fabClaimHotkey: "F4",
+  unfocusedOpacity: 1,
+  opacityHotkey: "",
   timeRelative: true,
   shareLogs: false,
   seenChangelog: "",
@@ -368,6 +382,7 @@ const DEFAULTS: Config = {
   // verified RSI handle). Local dev server: ws://127.0.0.1:8788/ws + a chatHandle.
   chatServerUrl: "wss://chat.subliminal.gg/ws",
   chatHandle: "",
+  chatChannels: [],
   setupDone: false,
   setupSettingsReviewed: false,
   setupShareResolved: false,
@@ -830,6 +845,12 @@ function missionsPayload(): string {
       theme: effectiveTheme(),
       overlayTwist: config.overlayTwist,
       overlayScale: config.overlayScale,
+      // 🔑 The SHELL owns window opacity but only read this at startup, so saving it did
+      // nothing until the next launch (Sub, 2026-08-09: "I set it to 20, clicked into the
+      // game, nothing happens"). Riding it on the prefs broadcast means EVERY surface that
+      // can change it — settings window, embedded settings widget, a hand-edited config —
+      // reaches the shell through one path that already fires on every config save.
+      unfocusedOpacity: config.unfocusedOpacity,
       premium: entitled(),   // subscriber: skins unlocked + logos/flair shown
       demo: !!demoTheme,     // a trial preview is live → overlay shows the trial watermark
     },
@@ -919,15 +940,25 @@ function chatConfigure(): void {
     url: config.chatServerUrl,
     handle: config.chatHandle,
     token: config.syncToken,
+    channels: config.chatChannels,
   }, active);
 }
+// The client is authoritative about which custom rooms it's in (joins and leaves both land
+// asynchronously, from the server). Persist whatever it reports so the next launch rejoins.
+chat.on("channels", (names: string[]) => {
+  if (JSON.stringify(names) === JSON.stringify(config.chatChannels)) return;
+  config.chatChannels = names;
+  void saveConfig();
+});
 
 /** The parser events chat cares about: shard join/hop feeds the region+shard channels,
  *  and leaving the PU (quit/menu) drops them. Runs on the seed pass too, so a mid-session
  *  app start knows the current shard without waiting for a hop. */
 function applyChatSignals(ev: import("./missions-parser.js").MissionEvent): void {
-  if (ev.kind === "shard") chat.applyShard(ev.shard);
-  else if (ev.kind === "sessionEnd") chat.applyShard(null);
+  // `ev.dgs` is undefined on Update Shard Id (that line names no endpoint) — passing it
+  // through unchanged is what keeps the current DGS instead of clearing it.
+  if (ev.kind === "shard") chat.applyShard(ev.shard, ev.dgs);
+  else if (ev.kind === "sessionEnd") chat.applyShard(null, null);
 }
 
 const miningClients = new Set<ServerResponse>();
@@ -1054,6 +1085,17 @@ sync.setProvider(() => ({
 
 // Any tracker state change (receipt, manual toggle, verify, mission switch) → resync.
 tracker.on("change", () => sync.markDirty());
+
+// What the player was flying when a mission completed, for the crowdsourced report (Sub's ask,
+// 2026-08-09). Captured the moment the completion appears rather than when they answer, because
+// the card outlives the moment: they can get out, board something else, or quit to the hangar
+// with the report still up. One slot — the card only ever asks about the completion on screen.
+let completionShip: { key: string; ship: string | null; manufacturer: string | null } | null = null;
+tracker.on("change", () => {
+  const c = tracker.view().completion;
+  if (!c?.contractKey || completionShip?.key === c.contractKey) return;
+  completionShip = { key: c.contractKey, ship: shipName, manufacturer: shipManufacturer };
+});
 
 /** Force a resync now (token set / startup / verify). */
 function syncFull(): void {
@@ -1387,6 +1429,46 @@ const server = createServer((req, res) => {
 async function handleRequest(req: import("node:http").IncomingMessage, res: ServerResponse) {
   const url = (req.url ?? "/").split("?")[0];
 
+  // ── Network policy ────────────────────────────────────────────────────────
+  // 🔴 This server binds ALL interfaces so OBS browser sources on a second PC can read the
+  // widget pages. That makes every route reachable by the whole LAN, and it was previously
+  // open house: a security report from a viewer on Sub's stream (2026-08-09) chained
+  // unauthenticated POST /api/config into full sync-token theft — repoint `chatServerUrl` at
+  // your own WebSocket and the sidecar cheerfully sends `{t:"hello", token}` straight to you.
+  //
+  // The rule now, in one place rather than per-route:
+  //   • ANY mutating request (non-GET/HEAD) must come from this machine. OBS is a DISPLAY
+  //     surface — it reads. Nothing on another PC has business changing this user's settings,
+  //     spending their Twitch credential, or driving their chat identity.
+  //   • Sensitive GETs are loopback-only too: they carry credentials (config), name paths on
+  //     disk (diagnostics/setup), read arbitrary files (mining tone), or fetch arbitrary URLs
+  //     on the LAN's behalf (can-embed, an SSRF hop into the private network).
+  // Everything else — widget pages, their read-only data and event streams — stays public so
+  // OBS keeps working.
+  const SENSITIVE_GET = new Set([
+    "/api/config", "/api/diagnostics", "/api/setup", "/api/mining/tone", "/api/scfeed/tone",
+    "/api/can-embed", "/api/dev/note",
+  ]);
+  const mutating = req.method !== "GET" && req.method !== "HEAD";
+  const sensitive = mutating || SENSITIVE_GET.has(url);
+  if (sensitive && !fromThisMachine(req)) {
+    res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ error: "This endpoint is only available on the machine running SC Overlay." }));
+    return;
+  }
+  // 🔑 Loopback is NOT enough on its own. The Web Page widget will load any http(s) URL, and a
+  // page open in it runs ON this machine — so a hostile site can fetch http://127.0.0.1:8778/…
+  // and every loopback check above passes. Same for any browser the user happens to have open.
+  // A browser stamps `Origin` on cross-origin requests, and our own widgets are same-origin
+  // (no Origin on same-origin GETs, and our own host when there is one), so an Origin naming
+  // somebody else is proof the caller is a web page that has no business here.
+  const origin = req.headers.origin;
+  if (sensitive && typeof origin === "string" && origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin)) {
+    res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ error: "Cross-origin requests are not accepted." }));
+    return;
+  }
+
   // Live event stream for the overlay.
   if (url === "/events") {
     res.writeHead(200, {
@@ -1434,6 +1516,29 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Crafting detail (recipe / dismantle / craft time / stats / manufacturer) for one
   // blueprint, looked up by ?item=<uuid> or ?name=<blueprint name>. Powers the overlay's
   // recipe view on demand (kept OUT of the mission-view payload so the SSE stays lean).
+  // Name suggestions for the chat widget's /bp and /item autocomplete. Local dataset only —
+  // typing a blueprint name mid-flight must not wait on the network.
+  // Every blueprint name distinctive enough to link on sight, so the chat widget can turn
+  // "DebBolt3" into a link with nobody typing a command. Fetched ONCE per widget load and
+  // cached — it changes only when the dataset does.
+  if (url === "/api/blueprint-names" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ names: tracker.autoLinkNames() }));
+    return;
+  }
+  if (url === "/api/blueprint-search" && req.method === "GET") {
+    const q = new URL(req.url ?? "", "http://x").searchParams.get("q") ?? "";
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ names: tracker.searchBlueprintNames(q) }));
+    return;
+  }
+  // Mission titles for the chat widget's /mission command ("let's run this one").
+  if (url === "/api/mission-search" && req.method === "GET") {
+    const q = new URL(req.url ?? "", "http://x").searchParams.get("q") ?? "";
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ missions: tracker.searchMissionTitles(q) }));
+    return;
+  }
   if (url === "/api/blueprint-detail" && req.method === "GET") {
     const q = new URL(req.url ?? "", "http://x").searchParams;
     const key = (q.get("item") || q.get("name") || "").trim();
@@ -1674,6 +1779,24 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   }
 
   // ── Social chat: live stream + snapshot + send ──
+  // 🔴 READING chat is loopback-only, exactly like SENDING it. This server binds ALL interfaces
+  // on purpose (OBS browser sources run on another PC), so an ungated route is readable by
+  // anything that can reach port 8778 — the whole LAN, a flatmate, a VPN peer, a forwarded port.
+  // These two carry the ENTIRE chat state: every DM, every org message, and the JOIN CODE of
+  // every private room the user is in. That last one is the worst of it, because a leaked code
+  // is durable remote access to a private room from anywhere in the world, long after whoever
+  // read it left the network.
+  //
+  // Reported by a viewer on Sub's stream (2026-08-09) as "spoofing into DMs, private chats and
+  // org chats" — one hole, all three symptoms. The POST routes below already carried this rule
+  // and the reasoning behind it; the read paths were simply missed.
+  if (url === "/chat/events" || (url === "/api/chat" && req.method === "GET")) {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Chat can only be read from this machine." }));
+      return;
+    }
+  }
   if (url === "/chat/events") {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
     res.write("\n");
@@ -1710,6 +1833,33 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     }
     const body = await readBody(req);
     const out = chat.send(String(body.ch ?? ""), String(body.text ?? ""));
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(out));
+    return;
+  }
+  // Joining/creating and leaving custom rooms, inviting, and DMs — same loopback rule as
+  // sending: every one of these ACTS with the user's chat identity, so the LAN must not be
+  // able to drive them. (A DM in particular is a message sent as him to a named person.)
+  if ((url === "/api/chat/join" || url === "/api/chat/leave" || url === "/api/chat/invite"
+       || url === "/api/chat/dm" || url === "/api/chat/dmlist"
+       || url === "/api/chat/delete-room") && req.method === "POST") {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, message: "Chat channels can only be changed from this machine." }));
+      return;
+    }
+    const body = await readBody(req);
+    const out =
+      url.endsWith("/join") ? chat.join(
+        String(body.name ?? ""),
+        body.mode === "join" || body.mode === "create" ? body.mode : undefined,
+        body.category ? String(body.category) : undefined,
+        body.privacy === "private" || body.privacy === "public" ? body.privacy : undefined)
+      : url.endsWith("/invite") ? chat.invite(String(body.ch ?? ""), String(body.handle ?? ""))
+      : url.endsWith("/delete-room") ? chat.deleteRoom(String(body.ch ?? ""))
+      : url.endsWith("/dmlist") ? chat.dmList()
+      : url.endsWith("/dm") ? chat.dm(String(body.to ?? ""), String(body.text ?? ""))
+      : chat.leave(String(body.ch ?? ""));
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify(out));
     return;
@@ -1993,6 +2143,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       const h = body.chatHandle.trim();
       if (!h || /^[A-Za-z0-9._-]{3,30}$/.test(h)) config.chatHandle = h;
     }
+    // Only ever WRITTEN by the chat client's own "channels" event (see chat.on above) — a
+    // POST may still clear it, which is how a user resets their room list by hand.
+    if (Array.isArray(body.chatChannels)) {
+      config.chatChannels = body.chatChannels.filter((n: unknown) => typeof n === "string" && n.trim()).slice(0, 30);
+    }
     if (typeof body.miningTone === "string") config.miningTone = body.miningTone;
     // GPU accel is read by electron/main.cjs at startup; persist here, restart applies it.
     if (typeof body.hwAccel === "boolean") config.hwAccel = body.hwAccel;
@@ -2030,6 +2185,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     if (typeof body.holdToInteract === "boolean") config.holdToInteract = body.holdToInteract;
     if (typeof body.moveHotkey === "string") config.moveHotkey = body.moveHotkey.trim();
     if (typeof body.fabClaimHotkey === "string") config.fabClaimHotkey = body.fabClaimHotkey.trim();
+    if (typeof body.opacityHotkey === "string") config.opacityHotkey = body.opacityHotkey.trim();
+    // Clamped here as well as in the slider: a hand-edited 0 would fade the overlay to
+    // invisible with no visible control left to undo it.
+    if (typeof body.unfocusedOpacity === "number" && Number.isFinite(body.unfocusedOpacity))
+      config.unfocusedOpacity = Math.max(0.2, Math.min(1, Math.round(body.unfocusedOpacity * 100) / 100));
     if (typeof body.timeRelative === "boolean") config.timeRelative = body.timeRelative;
     if (typeof body.shareLogs === "boolean") config.shareLogs = body.shareLogs;
     if (typeof body.showLoadout === "boolean") config.showLoadout = body.showLoadout;
@@ -2381,8 +2541,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
 
   // The verdict on a signature the screen-read found: did the frame also show the scan glyph
   // beside it? Only the caller can answer that (it holds the bitmap; this process only ever sees
-  // the OCR's text). Unconfirmed numbers still resolve a KNOWN rock — a table hit is its own
-  // evidence — but they can't announce debris, which is where the false call-outs came from.
+  // the OCR's text). The glyph corroborates, it never licenses — what the tracker does with a read
+  // is decided by the VALUE (see applyMineableRead), and a number the game cannot draw is refused
+  // however convincing the pixels beside it looked.
   if (url === "/api/mining/scan" && req.method === "POST") {
     const body = await readBody(req);
     const signature = Number(body?.signature);
@@ -2527,7 +2688,19 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // written as `url.startsWith("/api/mission-feedback?")` could never match.
   if (url === "/api/mission-feedback" && req.method === "POST") {
     const body = await readBody(req);
-    const saved = missionFeedback.record({ ...(body as object), changelist: tracker.view().build, appVersion: APP_VERSION });
+    // Ship comes from the log, never from a question — the player already told the game what
+    // they were flying. Prefer the one captured AT COMPLETION over whatever they are in now:
+    // the report can sit on screen while they climb out, and a difficulty rating has to answer
+    // for the run, not for where they happen to be standing when they click.
+    const key = typeof (body as { contractKey?: unknown }).contractKey === "string" ? (body as { contractKey: string }).contractKey : "";
+    const at = completionShip && completionShip.key === key ? completionShip : null;
+    const saved = missionFeedback.record({
+      ...(body as object),
+      ship: at ? at.ship : shipName,
+      shipManufacturer: at ? at.manufacturer : shipManufacturer,
+      changelist: tracker.view().build,
+      appVersion: APP_VERSION,
+    });
     // Push straight away so an answer reaches the site while the player is still at their
     // desk; the interval above is only the retry path. Deliberately not awaited — the
     // report card must never wait on the network to acknowledge a click.
@@ -2623,8 +2796,27 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   }
 
   // Static files.
+  // 🔴 PATH TRAVERSAL. This was `join(overlayDir, decodeURIComponent(url))` with no containment
+  // check, so `GET /..%2f..%2f…/config.json` walked straight out of the overlay directory and
+  // returned the user's config — INCLUDING THEIR SYNC TOKEN — to anything that could reach port
+  // 8778. Unauthenticated remote arbitrary file read, and the token is the whole account: chat
+  // identity, collection, the lot. Reported by a viewer on Sub's stream (2026-08-09) and
+  // reproduced here before fixing.
+  //
+  // 🔑 Decode FIRST, then resolve, then verify containment. Checking the raw string for ".."
+  // is the classic non-fix — `%2e%2e%2f` sails past it, and it is `decodeURIComponent` that
+  // turns it back into `../`. Only comparing the RESOLVED absolute path can be trusted, and it
+  // needs the trailing separator or a sibling directory like `overlay-secrets/` also matches.
   let p = url === "/" ? "/index.html" : url;
-  readFile(join(overlayDir, decodeURIComponent(p)), (err, buf) => {
+  let decoded: string;
+  try { decoded = decodeURIComponent(p); } catch { res.writeHead(400); res.end("bad path"); return; }
+  const target = resolve(overlayDir, "." + (decoded.startsWith("/") ? decoded : "/" + decoded));
+  const root = resolve(overlayDir) + sep;
+  if (!target.startsWith(root)) {
+    res.writeHead(403); res.end("forbidden");
+    return;
+  }
+  readFile(target, (err, buf) => {
     if (err) {
       res.writeHead(404);
       res.end("not found");

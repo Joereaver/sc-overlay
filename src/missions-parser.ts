@@ -43,6 +43,16 @@ export type MissionEvent =
       objectiveId: string;
     }
   | { kind: "activeObjective"; ts: string | null; missionId: string | null; objectiveId: string | null }
+  /** The objective TEXT from a "New Objective" notification ("Go to Pyro 5a Abandoned
+   *  Outpost"). Carries the place name, which is the only log-side signal that
+   *  distinguishes same-title mission variants drawing from DIFFERENT reward pools. */
+  | { kind: "newObjective"; ts: string | null; missionId: string | null; text: string }
+  /** Navigation routing to a region-scoped encounter set: "Projected Start Location is
+   *  Bloom for route to destination RegionB_1base_ab_pyro_final_set_encounter".
+   *  `region` is the raw token ("B") that appears in the debug_name HH_Pyro_RegionB_…,
+   *  which makes it a DIRECT variant discriminator — no name matching needed.
+   *  ⚠️ Carries NO MissionId, so it can only be correlated against an active mission. */
+  | { kind: "routeRegion"; ts: string | null; region: string; start: string | null }
   | { kind: "end"; ts: string | null; missionId: string; state: string }
   /** "Contract Complete: <title>" notification — carries the friendly title + the
    *  real missionId (unlike the MissionEnded push, which has no title). */
@@ -68,7 +78,12 @@ export type MissionEvent =
    *  ("pub_use1b_12326004_040"): env _ region/AZ _ cluster _ instance. Null = left the PU
    *  (the frontend runs on the sentinel "local_shard", which is not a place people meet).
    *  Drives the chat channels: region = segment 2, shard = the whole id. */
-  | { kind: "shard"; ts: string | null; shard: string | null };
+  | { kind: "shard"; ts: string | null; shard: string | null;
+      /** "<ip>:<port>" of the DGS from the Join PU line — the finest-grained "who is
+       *  actually near me" signal the log carries. Null on Update Shard Id (that line
+       *  names no endpoint) and when leaving the PU. NEVER used raw as a channel key:
+       *  see the hash in chat.ts. */
+      dgs?: string | null };
 
 const UUID = "[0-9a-fA-F-]{36}";
 
@@ -110,6 +125,14 @@ function normalizeMissionTitle(title: string | null): string | null {
 const RE = {
   acceptTitle: /Added notification "Contract Accepted:\s*(.+?):\s*"/,
   completeTitle: /Added notification "Contract Complete:\s*(.+?):\s*"/,
+  // "New Objective: Go to Pyro 5a Abandoned Outpost: " — the objective TEXT, which is the
+  // only thing in the log that names WHERE a mission sends you. Same MissionId as the
+  // accept. This is what tells same-title variants apart (see narrowByPlace in missions.ts).
+  newObjective: /Added notification "New Objective:\s*(.+?):\s*"/,
+  // "…Projected Start Location is Bloom for route to destination RegionB_1base_ab_pyro…"
+  // The destination's Region token is the variant letter itself. Start location is
+  // captured too because it is the only log line that names where the player IS.
+  routeRegion: /Projected Start Location is\s+(.+?)\s+for route to destination\s+Region([A-Za-z0-9]+)/,
   reward: /Added notification "Awarded\s+([\d,]+)\s+aUEC/,
   blueprint: /Added notification "Received Blueprint:\s*(.+?):\s*"/,
   missionIdField: new RegExp(`MissionId:\\s*\\[(${UUID})\\]`),
@@ -147,6 +170,16 @@ export function parseMissionEvent(e: LogEvent): MissionEvent | null {
 
   if (!tag) return null;
 
+  // "<Calculate Route>" — navigation, not a mission event, but its destination names the
+  // REGION of the encounter set being routed to, which is the cleanest variant
+  // discriminator in the whole log. Matched before the tag switch because the tag has a
+  // space in it and does not belong in the mission-notification cases below.
+  if (tag === "Calculate Route") {
+    const rr = m.match(RE.routeRegion);
+    if (!rr) return null;
+    return { kind: "routeRegion", ts: e.timestamp, region: rr[2], start: rr[1].trim() || null };
+  }
+
   // "<CPartyMarkerComponent RWES>" (streamed in) / "<CPartyMarkerComponent UFES>" (streamed out).
   if (tag.startsWith("CPartyMarkerComponent")) {
     const pm = m.match(RE.partyMarker);
@@ -172,6 +205,14 @@ export function parseMissionEvent(e: LogEvent): MissionEvent | null {
         const mid = m.match(RE.missionIdField);
         const title = normalizeMissionTitle(cc[1]);
         return { kind: "contractComplete", ts: e.timestamp, missionId: mid?.[1] ?? null, title };
+      }
+      // Must come AFTER accept/complete: those notifications are distinct strings, but
+      // keeping the order explicit means a future "New Objective Complete:"-style line
+      // cannot start shadowing the accept branch.
+      const no = m.match(RE.newObjective);
+      if (no) {
+        const mid = m.match(RE.missionIdField);
+        return { kind: "newObjective", ts: e.timestamp, missionId: mid?.[1] ?? null, text: no[1].trim() };
       }
       const rw = m.match(RE.reward);
       if (rw) {
@@ -230,7 +271,18 @@ export function parseMissionEvent(e: LogEvent): MissionEvent | null {
     case "Join PU": {
       const sh = m.match(/shard\[([\w-]+)\]/);
       if (!sh) return null;
-      return { kind: "shard", ts: e.timestamp, shard: sh[1] === "local_shard" ? null : sh[1] };
+      // address + port is the DGS — the Dynamic Game Server actually running your area, and the
+      // only thing on this line that two players in the same place share. Measured across 480
+      // shared logs: 5–15 distinct ports per shard id, matching Sub's "six to ten DGSs, CIG
+      // changes it per patch". The other candidates do NOT work: `locationId` was byte-identical
+      // across two of his joins on different shards (it is his spawn point), and `id[uuid]` on
+      // the sibling line belongs to exactly one player each (a client session id).
+      const ep = m.match(/address\[([0-9a-fA-F.:]+)\]\s*port\[(\d+)\]/);
+      return {
+        kind: "shard", ts: e.timestamp,
+        shard: sh[1] === "local_shard" ? null : sh[1],
+        dgs: ep && sh[1] !== "local_shard" ? `${ep[1]}:${ep[2]}` : null,
+      };
     }
 
     // Belt-and-braces for a mid-session move: "<Update Shard Id> New Shard Id:

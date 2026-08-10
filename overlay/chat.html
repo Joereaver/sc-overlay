@@ -14,18 +14,24 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/widget-theme.css" />
 <style>
-  /* Player-to-player chat, EVE-style: Global / Server (region) / Shard tabs that follow the
-     Game.log. The page renders whatever the SIDECAR knows — the connection, history and channel
-     membership all live in the sidecar (src/chat.ts), so regrouping or closing this iframe
-     costs nothing. This page only draws state and posts sends. */
+  /* Three panes, EVE's structure in OUR skin (Sub's spec, 2026-08-09):
+       LEFT   channel browser — what you could join, plus Join/Create
+       CENTER tabs + messages + send
+       RIGHT  who is in the channel you are looking at
+     Both rails collapse; the collapsed state is remembered. Everything here is themed from
+     /widget-theme.css — no EVE colours, no EVE chrome. */
   * { box-sizing: border-box; }
   * { scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), 0.28) transparent; }
+  /* Dropdown chevron, as a shape to be MASKED so it can be filled in the active skin's colour.
+     Declared once here because a mask URL cannot inherit currentColor the way a stroke can. */
+  :root { --chev: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>"); }
   html, body { margin: 0; height: 100%; background: transparent; }
   body { font-family: var(--sans); color: var(--cyan-text); overflow: hidden; }
+  [hidden] { display: none !important; }
 
   #panel {
     display: flex; flex-direction: column;
-    width: 360px; height: 460px; margin: 20px auto;
+    width: 820px; height: 480px; margin: 20px auto;
     border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
     -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px);
@@ -36,24 +42,58 @@
   body.embedded { overflow: visible; background: transparent; }
   body.embedded #panel { width: 100%; height: 100%; margin: 0; }
 
-  /* Header: connection dot + the three-tier channel tabs. */
-  .head { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px;
-    border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 40px; }
-  .dia { width: 7px; height: 7px; flex: none; background: var(--faint); transform: rotate(45deg); transition: background 0.3s; }
-  #panel.on .dia { background: var(--cyan-bright); box-shadow: 0 0 8px var(--cyan); }
-  #tabs { flex: 1; display: flex; gap: 4px; min-width: 0; }
-  .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
-    color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.08); border: 1px solid var(--divider);
-    border-radius: 6px; padding: 4px 8px; cursor: pointer; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; max-width: 40%; position: relative; }
-  .tab:hover { background: rgba(var(--accent-rgb), 0.18); }
-  .tab.active { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
-  .tab.dead { opacity: 0.4; cursor: default; }
-  .tab .n { margin-left: 4px; font-weight: 600; color: var(--gold); }
+  /* ── the three-pane body ───────────────────────────────────────────────── */
+  #body { flex: 1; min-height: 0; display: flex; position: relative; z-index: 4; }
+  .rail { flex: none; display: flex; flex-direction: column; min-height: 0;
+    background: rgba(0, 0, 0, 0.16); }
+  #left { width: 190px; border-right: 1px solid var(--divider); }
+  #right { width: 168px; border-left: 1px solid var(--divider); }
+  #panel.no-left #left, #panel.no-right #right { display: none; }
+  #center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  .rail-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 9px;
+    border-bottom: 1px solid var(--divider);
+    font-size: 8.5px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+  .rail-head .n { margin-left: auto; color: var(--gold); letter-spacing: 0.06em; }
+  .rail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
+
+  /* left rail: group headings + rows you can join */
+  .grp { padding: 8px 10px 3px; font-size: 8.5px; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint); }
+  .crow { display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
+    font-size: 11.5px; color: var(--cyan-text); }
+  .crow:hover { background: rgba(var(--accent-rgb), 0.1); }
+  .crow.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); }
+  .crow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crow .ct { flex: none; font-size: 10px; color: var(--gold); }
+  .crow .x { flex: none; opacity: 0; font-size: 11px; color: var(--faint); padding: 0 2px; }
+  .crow:hover .x { opacity: 1; }
+  .crow .x:hover { color: var(--red, #ff6b5e); }
+  .empty { padding: 8px 10px; font-size: 10.5px; font-style: italic; color: var(--faint); line-height: 1.5; }
+
+  /* left rail: the join/create form */
+  .rail-foot { flex: none; border-top: 1px solid var(--divider); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #chanInput { font-family: var(--sans); font-size: 11.5px; color: var(--cyan-bright);
+    background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
+    padding: 5px 7px; outline: none; width: 100%; }
+  #chanInput:focus { border-color: var(--cyan); }
+  #chanInput::placeholder { color: var(--faint); }
+  .rail-foot .row { display: flex; gap: 6px; }
+  .rail-foot .row .hbtn { flex: 1; text-align: center; }
+
+  /* centre: tab strip */
+  #tabs { flex: none; display: flex; align-items: stretch; gap: 3px; padding: 6px 8px 0;
+    overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--divider); }
+  .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
+    color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.07);
+    border: 1px solid var(--divider); border-bottom: none; border-radius: 6px 6px 0 0;
+    padding: 5px 9px; cursor: pointer; white-space: nowrap; position: relative; }
+  .tab:hover { background: rgba(var(--accent-rgb), 0.16); }
+  .tab.active { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.22); border-color: var(--cyan); }
   .tab .unread { position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%;
     background: var(--gold); box-shadow: 0 0 6px var(--gold); }
 
-  #log { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; z-index: 4;
+  #log { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
     padding: 6px 0; font-size: 12.5px; line-height: 1.5; }
   .msg { padding: 3px 12px; word-wrap: break-word; overflow-wrap: anywhere; }
   .msg:hover { background: rgba(var(--accent-rgb), 0.05); }
@@ -64,24 +104,199 @@
   .msg .tx { color: var(--cyan-text); }
   .msg .ts { float: right; margin-left: 6px; font-size: 9.5px; color: var(--faint); }
   .sys { padding: 3px 12px; font-size: 11px; color: var(--faint); font-style: italic; }
+  /* A message that names YOU gets a gold edge — findable when you scroll back, quiet when
+     you don't. Mentions of anyone else are just a tinted token. */
+  .msg.mention { background: rgba(var(--accent-rgb), 0.10); box-shadow: inset 3px 0 0 var(--gold); }
+  .msg .at { color: var(--cyan-bright); font-weight: 600; }
+  .msg.mention .at.me { color: var(--gold); }
+  /* A link out of chat — a blueprint on the site, or an item on starcitizen.tools.
+     🔑 The KIND TAG is load-bearing: a [bp:…] and an [item:…] used to render as the same gold
+     underlined name and only the TOOLTIP said which one you were about to open (Sub,
+     2026-08-09: "they look identical in chat"). The tag is a sibling of the underlined text,
+     never a child — `text-decoration` draws through descendants and a child cannot cancel it,
+     so a tag inside .lkt would be underlined too. */
+  .msg .lnk { cursor: pointer; }
+  .msg .lkt { color: var(--gold); text-decoration: underline; text-underline-offset: 2px; }
+  .msg .lnk:hover .lkt { filter: brightness(1.2); }
+  .msg .lkk { font-size: 8.5px; font-weight: 700; letter-spacing: .04em; padding: 0 3px;
+    margin-right: 3px; border-radius: 3px; vertical-align: 1px;
+    background: rgba(var(--accent-rgb), .20); color: var(--cyan-bright); }
+  /* Friends float to the top of the member list and keep a marker. */
+  .mrow .fav { flex: none; font-size: 9px; color: var(--gold); }
 
-  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider);
-    position: relative; z-index: 4; }
+  /* Create-a-room popover.
+     🔴 It is positioned against #panel by JS and CLAMPED inside it — never with a percentage
+     offset from its DOM parent. `.rail-foot` is not a positioned ancestor, so an earlier
+     `bottom: calc(100% + 6px)` resolved against #panel and put the whole box 6px ABOVE the
+     widget: off the canvas, invisible and unclickable (Sub, 2026-08-09: "whatever box is
+     supposed to pop up is up and out of the window"). Anything outside the widget's own rect
+     is not in the shell's hit-test region list, so it could never have been clicked even if
+     it had been visible. Same rule, same fix as #ctx. */
+  /* 🔑 PINNED to the panel's bottom-left, not positioned by arithmetic. #panel is the
+     positioned ancestor, so left/bottom put it inside the widget BY CONSTRUCTION — no
+     measuring, nothing to drift, and it lands right where the Create button is (bottom of the
+     left rail). Two measured attempts failed here: the box grows after the first measurement
+     when the hint line re-wraps, and a rAF correction never runs at all in the hidden test
+     window. max-height keeps it inside a short widget too. */
+  #createPop { position: absolute; display: none; z-index: 9; width: 250px;
+    left: 6px; bottom: 6px; max-height: calc(100% - 12px); overflow-y: auto;
+    padding: 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.55); }
+  #createPop.open { display: block; }
+  #createPop .cp-row { display: grid; grid-template-columns: 56px 1fr; gap: 6px; align-items: center; margin-bottom: 6px; }
+  #createPop label { font-size: 10.5px; color: var(--faint); }
+  #createPop input, #createPop select { width: 100%; box-sizing: border-box; font-family: var(--sans);
+    font-size: 11.5px; color: var(--cyan-bright); background: rgba(0,0,0,.28);
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; }
+  #createPop input:focus, #createPop select:focus { outline: none; border-color: var(--cyan); }
+  /* 🔑 A native <select> keeps the OS chrome — grey Windows arrow, system-blue highlight —
+     whatever colour you set on it, so it read as unstyled next to everything else in the
+     widget. appearance:none strips it; the arrow is then drawn as a background SVG in the
+     skin's own colour. Same reason the chrome icons here are inline SVG rather than glyphs. */
+  #createPop select {
+    cursor: pointer; appearance: none; -webkit-appearance: none; padding-right: 22px;
+  }
+  #createPop select:hover { border-color: var(--cyan); }
+  /* The arrow is a MASK filled with the skin's own colour, not an inline SVG data URI — a data
+     URI has to hard-code its stroke, and this widget re-skins per manufacturer, so a fixed
+     cyan chevron would be wrong on nine of the ten skins. */
+  #createPop .cp-row.sel { position: relative; }
+  #createPop .cp-row.sel::after {
+    content: ""; position: absolute; right: 7px; top: 50%; width: 9px; height: 6px;
+    transform: translateY(-50%); pointer-events: none; background-color: var(--cyan);
+    -webkit-mask: var(--chev) no-repeat center / 9px 6px;
+            mask: var(--chev) no-repeat center / 9px 6px;
+  }
+  /* The dropdown LIST is drawn by the OS and inherits almost nothing — these two are the only
+     properties Chromium actually honours on <option>, and without them the open list is white
+     with black text against a dark widget. */
+  #createPop select option { background: #0b1a22; color: #cfe9ef; }
+  #createPop .cp-hint { font-size: 10px; color: var(--faint); line-height: 1.35; margin: 2px 0 7px; min-height: 26px; }
+  #createPop .cp-btns { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* The private-room bar: the join code, and the owner's invite box. */
+  #roomBar { display: none; align-items: center; gap: 6px; flex: none; padding: 4px 8px;
+    border-bottom: 1px solid var(--border); background: rgba(var(--accent-rgb), .07); }
+  #roomBar.show { display: flex; }
+  #roomBar .rb-lock svg { width: 12px; height: 12px; fill: none; stroke: var(--gold); stroke-width: 1.4; display: block; }
+  #roomBar .rb-lbl { font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+  #roomBar code { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--gold);
+    letter-spacing: .12em; background: rgba(0,0,0,.3); border-radius: 4px; padding: 1px 6px; }
+  #roomBar #rbOwnerOnly { display: none; align-items: center; gap: 4px; margin-left: auto; }
+  #roomBar.owner #rbOwnerOnly { display: flex; }
+  /* The code half only exists for a private room; a public room you own shows just Delete. */
+  #roomBar .rb-lock, #roomBar .rb-lbl, #roomBar code, #roomBar #rbCopy { display: none; }
+  #roomBar.secret .rb-lock { display: block; }
+  #roomBar.secret .rb-lbl, #roomBar.secret code, #roomBar.secret #rbCopy { display: inline-block; }
+  /* Destructive, and it takes the room away from everyone in it — so it does not look like
+     the buttons beside it. */
+  #roomBar .hbtn.danger { color: #ff8a7a; border-color: rgba(255,138,122,.45); }
+  #roomBar .hbtn.danger:hover { color: #fff; background: rgba(255,90,70,.35); border-color: #ff8a7a; }
+  #roomBar .hbtn.danger.confirm { color: #fff; background: rgba(255,70,50,.45); border-color: #ff8a7a; }
+  #roomBar input { width: 110px; font-family: var(--sans); font-size: 11px; color: var(--cyan-bright);
+    background: rgba(0,0,0,.28); border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
+
+  /* A channel row for a room you could join, grouped under its activity. */
+  #chanList .grp { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
+  #chanList .grp:hover { color: var(--cyan-bright); }
+  #chanList .grp .tw { font-size: 8px; opacity: .75; width: 8px; }
+  #chanList .grp .gct { margin-left: auto; font-size: 9.5px; opacity: .7;
+    background: rgba(var(--accent-rgb), .16); border-radius: 7px; padding: 0 5px; }
+  #chanList .crow.unhide { opacity: .55; font-style: italic; }
+  #chanList .crow.unhide:hover { opacity: 1; }
+  #chanList .subgrp { font-size: 9.5px; color: var(--faint); text-transform: uppercase;
+    letter-spacing: .06em; padding: 4px 8px 2px 14px; opacity: .8; }
+  #chanList .crow .lock { flex: none; font-size: 9px; color: var(--gold); margin-left: 3px; }
+  #chanList .crow .dmdot { flex: none; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--gold); margin-left: 4px; }
+
+  /* Right-click menu on a name (member list or message). */
+  #ctx { position: absolute; display: none; z-index: 8; min-width: 150px; padding: 4px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel-solid, rgba(10,20,28,.98));
+    box-shadow: 0 12px 30px rgba(0,0,0,.55); }
+  #ctx.open { display: block; }
+  #ctx .ct-who { padding: 5px 8px 6px; font-size: 10px; font-weight: 700; letter-spacing: .06em;
+    color: var(--gold); border-bottom: 1px solid var(--divider); margin-bottom: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ctx button { display: block; width: 100%; text-align: left; font-family: var(--sans); font-size: 11.5px;
+    color: var(--cyan-text); background: none; border: 0; border-radius: 5px; padding: 6px 8px; cursor: pointer; }
+  #ctx button:hover { background: rgba(var(--accent-rgb), 0.18); color: var(--cyan-bright); }
+
+  /* One suggestion list, three jobs: commands (/), people (@) and blueprint names. Sub asked
+     for autocomplete because "I don't know exactly what to type" — so nothing here should ever
+     require knowing a name in advance. ↑↓ to move, Tab/Enter to accept, Esc to dismiss. */
+  #slash { position: absolute; bottom: calc(100% + 6px); left: 10px; right: 10px; display: none;
+    z-index: 6; padding: 5px; border: 1px solid var(--border); border-radius: 8px; max-height: 190px;
+    overflow-y: auto; background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+  #slash.open { display: block; }
+  #slash .sc-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 7px; border-radius: 5px; cursor: pointer; font-size: 11.5px; }
+  #slash .sc-row:hover, #slash .sc-row.on { background: rgba(var(--accent-rgb), 0.18); }
+  #slash .sc-cmd { font-family: var(--mono); color: var(--cyan-bright); font-weight: 700; }
+  #slash .sc-name { color: var(--cyan-text); font-weight: 600; }
+  #slash .sc-hint { color: var(--faint); font-size: 10.5px; margin-left: auto; }
+
+  #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); position: relative; }
+
+  /* Emoji: rendered by the OS font (Segoe UI Emoji on Windows), so there is nothing to
+     download and nothing to host. This picker exists because Windows' own Win+. panel is
+     unreliable over a fullscreen game — and typing :shortcodes: beats hunting a grid anyway. */
+  #emojiPop { position: absolute; bottom: calc(100% + 6px); right: 10px; width: 244px; max-height: 210px;
+    overflow-y: auto; display: none; z-index: 6; padding: 6px;
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--panel-solid, rgba(10, 20, 28, 0.98));
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55); }
+  #emojiPop.open { display: block; }
+  #emojiPop .egrp { padding: 4px 4px 2px; font-size: 8.5px; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint); }
+  #emojiPop .erow { display: flex; flex-wrap: wrap; gap: 1px; }
+  #emojiPop button { font-size: 17px; line-height: 1; background: none; border: 0; border-radius: 5px;
+    padding: 4px; cursor: pointer;
+    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+  #emojiPop button:hover { background: rgba(var(--accent-rgb), 0.22); }
+  /* Emoji in a message want a touch more size than the surrounding text to read at all. */
+  .msg .tx { font-family: var(--sans), "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"; }
   #sendInput { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px; color: var(--cyan-bright);
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
     padding: 6px 8px; outline: none; }
   #sendInput:focus { border-color: var(--cyan); }
   #sendInput::placeholder { color: var(--faint); }
+
+  /* right rail: members.
+     🔑 NO status dot. The first version drew a 6px circle in each handle's own hash colour,
+     which reads as a status light — Sub saw a red one and reasonably asked what it meant. It
+     meant nothing. The NAME carries the colour instead, where a colour is obviously identity. */
+  .mrow { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; }
+  .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mrow .vf { flex: none; font-size: 8px; font-weight: 800; color: var(--green, #38d980); }
+  .mrow.you .nm { color: var(--gold); font-weight: 700; }
+
+  /* header (thin — the tabs carry the identity, so this stays out of the way) */
+  .head { flex: none; display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+    border-bottom: 1px solid var(--divider); position: relative; z-index: 4; min-height: 34px; }
+  .dia { width: 7px; height: 7px; flex: none; background: var(--faint); transform: rotate(45deg); transition: background 0.3s; }
+  #panel.on .dia { background: var(--cyan-bright); box-shadow: 0 0 8px var(--cyan); }
+  .h-title { font-size: 10px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; color: var(--cyan-dim); }
+  #whoami { flex: 1; min-width: 0; font-size: 10.5px; color: var(--faint); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   .hbtn { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
     color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
   .hbtn:hover { background: rgba(var(--accent-rgb), 0.24); border-color: var(--cyan); }
-  .hbtn.sm { padding: 4px 7px; font-size: 10px; }
+  .hbtn.sm { padding: 3px 7px; font-size: 10px; }
   .hbtn.active { background: rgba(var(--accent-rgb), 0.28); border-color: var(--cyan); }
+  /* 🔑 These were EMOJI (☰ / 👥). An emoji is painted by the OS colour font, so it ignores the
+     manufacturer skin completely — on Sub's skin it came out purple, clashing and unreadable at
+     this size. Inline SVG on `currentColor` takes the theme accent like every other control. */
+  .hbtn.tog { min-width: 28px; display: inline-flex; align-items: center; justify-content: center;
+    padding: 4px 6px; color: var(--cyan-dim); }
+  .hbtn.tog svg, #emojiBtn svg { width: 13px; height: 13px; display: block; fill: none;
+    stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .hbtn.tog:hover, .hbtn.tog.active { color: var(--cyan-bright); }
+  #emojiBtn { display: inline-flex; align-items: center; justify-content: center;
+    color: var(--cyan-dim); padding: 4px 7px; }
+  #emojiBtn:hover, #emojiBtn.active { color: var(--cyan-bright); }
 
-  /* Identity gate. Chat needs someone bannable on the other end (Sub's rule: RSI-verified
-     accounts only). The A/B build takes a plain handle; production replaces this pane with
-     the site's verification flow. */
+  /* identity gate */
   #gate { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: center;
     gap: 10px; padding: 22px 18px; overflow-y: auto;
     background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)); z-index: 5; }
@@ -92,27 +307,119 @@
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: 7px;
     padding: 9px 10px; outline: none; width: 100%; }
   #handleInput:focus { border-color: var(--cyan); }
-  .row { display: flex; gap: 8px; align-items: center; }
-  .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
-  /* Belt for the widget-page hidden trap: any class rule that sets display would silently
-     defeat a bare [hidden] (see the Unlock Alerts claim-row bug). */
-  [hidden] { display: none !important; }
+  #gate .row { display: flex; gap: 8px; align-items: center; }
+  #gate .row .hbtn { flex: 1; text-align: center; padding: 8px 10px; }
+
+  /* Narrow embeds (a user can drag this widget small): drop the rails rather than crush them. */
+  @media (max-width: 520px) { #left, #right { display: none; } }
+  #dmWarn { display: none; align-items: flex-start; gap: 6px; flex: none; padding: 5px 9px;
+    border-bottom: 1px solid var(--divider); background: rgba(255, 176, 60, .10);
+    font-size: 10.5px; line-height: 1.35; color: var(--cyan-dim); }
+  #dmWarn.show { display: flex; }
+  #dmWarn svg { flex: none; width: 12px; height: 12px; margin-top: 1px; fill: none;
+    stroke: #ffb03c; stroke-width: 1.4; stroke-linejoin: round; }
+  #dmWarn b { color: var(--cyan-text); }
+
 </style>
 </head>
 <body>
   <div id="panel" class="wpanel">
     <div class="head">
       <span class="dia"></span>
-      <div id="tabs"></div>
+      <span class="h-title">Chat</span>
+      <span id="whoami"></span>
+      <button id="leftBtn" class="hbtn sm tog" type="button" title="Show or hide the channel list" aria-label="Channels">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+      </button>
+      <!-- Typing mode sits BETWEEN the two rail toggles (Sub, 2026-08-09). It used to live down
+           in the send bar; up here it is one of the three things you reach for constantly, and
+           an SVG on currentColor rather than a text glyph so it inherits the skin like its
+           neighbours do. -->
+      <button id="typeBtn" class="hbtn sm tog" type="button" title="Typing mode: grab keyboard focus so you can type in-game" aria-label="Typing mode">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.4 2.6a1.6 1.6 0 0 1 2.3 2.3L5.6 13H3.2v-2.4z"/><path d="M10.2 3.8l2 2"/></svg>
+      </button>
+      <button id="rightBtn" class="hbtn sm tog" type="button" title="Show or hide who's here" aria-label="Members">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><path d="M11 3.6a2.5 2.5 0 0 1 0 4.3M12.4 9.9c1.4.5 2.3 1.8 2.3 3.6"/></svg>
+      </button>
     </div>
 
-    <div id="log"></div>
+    <div id="body">
+      <div id="left" class="rail">
+        <div class="rail-head">Channels</div>
+        <div id="chanList" class="rail-body"></div>
+        <div class="rail-foot">
+          <input id="chanInput" type="text" placeholder="Channel name or code…" maxlength="30" spellcheck="false" autocomplete="off" />
+          <div class="row">
+            <button id="joinBtn" class="hbtn sm" type="button" title="Join a channel by name, or a private room by its code">Join</button>
+            <button id="createBtn" class="hbtn sm" type="button" title="Create a new channel">Create</button>
+          </div>
+          <!-- Creating a room asks two questions before it exists: what it's FOR, and who can
+               see it. Both are answered here rather than after the fact, because a room that is
+               public for even a moment has already been published to everyone. -->
+          <div id="createPop">
+            <div class="cp-row"><label for="cpName">Name</label>
+              <input id="cpName" type="text" maxlength="30" spellcheck="false" autocomplete="off" placeholder="Sunday Ops" /></div>
+            <div class="cp-row sel"><label for="cpCat">Activity</label>
+              <select id="cpCat"></select></div>
+            <div class="cp-row sel"><label for="cpPriv">Privacy</label>
+              <select id="cpPriv">
+                <option value="public">Public — listed for everyone</option>
+                <option value="private">Private — code or invite only</option>
+              </select></div>
+            <div class="cp-hint" id="cpHint"></div>
+            <div class="cp-btns">
+              <button id="cpCancel" class="hbtn sm" type="button">Cancel</button>
+              <button id="cpGo" class="hbtn sm" type="button">Create</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
-    <div id="sendbar">
-      <input id="sendInput" type="text" placeholder="Say something…" maxlength="400" autocomplete="off" spellcheck="false" />
-      <button id="typeBtn" class="hbtn sm" type="button" title="Typing mode: grab keyboard focus so you can type in-game">✎</button>
-      <button id="sendBtn" class="hbtn sm" type="button">Send</button>
+      <div id="center">
+        <div id="tabs"></div>
+        <!-- Only for a PRIVATE room you are inside: the code that admits the next person, and
+             (if it's yours) the invite box. Hidden entirely otherwise. -->
+        <div id="roomBar">
+          <span class="rb-lock" title="Private room" aria-hidden="true">
+            <svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
+          </span>
+          <span class="rb-lbl">Join code</span>
+          <code id="rbCode"></code>
+          <button id="rbCopy" class="hbtn sm" type="button" title="Copy the code">Copy</button>
+          <span id="rbOwnerOnly">
+            <input id="rbInvite" type="text" placeholder="RSI handle…" maxlength="30" spellcheck="false" autocomplete="off" />
+            <button id="rbInviteGo" class="hbtn sm" type="button" title="Let this handle in">Invite</button>
+            <button id="rbDelete" class="hbtn sm danger" type="button" title="Delete this room for everyone">Delete</button>
+          </span>
+        </div>
+        <!-- Sub's call, 2026-08-09: DMs get a standing disclaimer. They are private from other
+             PLAYERS, not from the service — messages are stored in plain text on the chat
+             server, so anyone with database access can read them. Saying so plainly is the
+             honest thing, and it is deliberately NOT dismissible: a warning you can tick away
+             is a warning nobody sees on the day it matters. -->
+        <div id="dmWarn">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 1.4 13.2h13.2z"/><path d="M8 6.4v3.1"/><circle cx="8" cy="11.4" r=".75" fill="currentColor" stroke="none"/></svg>
+          <span>Direct messages are private from other players, <b>not</b> encrypted. Treat anything you type here as readable — don't share passwords or anything you'd mind being seen.</span>
+        </div>
+        <div id="log"></div>
+        <div id="sendbar">
+          <input id="sendInput" type="text" placeholder="Say something…  (try :o7: or :thumbsup:)" maxlength="400" autocomplete="off" spellcheck="false" />
+          <button id="emojiBtn" class="hbtn sm" type="button" title="Emoji" aria-label="Emoji">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M5.6 9.6a3 3 0 0 0 4.8 0"/><circle cx="6" cy="6.4" r=".9" fill="currentColor" stroke="none"/><circle cx="10" cy="6.4" r=".9" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <button id="sendBtn" class="hbtn sm" type="button">Send</button>
+          <div id="emojiPop"></div>
+          <div id="slash"></div>
+        </div>
+      </div>
+
+      <div id="right" class="rail">
+        <div class="rail-head">Here <span id="memCount" class="n"></span></div>
+        <div id="memList" class="rail-body"></div>
+      </div>
     </div>
+
+    <div id="ctx"></div>
 
     <div id="gate">
       <div class="lbl">Chat identity</div>
@@ -137,16 +444,74 @@
   const host = () => (EMBEDDED && window.parent) ? window.parent.__chatHost : null;
 
   const MAX_ROWS = 250;
-  // The three-tier hierarchy in display order. Region/shard tabs render even while you're not
-  // on a shard (dimmed) — an empty slot that explains itself beats one that comes and goes.
-  const TIERS = ["global", "region", "shard"];
+  // Group headings for the left rail, in the same order the tabs run.
+  const GROUPS = [
+    { kind: "global", title: "Universe" },
+    { kind: "region", title: "Server" },
+    // No "Shard" group. It sat between the region and the DGS with nothing a player could do
+    // with it, and it reported three people when one was actually nearby (Sub, 2026-08-09).
+    // The kind is still handled everywhere else so a client that somehow lands in a leftover
+    // shard room can still read it — it just is not a heading any more.
+    // The DGS - the server actually running where you are. Finest of the three location
+    // tiers, and the only one that means "people I could physically run into right now".
+    { kind: "dgs", title: "Nearby" },
+    { kind: "org", title: "Organisation" },
+    { kind: "custom", title: "Your channels" },
+    // 🔴 SEPARATE from "Your channels". These two used to share one group, so the directory of
+    // every public room ANYONE had made was listed under a heading that said they were yours —
+    // Sub, 2026-08-09: "the only thing that should be under my channels are custom servers that
+    // I made… I just have a bunch of stuff in there and I don't know where it came from and I
+    // don't have a way to delete it." He was right: they were other people's rooms, and the
+    // heading was lying about it. A browser and a membership list are different things and the
+    // rail now says so.
+    { kind: "browse", title: "Browse rooms" },
+    { kind: "dm", title: "Direct messages" },
+  ];
 
-  let view = null;        // last full state from the sidecar
+  /* Activity categories come from the SERVER (the welcome frame), so adding one is a server
+     change with no client release. The fallback only matters before the first connect. */
+  const catLabel = (slug) =>
+    (view?.categories ?? []).find((c) => c.slug === slug)?.label ?? "Social / Other";
+
+  /* A DM's channel key is the ordered, lowercased pair — the same rule the server uses, so a
+     tab opened here and the room the server creates are the same room. */
+  function dmChKey(other) {
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    return "dm:" + [me, String(other).toLowerCase()].sort().join("|");
+  }
+  /** Who the other person in a DM is, by key. */
+  function dmOther(ch) {
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    const pair = ch.slice("dm:".length).split("|");
+    return pair.find((h) => h !== me) ?? pair[0] ?? "";
+  }
+  /* Which rail groups are rolled up, and which browsable rooms the user has waved away.
+     Sub, 2026-08-09: "I have a long list of chats... it's just a lot on my screen right now."
+     🔑 Both are LOCAL preferences, not membership — hiding a room you could join is a display
+     choice and must never leave or join anything on the server. Persisted per machine. */
+  const listPref = (k, d) => { try { return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; } catch { return d; } };
+  const listSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
+  // Browse starts ROLLED UP. It is a catalogue of other people's rooms, so it should be
+  // something you open when you want it, not the bulk of the rail on every launch.
+  let collapsed = new Set(listPref("chatCollapsed", ["browse"]));
+  let hiddenRooms = new Set(listPref("chatHiddenRooms", []));
+
+  /* A DM you have opened but not yet sent into. The room does not exist server-side until the
+     first message, so the tab is local until then — otherwise clicking "Message" would create
+     an empty room for someone who then changed their mind. */
+  let pendingDm = null;
+
+  let view = null;
   let activeCh = "global";
-  let unread = new Set(); // channels with messages arrived while another tab was up
+  let unread = new Set();
   let es = null;
 
-  // ── rendering ────────────────────────────────────────────────────────────────
+  // Rail visibility is a local preference (per machine, not per account).
+  const railPref = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v === "1"; } catch { return d; } };
+  let showLeft = railPref("chatLeft", true);
+  let showRight = railPref("chatRight", true);
+
+  // ── rendering ────────────────────────────────────────────────────────────
   const atBottom = () => {
     const el = $("log");
     return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -164,20 +529,178 @@
     d.textContent = text;
     append(d);
   }
-  // A stable per-handle colour (same trick as every chat client): hash → hue, fixed S/L that
-  // stay readable on the dark glass in every skin.
   function handleColor(handle) {
     let h = 0;
     for (const c of handle) h = (h * 31 + c.codePointAt(0)) % 360;
     return `hsl(${h} 65% 70%)`;
   }
+  // ── mentions, links and the message body ─────────────────────────────────
+  // Rendered as NODES, never innerHTML: message text is other players' input, and the one
+  // place it could become markup is the one place it must not.
+  const MENTION_RE = /@([A-Za-z0-9._-]{3,30})/g;
+  // Tokens the app itself writes when you use a slash command. `bp:` is a blueprint on the
+  // site; `item:` is a starcitizen.tools lookup. Both survive as plain text for old clients.
+  // A token carries the display text AND the id the link needs: [bp:Name|uuid],
+  // [mission:Title|contractKey], [item:Name]. The id half is optional so an older client's
+  // plain [bp:Name] still renders (it just links by name).
+  // 🔑 The site's routes are /blueprints/<ITEM UUID> and /missions/<CONTRACT KEY> — NOT the
+  // display name. Linking by name 404s, which is exactly what Sub hit.
+  // `build:` is an erkul.games ship loadout the SENDER named — erkul's share links are an
+  // opaque hash with no ship in them, and its old API host (server.erkul.games) no longer
+  // exists, so there is nothing to look up. The person pasting it is the one who knows what
+  // it is. The id half is longer here because it holds a URL rather than a uuid.
+  // 🔑 ONE alternation-free pattern with three groups. A second top-level alternation for
+  // `build` would shift the capture-group positions the replace() callback reads by name, and
+  // the id length simply widens to fit a URL.
+  const TOKEN_RE = /\[(bp|item|mission|build):([^\]|]{1,80})(?:\|([^\]]{1,200}))?\]/g;
+
+  /** An erkul share link, or null. 🔴 Called on RENDER, not just on send: the token arrives
+   *  over the wire from another player, so "we validated it when we made it" guarantees
+   *  nothing. This is the allowlist that stops a chat message opening javascript: or any other
+   *  URL of a stranger's choosing in the user's real browser. */
+  function erkulUrl(raw) {
+    let u;
+    try { u = new URL(String(raw).trim()); } catch { return null; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    if (host !== "erkul.games") return null;
+    // /s/<id> is the current short link; /loadout/<id> is the older format still in the wild.
+    if (!/^\/(s|loadout)\/[A-Za-z0-9_-]{4,40}\/?$/.test(u.pathname)) return null;
+    return "https://" + host + u.pathname.replace(/\/$/, "");
+  }
+  const bpUrl = (id) => "https://subliminal.gg/blueprints/" + encodeURIComponent(id);
+  const missionUrl = (key) => "https://subliminal.gg/missions/" + encodeURIComponent(key);
+  // starcitizen.tools page titles are the item name with underscores for spaces
+  // (verified: /Deadbolt_III_Cannon → 200).
+  const toolsUrl = (name) => "https://starcitizen.tools/" + name.trim().replace(/\s+/g, "_").split("/").map(encodeURIComponent).join("/");
+  function openLink(url) {
+    if (host()?.openUrl) host().openUrl(url);
+    else window.open(url, "_blank", "noopener");
+  }
+  // Every link out of chat is built here so the KIND TAG can never go missing on one path and
+  // not another — which is exactly how [bp:…] and [item:…] came to look the same.
+  const KIND_TAG = { bp: "BP", item: "ITEM", mission: "MISSION", build: "BUILD" };
+  const KIND_TITLE = {
+    bp: "Open this blueprint on subliminal.gg",
+    item: "Look this up on starcitizen.tools",
+    mission: "Open this mission on subliminal.gg",
+    build: "Open this loadout on erkul.games",
+  };
+  function linkNode(kind, label, url, title) {
+    const wrap = document.createElement("span");
+    wrap.className = "lnk " + kind;
+    wrap.title = title ?? KIND_TITLE[kind] ?? "";
+    const tag = document.createElement("span");
+    tag.className = "lkk";
+    tag.textContent = KIND_TAG[kind] ?? "";
+    const txt = document.createElement("span");
+    txt.className = "lkt";
+    txt.textContent = label;
+    wrap.append(tag, txt);
+    wrap.addEventListener("click", () => openLink(url));
+    return wrap;
+  }
+  // Blueprint names recognised on sight — no command needed (Sub, 2026-08-09). The list and the
+  // "is it distinctive enough" judgement are the sidecar's (see autoLinkNames); this just
+  // matches them. One regex, built once, longest-name-first so the longer of two overlapping
+  // names wins. Word boundaries on both ends, so "Bolt" inside "Deadbolt" never matches.
+  let bpRe = null;
+  let bpCanon = new Map();   // matched text (lowercase) → the canonical blueprint name
+  async function loadAutoLinks() {
+    try {
+      const d = await (await fetch("/api/blueprint-names")).json();
+      const rows = (d.names ?? []).filter((r) => r && r.match);
+      if (!rows.length) return;
+      bpCanon = new Map(rows.map((r) => [r.match.toLowerCase(), { name: r.name, item: r.item }]));
+      const esc = rows.map((r) => r.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      bpRe = new RegExp("(?<![\\w-])(" + esc.join("|") + ")(?![\\w-])", "gi");
+    } catch { /* no dataset yet — chat still works, just without auto-links */ }
+  }
+  /** Append `text`, turning any known blueprint name inside it into a link. */
+  function appendLinkified(frag, text) {
+    if (!bpRe) { frag.appendChild(document.createTextNode(text)); return; }
+    bpRe.lastIndex = 0;
+    let last = 0, m;
+    while ((m = bpRe.exec(text))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const canon = bpCanon.get(m[0].toLowerCase());           // …but link the real item's UUID
+      frag.appendChild(linkNode(
+        "bp",
+        m[0],                                                  // show what they typed…
+        bpUrl(canon?.item ?? m[0]),
+        !canon || canon.name === m[0]
+          ? "Open this blueprint on subliminal.gg"
+          : "Open “" + canon.name + "” on subliminal.gg",
+      ));
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  function renderBody(text) {
+    const frag = document.createDocumentFragment();
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    let mentionedMe = false;
+    // One pass over both patterns, so a mention inside a token can't double-render.
+    const parts = [];
+    let idx = 0;
+    const all = [];
+    text.replace(TOKEN_RE, (m, kind, name, id, at) => { all.push({ at, len: m.length, kind, name, id }); return m; });
+    text.replace(MENTION_RE, (m, handle, at) => { all.push({ at, len: m.length, kind: "at", name: handle }); return m; });
+    all.sort((a, b) => a.at - b.at);
+    for (const t of all) {
+      if (t.at < idx) continue;                       // overlapping match — first one wins
+      if (t.at > idx) parts.push({ text: text.slice(idx, t.at) });
+      parts.push(t);
+      idx = t.at + t.len;
+    }
+    if (idx < text.length) parts.push({ text: text.slice(idx) });
+    for (const p of parts) {
+      // Plain text is where auto-linking happens; an explicit [bp:…] token or an @mention is
+      // already something, and must not be re-scanned into something else.
+      if (p.text !== undefined) { appendLinkified(frag, p.text); continue; }
+      if (p.kind === "at") {
+        const s = document.createElement("span");
+        const isMe = p.name.toLowerCase() === me;
+        if (isMe) mentionedMe = true;
+        s.className = "at" + (isMe ? " me" : "");
+        s.textContent = "@" + p.name;
+        frag.appendChild(s);
+        continue;
+      }
+      if (p.kind === "build") {
+        // Refuse anything that isn't a real erkul link, and show it as PLAIN TEXT rather than
+        // dropping it — a message that silently loses part of itself is worse than one that
+        // shows a suspect link un-clickable.
+        const safe = erkulUrl(p.id ?? "");
+        if (!safe) { frag.appendChild(document.createTextNode(p.name)); continue; }
+        // The destination rides in the tooltip. Sub's ask: erkul's hash says nothing about the
+        // build, so the name is the sender's and hovering tells you where you're actually going.
+        frag.appendChild(linkNode("build", p.name, safe, p.name + " — " + safe));
+        continue;
+      }
+      const url = p.kind === "mission" ? missionUrl(p.id ?? p.name)
+        : p.kind === "bp" ? bpUrl(p.id ?? bpCanon.get(p.name.toLowerCase())?.item ?? p.name)
+        : toolsUrl(p.name);
+      frag.appendChild(linkNode(p.kind, p.name, url));
+    }
+    return { frag, mentionedMe };
+  }
+
   function msgRow(m) {
     const row = document.createElement("div");
     row.className = "msg";
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
+    row.appendChild(ts);
+    const who = m.from?.handle ?? "?";
     const nm = document.createElement("span");
     nm.className = "nm";
-    nm.textContent = m.from?.handle ?? "?";
-    nm.style.color = handleColor(m.from?.handle ?? "?");
+    nm.textContent = who;
+    nm.style.color = handleColor(who);
+    // Right-click a name in the log for the same menu as the member list.
+    nm.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(who, e.clientX, e.clientY); });
     row.appendChild(nm);
     if (m.from?.verified) {
       const v = document.createElement("span");
@@ -188,76 +711,397 @@
     sep.className = "sep"; sep.textContent = ":";
     row.appendChild(sep);
     const tx = document.createElement("span");
-    tx.className = "tx"; tx.textContent = m.text; // textContent — markup stays inert
+    tx.className = "tx";
+    const body = renderBody(m.text);   // builds NODES — still no innerHTML anywhere
+    tx.appendChild(body.frag);
     row.appendChild(tx);
-    const ts = document.createElement("span");
-    ts.className = "ts";
-    try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
-    row.prepend(ts);
+    if (body.mentionedMe) row.classList.add("mention");
     return row;
   }
 
-  function chanFor(tier) {
-    return view?.channels?.find((c) => c.kind === tier) ?? null;
+  // ── right-click a name: mention, friend, copy ────────────────────────────
+  // Friends are a LOCAL list (this machine), not a server relationship — nothing to accept,
+  // nothing to sync, and it can't leak who you fly with. It sorts them to the top of the
+  // member list and marks them.
+  const readFriends = () => { try { return JSON.parse(localStorage.getItem("chatFriends") || "[]"); } catch { return []; } };
+  let friends = readFriends();
+  const isFriend = (h) => friends.some((f) => f.toLowerCase() === h.toLowerCase());
+  function toggleFriend(h) {
+    friends = isFriend(h) ? friends.filter((f) => f.toLowerCase() !== h.toLowerCase()) : [...friends, h];
+    try { localStorage.setItem("chatFriends", JSON.stringify(friends)); } catch { /* private mode */ }
+    renderMembers();
   }
+  function mention(handle) {
+    const el = $("sendInput");
+    const pad = el.value && !el.value.endsWith(" ") ? " " : "";
+    el.value = el.value + pad + "@" + handle + " ";
+    // 🔑 Focus only — NEVER switch typing mode on from a helper. Typing mode asks the shell for
+    // a keyboard grab, and that grab makes the WHOLE canvas swallow clicks, so a mention or an
+    // emoji pick would silently take the mouse away from the game and nothing turned it back off
+    // (Sub, 2026-08-09: "the chat app is forcing me to click it"). The user turns it on
+    // deliberately with the pencil, and the pencil turns it off.
+    el.focus();
+  }
+  function closeCtx() { $("ctx").classList.remove("open"); }
+  function openCtx(handle, clientX, clientY) {
+    const ctx = $("ctx");
+    ctx.textContent = "";
+    const who = document.createElement("div");
+    who.className = "ct-who"; who.textContent = handle;
+    ctx.appendChild(who);
+    const add = (label, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label;
+      b.addEventListener("click", () => { closeCtx(); fn(); });
+      ctx.appendChild(b);
+    };
+    // A DM is the natural way to hand someone a join code, so it leads.
+    if (handle.toLowerCase() !== (view?.you?.handle ?? "").toLowerCase()) {
+      add("Send a direct message", () => openDm(handle));
+    }
+    add("Mention in chat", () => mention(handle));
+    add(isFriend(handle) ? "Remove from friends" : "Add to friends", () => toggleFriend(handle));
+    add("Open their profile", () => openLink("https://subliminal.gg/citizens/" + encodeURIComponent(handle)));
+    // Position INSIDE the panel — this popover hangs over the message list, and a menu that
+    // runs off the widget is a menu the shell never hit-tests.
+    const box = $("panel").getBoundingClientRect();
+    ctx.classList.add("open");
+    const w = ctx.offsetWidth, h = ctx.offsetHeight;
+    let x = clientX - box.left, y = clientY - box.top;
+    if (x + w > box.width - 4) x = Math.max(4, box.width - w - 4);
+    if (y + h > box.height - 4) y = Math.max(4, box.height - h - 4);
+    ctx.style.left = x + "px";
+    ctx.style.top = y + "px";
+    try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
+  const chans = () => view?.channels ?? [];
+  const chanOf = (ch) => chans().find((c) => c.ch === ch) ?? null;
+
   function renderTabs() {
     const tabs = $("tabs");
     tabs.textContent = "";
-    for (const tier of TIERS) {
-      const c = chanFor(tier);
+    for (const c of chans()) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "tab";
-      const label = c ? c.label
-        : tier === "global" ? "Global"
-        : tier === "region" ? (view?.regionLabel ?? "Server")
-        : (view?.shardLabel ?? "Shard");
-      b.textContent = label;
-      if (c) {
-        if (typeof c.count === "number") {
-          const n = document.createElement("span");
-          n.className = "n"; n.textContent = String(c.count);
-          b.appendChild(n);
-        }
-        if (unread.has(c.ch)) {
-          const u = document.createElement("span");
-          u.className = "unread";
-          b.appendChild(u);
-        }
-        b.classList.toggle("active", c.ch === activeCh);
-        b.addEventListener("click", () => { activeCh = c.ch; unread.delete(c.ch); renderTabs(); renderLog(); });
-      } else {
-        b.classList.add("dead");
-        b.title = tier === "region" ? "Joins automatically when you enter the PU" : "Joins automatically when you land on a shard";
+      b.className = "tab" + (c.ch === activeCh ? " active" : "");
+      b.textContent = c.label + (typeof c.count === "number" ? ` [${c.count}]` : "");
+      if (unread.has(c.ch)) {
+        const u = document.createElement("span");
+        u.className = "unread";
+        b.appendChild(u);
       }
+      b.addEventListener("click", () => select(c.ch));
       tabs.appendChild(b);
     }
   }
+
+  /** "N hidden — show" row. Hiding is only useful if getting them back is obvious. */
+  function unhideRow(hidden) {
+    const row = document.createElement("div");
+    row.className = "crow unhide";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = hidden.length + " hidden";
+    row.appendChild(nm);
+    const a = document.createElement("span");
+    a.className = "ct"; a.textContent = "show";
+    row.appendChild(a);
+    row.title = "Bring these back into the list";
+    row.addEventListener("click", () => {
+      for (const d of hidden) hiddenRooms.delete(d.ch);
+      listSave("chatHiddenRooms", [...hiddenRooms]);
+      renderChannels();
+    });
+    return row;
+  }
+
+  /* The left rail is BOTH your channel list and the browser for ones you could join —
+     the same thing EVE splits across two windows, which is why it reads as one list here. */
+  function renderChannels() {
+    const list = $("chanList");
+    list.textContent = "";
+    for (const g of GROUPS) {
+      const mine = chans().filter((c) => c.kind === g.kind);
+      let avail = g.kind === "browse" ? (view?.directory ?? []) : [];
+      // Conversations the server knows about that aren't open as tabs — including any that
+      // arrived while the app was closed, which is the case DMs exist for.
+      // A DM opened from the right-click menu has no server room yet, so it lives here.
+      const pending = g.kind === "dm" && pendingDm && !chanOf(dmChKey(pendingDm)) ? [pendingDm] : [];
+      // 🔑 ...and it must then be EXCLUDED from the waiting-conversations list, or the person
+      // you just opened appears twice — once as the pending tab and once as a thread — and the
+      // duplicate looks undeletable because a DM has no leave button until it exists server-side
+      // (Sub, 2026-08-09: "the last DM you were in shows up a second time").
+      const threads = g.kind === "dm"
+        ? (view?.dmThreads ?? []).filter((t) => !pending.some((h) => h.toLowerCase() === t.other.toLowerCase()))
+        : [];
+      // Rooms the user has waved away stay out of the browsable list until they ask for them.
+      const hiddenHere = avail.filter((d) => hiddenRooms.has(d.ch));
+      avail = avail.filter((d) => !hiddenRooms.has(d.ch));
+      if (!mine.length && !avail.length && !threads.length && !pending.length && !hiddenHere.length) continue;
+
+      const isShut = collapsed.has(g.kind);
+      const h = document.createElement("div");
+      h.className = "grp" + (isShut ? " shut" : "");
+      const tw = document.createElement("span");
+      tw.className = "tw"; tw.textContent = isShut ? "▸" : "▾";   // ▸ / ▾
+      h.appendChild(tw);
+      h.appendChild(document.createTextNode(g.title));
+      // The count is what makes a rolled-up group honest — you can see there is something in
+      // there without opening it.
+      const n = mine.length + avail.length + threads.length + pending.length;
+      if (isShut && n) {
+        const ct = document.createElement("span");
+        ct.className = "gct"; ct.textContent = String(n);
+        h.appendChild(ct);
+      }
+      h.title = (isShut ? "Show" : "Hide") + " " + g.title;
+      h.addEventListener("click", () => {
+        if (collapsed.has(g.kind)) collapsed.delete(g.kind); else collapsed.add(g.kind);
+        listSave("chatCollapsed", [...collapsed]);
+        renderChannels();
+      });
+      list.appendChild(h);
+      if (isShut) {
+        // Still offer the way back for rooms hidden inside a collapsed group.
+        if (hiddenHere.length) list.appendChild(unhideRow(hiddenHere));
+        continue;
+      }
+      for (const c of mine) {
+        const row = document.createElement("div");
+        row.className = "crow" + (c.ch === activeCh ? " on" : "");
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.textContent = c.label;
+        row.appendChild(nm);
+        // A padlock marks a room whose door you are holding — it tells you at a glance that
+        // what you say here isn't in the public directory.
+        if (c.privacy === "private") {
+          const lk = document.createElement("span");
+          lk.className = "lock"; lk.textContent = "🔒"; lk.title = "Private room";
+          row.appendChild(lk);
+        }
+        if (typeof c.count === "number") {
+          const ct = document.createElement("span");
+          ct.className = "ct"; ct.textContent = String(c.count);
+          row.appendChild(ct);
+        }
+        row.addEventListener("click", () => select(c.ch));
+        // Custom rooms and DMs can be closed — the rest follow your log and your org.
+        if (c.kind === "custom" || c.kind === "dm") {
+          const x = document.createElement("span");
+          x.className = "x"; x.textContent = "✕";
+          x.title = c.kind === "dm" ? "Close this conversation" : "Leave this channel";
+          x.addEventListener("click", (e) => { e.stopPropagation(); leave(c.ch); });
+          row.appendChild(x);
+        }
+        list.appendChild(row);
+      }
+      // Rooms you could join, grouped by what people are DOING in them (Sub, 2026-08-09) —
+      // one flat list of names says nothing about whether a room is worth opening.
+      const byCat = new Map();
+      for (const d of avail) {
+        const k = d.category ?? "social";
+        if (!byCat.has(k)) byCat.set(k, []);
+        byCat.get(k).push(d);
+      }
+      // Busiest activity first: the rooms with people in them are the ones worth showing.
+      const cats = [...byCat.entries()].sort((a, b) =>
+        b[1].reduce((n, d) => n + (d.count ?? 0), 0) - a[1].reduce((n, d) => n + (d.count ?? 0), 0)
+        || catLabel(a[0]).localeCompare(catLabel(b[0])));
+      for (const [slug, ds] of cats) {
+        const sh = document.createElement("div");
+        sh.className = "subgrp"; sh.textContent = catLabel(slug);
+        list.appendChild(sh);
+        for (const d of ds.sort((a, b) => (b.count ?? 0) - (a.count ?? 0) || a.label.localeCompare(b.label))) {
+          const row = document.createElement("div");
+          row.className = "crow";
+          row.title = "Join " + d.label;
+          const nm = document.createElement("span");
+          nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = d.label;
+          row.appendChild(nm);
+          const ct = document.createElement("span");
+          ct.className = "ct"; ct.textContent = String(d.count ?? 0);
+          row.appendChild(ct);
+          row.addEventListener("click", () => joinNamed(d.label, "join"));
+          // Wave a room away without touching membership — it is a room you could join, not one
+          // you are in, so this is purely "stop showing me this".
+          const hx = document.createElement("span");
+          hx.className = "x"; hx.textContent = "✕"; hx.title = "Hide this from the list";
+          hx.addEventListener("click", (e) => {
+            e.stopPropagation();
+            hiddenRooms.add(d.ch);
+            listSave("chatHiddenRooms", [...hiddenRooms]);
+            renderChannels();
+          });
+          row.appendChild(hx);
+          list.appendChild(row);
+        }
+      }
+      for (const handle of pending) {
+        const ch = dmChKey(handle);
+        const row = document.createElement("div");
+        row.className = "crow" + (ch === activeCh ? " on" : "");
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.textContent = handle;
+        row.appendChild(nm);
+        row.addEventListener("click", () => select(ch));
+        const x = document.createElement("span");
+        x.className = "x"; x.textContent = "✕"; x.title = "Close this conversation";
+        x.addEventListener("click", (e) => {
+          e.stopPropagation(); pendingDm = null;
+          if (activeCh === ch) select("global"); else renderChannels();
+        });
+        row.appendChild(x);
+        list.appendChild(row);
+      }
+      if (hiddenHere.length) list.appendChild(unhideRow(hiddenHere));
+      for (const t of threads) {
+        const row = document.createElement("div");
+        row.className = "crow";
+        row.title = "Open your conversation with " + t.other;
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = t.other;
+        row.appendChild(nm);
+        const dot = document.createElement("span");
+        dot.className = "dmdot";
+        row.appendChild(dot);
+        row.addEventListener("click", () => openDm(t.other));
+        list.appendChild(row);
+      }
+    }
+    if (!list.childElementCount) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No channels yet — they appear as you connect and fly.";
+      list.appendChild(e);
+    }
+  }
+
+  /* The private-room strip: the join code, and — if the room is yours — the invite box.
+     🔑 It is only ever shown for a room you are ALREADY IN. The code is what admits the next
+     person, so it must never appear anywhere someone outside the room can reach. */
+  function renderRoomBar() {
+    const bar = $("roomBar");
+    const c = chanOf(activeCh);
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    const mine = !!c && c.kind === "custom" && !!c.owner && c.owner === me;
+    const secret = !!c && c.kind === "custom" && c.privacy === "private" && !!c.code;
+    // The bar earns its space for a private room (it carries the join code) OR for any room you
+    // OWN (it carries Delete). A public room you don't own has nothing to put in it.
+    bar.classList.toggle("show", secret || mine);
+    bar.classList.toggle("owner", mine);
+    bar.classList.toggle("secret", secret);
+    if (secret) $("rbCode").textContent = c.code;
+    // The DM disclaimer rides the same render pass, so it can never disagree with which
+    // channel is actually on screen.
+    // 🔑 Keyed off the CHANNEL, not the channel object: a DM you have opened but not yet sent
+    // into has no server-side room, so chanOf() is null for it — and that is exactly the
+    // moment the warning matters most, right before someone types their first message.
+    $("dmWarn").classList.toggle("show", activeCh.startsWith("dm:"));
+    // Inviting is meaningless for a public room — anyone can already walk in — so the box only
+    // appears where it does something.
+    $("rbInvite").hidden = !secret;
+    $("rbInviteGo").hidden = !secret;
+  }
+
+  function renderMembers() {
+    const list = $("memList");
+    list.textContent = "";
+    const c = chanOf(activeCh);
+    const members = c?.members ?? [];
+    $("memCount").textContent = c && typeof c.count === "number" ? String(c.count) : "";
+    if (!members.length) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = c ? "Just you so far." : "";
+      list.appendChild(e);
+      return;
+    }
+    const me = (view?.you?.handle ?? "").toLowerCase();
+    // You first, then friends, then everyone alphabetically.
+    const rank = (h) => (h.toLowerCase() === me ? 0 : isFriend(h) ? 1 : 2);
+    for (const m of [...members].sort((a, b) => rank(a.handle) - rank(b.handle) || a.handle.localeCompare(b.handle))) {
+      const row = document.createElement("div");
+      row.className = "mrow" + (m.handle.toLowerCase() === me ? " you" : "");
+      row.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(m.handle, e.clientX, e.clientY); });
+      row.title = "Right-click for mention, friends and profile";
+      const nm = document.createElement("span");
+      nm.className = "nm"; nm.textContent = m.handle;
+      // Same colour the name carries in the log, so a member list and its messages agree.
+      if (m.handle.toLowerCase() !== me) nm.style.color = handleColor(m.handle);
+      row.appendChild(nm);
+      if (isFriend(m.handle)) {
+        const f = document.createElement("span");
+        f.className = "fav"; f.textContent = "★"; f.title = "Friend";
+        row.appendChild(f);
+      }
+      if (m.verified) {
+        const v = document.createElement("span");
+        v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
+        row.appendChild(v);
+      }
+      list.appendChild(row);
+    }
+  }
+
   function renderLog() {
     $("log").textContent = "";
-    const c = view?.channels?.find((x) => x.ch === activeCh);
+    const c = chanOf(activeCh);
     if (!c) {
-      if (view?.status === "connected") sys("Nothing here yet.");
+      if (view?.status === "connected") sys("Pick a channel on the left.");
       return;
     }
     for (const m of c.msgs) append(msgRow(m));
     $("log").scrollTop = $("log").scrollHeight;
   }
+
+  function select(ch) {
+    activeCh = ch;
+    unread.delete(ch);
+    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderLog();
+  }
+
+  /** Open a conversation with someone. Local until the first message — see `pendingDm`. */
+  function openDm(handle) {
+    const h = String(handle ?? "").trim();
+    if (!h) return;
+    if (h.toLowerCase() === (view?.you?.handle ?? "").toLowerCase()) { sys("You can't message yourself."); return; }
+    const ch = dmChKey(h);
+    if (!chanOf(ch)) pendingDm = h;
+    select(ch);
+    $("sendInput").focus();
+  }
+
+  function applyRails() {
+    $("panel").classList.toggle("no-left", !showLeft);
+    $("panel").classList.toggle("no-right", !showRight);
+    $("leftBtn").classList.toggle("active", showLeft);
+    $("rightBtn").classList.toggle("active", showRight);
+  }
+
   function renderAll() {
     const p = $("panel");
     p.classList.toggle("on", view?.status === "connected");
     p.classList.toggle("gated", view ? !view.hasIdentity : false);
     $("devIdRow").hidden = !view?.devServer;
-    // If the active channel disappeared (left the shard), fall back to global.
-    if (view && !view.channels.some((c) => c.ch === activeCh)) activeCh = "global";
-    renderTabs();
-    renderLog();
+    const you = view?.you;
+    $("whoami").textContent = you ? you.handle : "";
+    // A pending DM has no server-side room yet, so it is legitimately absent from `channels` —
+    // without this exception, opening one and then any state push would bounce you to Global.
+    const pendingCh = pendingDm ? dmChKey(pendingDm) : null;
+    if (view && activeCh !== pendingCh && !chans().some((c) => c.ch === activeCh)) {
+      activeCh = chans()[0]?.ch ?? "global";
+    }
+    // Once the real room exists the placeholder has done its job.
+    if (pendingCh && chanOf(pendingCh)) pendingDm = null;
+    applyRails();
+    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderLog();
     if (view?.status === "error" && view.error) sys(view.error);
     else if (view?.status === "connecting") sys("Connecting…");
     else if (view && view.status === "off" && view.hasIdentity) sys("Chat is off. Open the Chat widget on the overlay to connect.");
   }
 
-  // ── live stream from the sidecar ─────────────────────────────────────────────
+  // ── live stream from the sidecar ─────────────────────────────────────────
   function listen() {
     if (es) es.close();
     es = new EventSource("/chat/events");
@@ -266,15 +1110,23 @@
       try { f = JSON.parse(e.data); } catch { return; }
       if (f.type === "state") { view = { ...(view ?? {}), ...f.view }; renderAll(); }
       else if (f.type === "msg") {
-        const c = view?.channels?.find((x) => x.ch === f.msg.ch);
+        const c = chanOf(f.msg.ch);
         if (c) { c.msgs.push(f.msg); if (c.msgs.length > MAX_ROWS) c.msgs.splice(0, c.msgs.length - MAX_ROWS); }
+        // Being named is the one thing worth interrupting for — in ANY channel, whether or not
+        // you are looking at it, and never for your own messages.
+        const me = (view?.you?.handle ?? "").toLowerCase();
+        const namesMe = me && new RegExp("@" + me.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&") + "\\b", "i").test(f.msg.text);
+        if (namesMe && (f.msg.from?.handle ?? "").toLowerCase() !== me) announceMention(f.msg.from?.handle ?? "Someone", f.msg.ch);
         if (f.msg.ch === activeCh) append(msgRow(f.msg));
-        else { unread.add(f.msg.ch); renderTabs(); }
+        else { unread.add(f.msg.ch); renderTabs(); renderChannels(); }
       }
       else if (f.type === "presence") {
-        const c = view?.channels?.find((x) => x.ch === f.ch);
-        if (c) { c.count = f.count; renderTabs(); }
+        const c = chanOf(f.ch);
+        if (c) { c.count = f.count; if (Array.isArray(f.members)) c.members = f.members; }
+        renderTabs(); renderChannels();
+        if (f.ch === activeCh) renderMembers();
       }
+      else if (f.type === "dir") { if (view) view.directory = (f.channels ?? []).filter((d) => !chanOf(d.ch)); renderChannels(); }
       else if (f.type === "notice") sys(f.text);
     };
     es.onerror = () => { /* EventSource retries on its own */ };
@@ -290,28 +1142,465 @@
     listen();
   }
 
-  // ── sending ──────────────────────────────────────────────────────────────────
-  async function send() {
-    const el = $("sendInput");
-    const text = el.value.trim();
-    if (!text) return;
-    const c = view?.channels?.find((x) => x.ch === activeCh);
-    if (!c) { sys("Not in a channel yet."); return; }
-    el.value = "";
-    try {
-      const r = await fetch("/api/chat/send", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ch: activeCh, text }),
-      });
-      const d = await r.json().catch(() => null);
-      if (!r.ok || !d?.ok) { sys(d?.message || "Couldn't send that."); el.value = text; }
-    } catch {
-      sys("Couldn't reach the overlay service.");
-      el.value = text;
+  // ── emoji ────────────────────────────────────────────────────────────────
+  // Curated rather than exhaustive: a full Unicode set is a scroll you never finish, and the
+  // point here is the twenty you actually send while flying. SC-flavoured group first — o7 is
+  // the salute every SC player types, so it earns the top-left slot.
+  const EMOJI = [
+    ["Verse", [["o7", "🫡"], ["ship", "🚀"], ["mining", "⛏️"], ["salvage", "🔧"], ["cargo", "📦"], ["money", "💰"],
+               ["boom", "💥"], ["fire", "🔥"], ["skull", "💀"], ["medic", "🩺"], ["fuel", "⛽"], ["star", "⭐"]]],
+    ["Reactions", [["yes", "👍"], ["thumbsup", "👍"], ["no", "👎"], ["ok", "👌"], ["wave", "👋"], ["clap", "👏"],
+                   ["pray", "🙏"], ["muscle", "💪"], ["eyes", "👀"], ["brain", "🧠"], ["100", "💯"], ["check", "✅"]]],
+    ["Faces", [["smile", "🙂"], ["grin", "😄"], ["joy", "😂"], ["wink", "😉"], ["cool", "😎"], ["think", "🤔"],
+               ["sad", "🙁"], ["cry", "😭"], ["angry", "😠"], ["shock", "😱"], ["sweat", "😅"], ["shrug", "🤷"]]],
+    ["Signals", [["warn", "⚠️"], ["sos", "🆘"], ["question", "❓"], ["bang", "❗"], ["clock", "⏰"], ["pin", "📍"],
+                 ["up", "⬆️"], ["down", "⬇️"], ["left", "⬅️"], ["right", "➡️"], ["heart", "❤️"], ["party", "🎉"]]],
+  ];
+  /** :shortcode: → emoji, applied on send. Typing beats hunting a grid mid-flight. */
+  const SHORTCODES = new Map(EMOJI.flatMap(([, rows]) => rows.map(([name, ch]) => [name, ch])));
+  function expandShortcodes(text) {
+    return text.replace(/:([a-z0-9_+-]{1,20}):/gi, (m, name) => SHORTCODES.get(name.toLowerCase()) ?? m);
+  }
+  function buildEmojiPicker() {
+    const pop = $("emojiPop");
+    for (const [group, rows] of EMOJI) {
+      const h = document.createElement("div");
+      h.className = "egrp"; h.textContent = group;
+      pop.appendChild(h);
+      const row = document.createElement("div");
+      row.className = "erow";
+      for (const [name, ch] of rows) {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = ch; b.title = ":" + name + ":";
+        b.addEventListener("click", () => insertEmoji(ch));
+        row.appendChild(b);
+      }
+      pop.appendChild(row);
     }
   }
+  function insertEmoji(ch) {
+    const el = $("sendInput");
+    // Insert at the CARET, not the end — an emoji mid-sentence is the common case.
+    const s = el.selectionStart ?? el.value.length, e = el.selectionEnd ?? el.value.length;
+    el.value = el.value.slice(0, s) + ch + el.value.slice(e);
+    const at = s + ch.length;
+    el.setSelectionRange(at, at);
+    setEmojiPop(false);
+    // Keep the keyboard grab: over a focused game, losing it sends the next keys to SC.
+    // 🔑 Focus only — NEVER switch typing mode on from a helper. Typing mode asks the shell for
+    // a keyboard grab, and that grab makes the WHOLE canvas swallow clicks, so a mention or an
+    // emoji pick would silently take the mouse away from the game and nothing turned it back off
+    // (Sub, 2026-08-09: "the chat app is forcing me to click it"). The user turns it on
+    // deliberately with the pencil, and the pencil turns it off.
+    el.focus();
+  }
+  function setEmojiPop(on) {
+    $("emojiPop").classList.toggle("open", !!on);
+    $("emojiBtn").classList.toggle("active", !!on);
+    // The popover hangs OUTSIDE the widget's own box, so the shell must be told to hit-test it
+    // or it is unclickable over the game (the clipping/RSEL trap every widget chrome hits).
+    try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
 
-  // ── identity gate (A/B build: plain handle → config; release: site verification) ──
+  // ── being mentioned ──────────────────────────────────────────────────────
+  // HAL says it, because that is this app's voice everywhere else (mining call-outs, SC Feed).
+  // The clip is `c_mentioned.ogg`; if it is not bundled yet the browser voice reads the same
+  // line, so the feature works today and simply gets better when the clip lands — the same
+  // fallback the mining call-outs use for a missing clip.
+  // Two clips, stitched: "You have been mentioned in" + the CHANNEL. Same shape as the mining
+  // call-outs (a sentence clip plus a name clip) — see references/ocr.md.
+  // 🔑 The region is named but its DIGITS are not (Sub: "you don't have to mention the number"),
+  // and the shard is just "your shard" — you can only be in one at a time, so the number tells
+  // you nothing you don't already know. The region families are the ones actually seen in 480
+  // shared logs: US East, EU West, Asia-Pacific East, Asia-Pacific SE (plus the rest of CIG's
+  // scheme, in case a region appears that nobody has shared a log from yet).
+  const play = (src) => new Promise((res) => {
+    const a = new Audio(src);
+    a.onended = res; a.onerror = res;
+    a.play().catch(res);
+  });
+  function channelClip(ch) {
+    const c = chanOf(ch);
+    if (!c) return "n_ch_global";
+    if (c.kind === "global") return "n_ch_global";
+    if (c.kind === "shard") return "n_ch_shard";
+    if (c.kind === "org") return "n_ch_org";
+    if (c.kind === "custom") return "n_ch_custom";
+    // region: name the family, never the digits
+    const fam = (view?.region ?? "").toLowerCase().match(/^([a-z]+?)\d/);
+    return fam ? "n_ch_" + fam[1] : "n_ch_region";
+  }
+  async function announceMention(from, ch) {
+    const clip = channelClip(ch);
+    try {
+      const r = await fetch("/tts/" + clip + ".ogg", { method: "HEAD" });
+      if (r.ok) {
+        await play("/tts/c_mentionedin.ogg");
+        await play("/tts/" + clip + ".ogg");
+        return;
+      }
+    } catch { /* fall through to the browser voice */ }
+    try {
+      const where = chanOf(ch)?.label ?? "chat";
+      const u = new SpeechSynthesisUtterance("You have been mentioned in " + where);
+      u.rate = 0.9; u.pitch = 0.7;   // HAL is slow and low; the nearest a system voice gets
+      speechSynthesis.speak(u);
+    } catch { /* no speech engine — the gold highlight still marks it */ }
+  }
+
+  // ── slash commands ───────────────────────────────────────────────────────
+  // They rewrite what you SEND into a token the renderer turns into a link, so the message
+  // still reads as plain text for anyone on an older build. Kept deliberately short: these
+  // are typed mid-flight, one-handed.
+  // `inline: true` = the command produces a TOKEN inside a sentence, so it is offered wherever
+  // the caret is. The others rewrite the whole message and are start-of-message only.
+  const COMMANDS = [
+    { cmd: "/bp", args: "<blueprint>", hint: "link a blueprint on subliminal.gg", inline: true,
+      run: (rest) => rest ? "[bp:" + rest + "]" : null },
+    { cmd: "/item", args: "<item>", hint: "look it up on starcitizen.tools", inline: true,
+      run: (rest) => rest ? "[item:" + rest + "]" : null },
+    { cmd: "/mission", args: "<mission>", hint: "link a mission on subliminal.gg", inline: true,
+      run: (rest) => rest ? "[mission:" + rest + "]" : null },
+    // Name it yourself: erkul's share link is an opaque hash and its old API host is gone, so
+    // nothing can look the ship up. `run` is unused — /build is expanded in applyCommand because
+    // it takes TWO arguments and has to validate the second.
+    { cmd: "/build", args: "<name> <erkul link>", hint: "share an erkul loadout", inline: true,
+      run: (rest) => rest ? null : null },
+    { cmd: "/me", args: "<action>", hint: "speak in the third person",
+      run: (rest) => rest ? "* " + (view?.you?.handle ?? "") + " " + rest : null },
+    { cmd: "/shrug", args: "", hint: "¯\\_(ツ)_/¯", run: () => "¯\\_(ツ)_/¯" },
+  ];
+  /** Expand a leading slash command. Returns the text to send, or null to refuse. */
+  function applyCommand(text) {
+    // /me and /shrug rewrite the WHOLE message, so they only count at the very start.
+    if (/^\/(me|shrug)\b/i.test(text)) {
+      const sp = text.indexOf(" ");
+      const name = (sp < 0 ? text : text.slice(0, sp)).toLowerCase();
+      const rest = sp < 0 ? "" : text.slice(sp + 1).trim();
+      const c = COMMANDS.find((x) => x.cmd === name);
+      const out = c?.run(rest);
+      if (!out) { sys(c.cmd + " needs something after it - " + c.cmd + " " + c.args); return null; }
+      return out;
+    }
+    // /build <name> <erkul link>. Two arguments, and the second has to be VALIDATED — so it is
+    // expanded here rather than through a one-argument `run`. The name is free text (it is the
+    // sender's description) and the URL is the last whitespace-separated word, which is how
+    // people paste links: "/build Vulture salvage fit https://erkul.games/s/akeei4v0".
+    // Refusing loudly matters: a silently-dropped link looks like the app ate the message.
+    // 🔑 Matched ANYWHERE in the message, not just at the start. It was anchored `^\/build`
+    // while ALSO being advertised as an inline command in the slash menu — so
+    // "@Bob check this /build Vulture <link>" sent the raw text and produced no link, while the
+    // same command alone on a line worked (Sub, 2026-08-09). The other link commands were
+    // already inline; this one has to match them.
+    //
+    // The URL TERMINATES the command: everything between "/build" and the first link is the
+    // name, and anything after the link stays as ordinary message text. That is what lets it
+    // sit mid-sentence — "…want to try /build Vulture salvage fit <link> tonight?".
+    if (/(^|\s)\/build\b/i.test(text)) {
+      let matched = false, bad = false;
+      const out2 = text.replace(/(^|\s)\/build\s+(\S[^]*?)\s+(https?:\/\/\S+)/gi, (m, pre, name, link) => {
+        const safe = erkulUrl(link);
+        if (!safe) { bad = true; return m; }
+        matched = true;
+        return pre + "[build:" + name.trim().replace(/[[\]|]/g, "") + "|" + safe + "]";
+      });
+      if (matched) return out2;
+      // Nothing expanded — say which half is missing rather than sending the raw text, which
+      // reads as the app having eaten the message.
+      if (bad) { sys("That doesn't look like an erkul.games loadout link. In erkul, hit Share and paste the link it gives you."); return null; }
+      if (/(^|\s)\/build\s+\S+\s*$/i.test(text) && !/https?:\/\//i.test(text)) {
+        sys("/build needs a link too - /build Vulture salvage fit https://erkul.games/s/…"); return null;
+      }
+      sys("/build takes a name then a link - /build Vulture salvage fit https://erkul.games/s/…");
+      return null;
+    }
+    // 🔑 The link commands are INLINE and are normally turned into a token by accepting a
+    // suggestion. A leftover "/bp something" — typed and sent without picking — is expanded
+    // here so it still links rather than being sent as literal slash text. Anywhere in the
+    // message, any number of times.
+    let out = text.replace(/(^|\s)\/(bp|item|mission)\s+([^[\]]+?)(?=\s\/|$)/gi, (m, pre, kind, rest) => {
+      const k = kind.toLowerCase();
+      const name = rest.trim();
+      if (!name) return m;
+      if (k === "bp") {
+        const hit = bpCanon.get(name.toLowerCase());
+        return pre + "[bp:" + (hit?.name ?? name) + (hit?.item ? "|" + hit.item : "") + "]";
+      }
+      if (k === "item") return pre + "[item:" + name + "]";
+      return pre + "[mission:" + name + "]";   // no key: the site resolves what it can
+    });
+    // An unknown slash word at the very start is a typo worth naming, not silent plain text.
+    if (/^\//.test(out) && !/^\[/.test(out)) {
+      const first = out.split(/\s/)[0].toLowerCase();
+      if (!COMMANDS.some((c) => c.cmd === first)) {
+        sys("No command called " + first + ". Try " + COMMANDS.map((c) => c.cmd).join(", ") + ".");
+        return null;
+      }
+    }
+    return out;
+  }
+  // ── autocomplete ─────────────────────────────────────────────────────────
+  // Sub's ask: "I don't know exactly what to type." So every place a NAME is expected — a
+  // person after @, a blueprint after /bp, an item after /item — suggests as you type, and the
+  // command list itself completes. `sugg` is the current list; `suggAt` is where in the input
+  // the replacement starts, so accepting rewrites only the token being typed.
+  let sugg = [];
+  let suggIx = 0;
+  let suggAt = 0;
+  let bpTimer = null;
+
+  function closeSugg() { $("slash").classList.remove("open"); sugg = []; }
+
+  function drawSugg(rows, startAt) {
+    const box = $("slash");
+    sugg = rows; suggAt = startAt; suggIx = 0;
+    box.textContent = "";
+    if (!rows.length) { box.classList.remove("open"); return; }
+    rows.forEach((row, i) => {
+      const r = document.createElement("div");
+      r.className = "sc-row" + (i === 0 ? " on" : "");
+      const a = document.createElement("span");
+      a.className = row.mono ? "sc-cmd" : "sc-name";
+      a.textContent = row.label;
+      r.appendChild(a);
+      if (row.hint) {
+        const b = document.createElement("span");
+        b.className = "sc-hint"; b.textContent = row.hint;
+        r.appendChild(b);
+      }
+      r.addEventListener("mousedown", (e) => { e.preventDefault(); acceptSugg(i); });
+      box.appendChild(r);
+    });
+    box.classList.add("open");
+    try { host()?.summonCog?.(); } catch { /* not embedded */ }
+  }
+
+  function moveSugg(by) {
+    if (!sugg.length) return;
+    suggIx = (suggIx + by + sugg.length) % sugg.length;
+    [...$("slash").children].forEach((el, i) => el.classList.toggle("on", i === suggIx));
+    $("slash").children[suggIx]?.scrollIntoView({ block: "nearest" });
+  }
+
+  function acceptSugg(i) {
+    const row = sugg[i ?? suggIx];
+    if (!row) return;
+    const el = $("sendInput");
+    el.value = el.value.slice(0, suggAt) + row.insert;
+    closeSugg();
+    // 🔑 Focus only — NEVER switch typing mode on from a helper. Typing mode asks the shell for
+    // a keyboard grab, and that grab makes the WHOLE canvas swallow clicks, so a mention or an
+    // emoji pick would silently take the mouse away from the game and nothing turned it back off
+    // (Sub, 2026-08-09: "the chat app is forcing me to click it"). The user turns it on
+    // deliberately with the pencil, and the pencil turns it off.
+    el.focus();
+    // A command still needs its argument, so re-run the pass to offer the next thing.
+    renderSlash(el.value);
+  }
+
+  /** Who is in the channel you are looking at — the only people worth suggesting. */
+  const channelHandles = () => (chanOf(activeCh)?.members ?? []).map((m) => m.handle);
+
+  function renderSlash(text) {
+    const caretToken = (re) => {
+      const m = text.match(re);
+      return m ? { frag: m[1] ?? "", at: m.index ?? 0 } : null;
+    };
+    // 1. a command being typed.
+    // 🔑 Matched at the CARET, not only at the start of the message. The list used to be
+    // anchored `^\/\S*$`, so typing "hey Bob, want to run /" mid-sentence offered NOTHING and
+    // the inline link commands were undiscoverable unless you already knew to type the whole
+    // word (Sub, 2026-08-09: "the slash commands don't do anything when you type slash — the
+    // user may not even know"). Mid-message offers only the INLINE commands: /me and /shrug
+    // rewrite the entire message, so accepting one after the first word would silently mangle
+    // what you had already typed.
+    const slash = text.match(/(?:^|\s)(\/\S*)$/);
+    if (slash) {
+      const frag = slash[1].toLowerCase();
+      const atStart = slash.index === 0;
+      const pool = atStart ? COMMANDS : COMMANDS.filter((c) => c.inline);
+      const matches = pool.filter((c) => c.cmd.startsWith(frag));
+      drawSugg(matches.map((c) => ({
+        label: c.cmd + (c.args ? " " + c.args : ""), hint: c.hint, mono: true,
+        insert: c.cmd + (c.args ? " " : ""),
+      })), text.length - slash[1].length);
+      return;
+    }
+    // 2. a blueprint / item / mission name after its command — asked of the local dataset.
+    // 🔑 Matched ANYWHERE in the message, not just at the start (Sub: "type a message
+    // afterwards, or maybe even in the middle"). Accepting a suggestion replaces the command
+    // fragment IN PLACE with a finished token, so you carry on typing around it.
+    const bp = text.match(/(?:^|\s)\/(bp|item|mission)\s+([^/]*)$/i);
+    if (bp) {
+      const kind = bp[1].toLowerCase();
+      const frag = bp[2];
+      const start = text.length - frag.length - bp[1].length - 2;   // back over "/cmd "
+      clearTimeout(bpTimer);
+      if (frag.trim().length < 2) { closeSugg(); return; }
+      bpTimer = setTimeout(async () => {
+        try {
+          if (kind === "mission") {
+            const d = await (await fetch("/api/mission-search?q=" + encodeURIComponent(frag))).json();
+            const rows = d.missions ?? [];
+            if (!rows.length) { closeSugg(); return; }
+            drawSugg(rows.map((m) => ({
+              label: m.title, mono: false, hint: "subliminal.gg",
+              insert: "[mission:" + m.title + "|" + m.key + "] ",
+            })), start);
+            return;
+          }
+          const d = await (await fetch("/api/blueprint-search?q=" + encodeURIComponent(frag))).json();
+          const rows = d.names ?? [];
+          if (!rows.length) { closeSugg(); return; }
+          drawSugg(rows.map((r) => ({
+            label: r.name, mono: false,
+            hint: kind === "bp" ? "subliminal.gg" : "starcitizen.tools",
+            // The blueprint link needs the item UUID (the site's route); the wiki link needs
+            // only the name, and its page title is the name with underscores.
+            insert: kind === "bp"
+              ? "[bp:" + r.name + "|" + r.item + "] "
+              : "[item:" + r.name + "] ",
+          })), start);
+        } catch { closeSugg(); }
+      }, 120);   // debounce: this fires on every keystroke
+      return;
+    }
+    // 3. someone's name after @ — from the members actually in this channel
+    const at = text.match(/(?:^|\s)@([A-Za-z0-9._-]*)$/);
+    if (at) {
+      const frag = (at[1] ?? "").toLowerCase();
+      const start = text.length - frag.length - 1;   // include the "@"
+      const pool = channelHandles().filter((h) => h.toLowerCase() !== (view?.you?.handle ?? "").toLowerCase());
+      const hits = pool.filter((h) => h.toLowerCase().startsWith(frag)).slice(0, 8);
+      if (!hits.length) { closeSugg(); return; }
+      drawSugg(hits.map((h) => ({
+        label: h, mono: false, hint: isFriend(h) ? "friend" : "", insert: "@" + h + " ",
+      })), start);
+      return;
+    }
+    closeSugg();
+  }
+
+  // ── actions ──────────────────────────────────────────────────────────────
+  async function post(path, body) {
+    try {
+      const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.ok) { sys(d?.message || "That didn't work."); return false; }
+      return true;
+    } catch {
+      sys("Couldn't reach the overlay service.");
+      return false;
+    }
+  }
+  async function send() {
+    const el = $("sendInput");
+    const raw = el.value.trim();
+    if (!raw) return;
+    // A DM you have opened but not yet sent into has no room server-side, so it is not in
+    // `channels` — that is expected, not "not in a channel".
+    const openingDm = activeCh.startsWith("dm:") && !chanOf(activeCh);
+    if (!openingDm && !chanOf(activeCh)) { sys("Not in a channel yet."); return; }
+    const commanded = applyCommand(raw);
+    if (commanded === null) { el.value = ""; $("slash").classList.remove("open"); return; }
+    const text = expandShortcodes(commanded);
+    el.value = "";
+    setEmojiPop(false);
+    $("slash").classList.remove("open");
+    // The first message is what CREATES the conversation, on both ends; after that a DM is an
+    // ordinary room and goes down the ordinary path.
+    const ok = openingDm
+      ? await post("/api/chat/dm", { to: dmOther(activeCh), text })
+      : await post("/api/chat/send", { ch: activeCh, text });
+    if (!ok) el.value = raw;
+  }
+  async function joinNamed(name, mode) {
+    const n = (name ?? "").trim();
+    if (!n) { $("chanInput").focus(); return; }
+    if (await post("/api/chat/join", { name: n, mode })) $("chanInput").value = "";
+  }
+  function leave(ch) { void post("/api/chat/leave", { ch }); }
+
+  // ── creating a room ────────────────────────────────────────────────────────
+  /* Two questions, answered BEFORE the room exists: what activity it's for, and whether it is
+     listed. Doing it after the fact would mean a private room spends its first moments in the
+     public directory, which is the exact problem private rooms were added to solve. */
+  function setCreatePop(on) {
+    const pop = $("createPop");
+    pop.classList.toggle("open", !!on);
+    if (!on) return;
+    // Rebuild the activity list from the server's every time it opens, so a category added
+    // server-side shows up without an app release.
+    const sel = $("cpCat");
+    const keep = sel.value;
+    sel.textContent = "";
+    for (const c of (view?.categories ?? [])) {
+      const o = document.createElement("option");
+      o.value = c.slug; o.textContent = c.label;
+      sel.appendChild(o);
+    }
+    // 🔑 A <select> silently defaults to its FIRST option, so "no choice yet" is not an empty
+    // value — it is Org Operations, whatever happens to be first in the server's list. Default
+    // to the same Social / Other the server falls back to, or a mis-set room is the quiet
+    // outcome of never touching the dropdown.
+    sel.value = keep || "social";
+    if (!sel.value) sel.value = sel.options[0]?.value ?? "";
+    $("cpName").value = $("chanInput").value.trim();
+    updateCreateHint();
+    // 🔑 preventScroll, and place AFTER focusing. A plain .focus() scrolls the focused field
+    // into view, which scrolls #panel under an absolutely-positioned popover and slid it back
+    // out of the widget after the clamp had already run.
+    $("cpName").focus({ preventScroll: true });
+  }
+
+
+  function updateCreateHint() {
+    $("cpHint").textContent = $("cpPriv").value === "private"
+      ? "Not listed anywhere. You'll get a code to share, and you can invite RSI handles by name."
+      : "Listed for everyone under " + ($("cpCat").selectedOptions[0]?.textContent ?? "its activity") + ".";
+  }
+  async function createRoom() {
+    const name = $("cpName").value.trim();
+    if (!name) { $("cpName").focus(); return; }
+    const ok = await post("/api/chat/join", {
+      name, mode: "create", category: $("cpCat").value, privacy: $("cpPriv").value,
+    });
+    if (!ok) return;
+    setCreatePop(false);
+    $("chanInput").value = "";
+    $("cpName").value = "";
+  }
+  /* Deleting takes the room away from everyone in it and destroys its scrollback, so it asks
+     twice — but with the BUTTON, not a confirm() dialog: a native modal inside the overlay
+     steals focus from the game and there is no way to style it. Second click within 4s does it;
+     otherwise it forgets, so a stray click can never delete a room. */
+  let rbArmed = 0;
+  async function deleteRoom() {
+    const btn = $("rbDelete");
+    const c = chanOf(activeCh);
+    if (!c) return;
+    if (Date.now() > rbArmed) {
+      rbArmed = Date.now() + 4000;
+      btn.textContent = "Really delete?";
+      btn.classList.add("confirm");
+      setTimeout(() => {
+        if (Date.now() > rbArmed) { btn.textContent = "Delete"; btn.classList.remove("confirm"); }
+      }, 4100);
+      return;
+    }
+    rbArmed = 0;
+    btn.textContent = "Delete";
+    btn.classList.remove("confirm");
+    await post("/api/chat/delete-room", { ch: c.ch });
+  }
+
+  async function inviteToRoom() {
+    const h = $("rbInvite").value.trim();
+    if (!h) { $("rbInvite").focus(); return; }
+    if (await post("/api/chat/invite", { ch: activeCh, handle: h })) $("rbInvite").value = "";
+  }
+
+  // ── identity gate (dev builds only; production uses the verified account) ──
   async function saveHandle() {
     const h = $("handleInput").value.trim();
     if (!/^[A-Za-z0-9._-]{3,30}$/.test(h)) { $("handleInput").focus(); return; }
@@ -322,36 +1611,106 @@
         body: JSON.stringify({ chatHandle: h }),
       });
     } catch { sys("Couldn't reach the overlay service."); return; }
-    // The sidecar re-arms chat on that POST; refresh the snapshot so the gate drops now.
     load();
   }
 
   // ── typing mode (shared shell keyboard grab, same as Journal / Twitch Chat) ──
   let typing = false;
-  function setTyping(on) {
+  let typingField = "send"; // which field the grab was requested for
+  function setTyping(on, field) {
     typing = !!on;
-    for (const b of [$("typeBtn"), $("gateTypeBtn")]) b.classList.toggle("active", typing);
+    if (field) typingField = field;
+    $("typeBtn").classList.toggle("active", typing);
+    $("gateTypeBtn").classList.toggle("active", typing);
     $("gateTypeBtn").textContent = typing ? "✓ Done" : "✎ Type mode";
     if (typing) { if (host()) host().editStart(); else focusField(); }
     else { if (host()) host().editEnd(); const a = document.activeElement; if (a && a.blur) a.blur(); }
   }
   function focusField() {
-    ($("panel").classList.contains("gated") ? $("handleInput") : $("sendInput")).focus();
+    if ($("panel").classList.contains("gated")) { $("handleInput").focus(); return; }
+    ($(typingField === "chan" ? "chanInput" : "sendInput")).focus();
   }
   window.__chatFocus = () => { if (typing) focusField(); };
   window.__chatExitTyping = () => { if (typing) setTyping(false); };
 
   $("sendBtn").addEventListener("click", send);
-  $("sendInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
-  $("typeBtn").addEventListener("click", () => setTyping(!typing));
+  $("sendInput").addEventListener("keydown", (e) => {
+    // While suggestions are up the arrows/Tab/Enter drive THEM — Enter only sends once the
+    // list is dismissed, so accepting a name can never fire the message by accident.
+    if (sugg.length && $("slash").classList.contains("open")) {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveSugg(1); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); moveSugg(-1); return; }
+      if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); acceptSugg(); return; }
+    }
+    if (e.key === "Enter") { e.preventDefault(); send(); }
+  });
+  $("sendInput").addEventListener("input", () => renderSlash($("sendInput").value));
+  $("emojiBtn").addEventListener("click", () => setEmojiPop(!$("emojiPop").classList.contains("open")));
+  $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
+  $("joinBtn").addEventListener("click", () => joinNamed($("chanInput").value, "join"));
+  $("createBtn").addEventListener("click", () => setCreatePop(!$("createPop").classList.contains("open")));
+  $("cpCancel").addEventListener("click", () => setCreatePop(false));
+  $("cpGo").addEventListener("click", () => void createRoom());
+  $("cpPriv").addEventListener("change", updateCreateHint);
+  $("cpCat").addEventListener("change", updateCreateHint);
+  $("cpName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void createRoom(); } });
+  $("rbInviteGo").addEventListener("click", () => void inviteToRoom());
+  $("rbDelete").addEventListener("click", () => void deleteRoom());
+  $("rbInvite").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void inviteToRoom(); } });
+  $("rbCopy").addEventListener("click", () => {
+    const code = $("rbCode").textContent;
+    // The overlay runs without a secure-context clipboard in some shells, so say what happened
+    // either way rather than failing silently and looking like a dead button.
+    try { navigator.clipboard.writeText(code).then(() => sys("Join code " + code + " copied."),
+                                                    () => sys("Join code: " + code)); }
+    catch { sys("Join code: " + code); }
+  });
+  // Typing-mode focus rules, same as the other fields: focusing asks for the keyboard grab.
+  for (const id of ["cpName", "rbInvite"]) {
+    $(id).addEventListener("focus", () => { if (!typing) setTyping(true, "chan"); });
+  }
+  $("chanInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); joinNamed($("chanInput").value); } });
+  // Clicking into a field over the game needs the shell's keyboard grab, or the keystrokes
+  // reach Star Citizen instead.
+  $("chanInput").addEventListener("focus", () => { if (!typing) setTyping(true, "chan"); });
   $("gateTypeBtn").addEventListener("click", () => setTyping(!typing));
   $("gateSaveBtn").addEventListener("click", saveHandle);
   $("handleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveHandle(); } });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && typing) { e.preventDefault(); setTyping(false); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    // Escape closes the picker first, THEN typing mode — otherwise dismissing the grid also
+    // drops the keyboard grab and the next keystroke reaches the game.
+    if ($("ctx").classList.contains("open")) { e.preventDefault(); closeCtx(); return; }
+    if ($("createPop").classList.contains("open")) { e.preventDefault(); setCreatePop(false); return; }
+    if ($("slash").classList.contains("open")) { e.preventDefault(); $("slash").classList.remove("open"); return; }
+    if ($("emojiPop").classList.contains("open")) { e.preventDefault(); setEmojiPop(false); return; }
+    if (typing) { e.preventDefault(); setTyping(false); }
+  });
+  // Clicking anywhere else closes the picker (it hangs over the message list).
+  document.addEventListener("pointerdown", (e) => {
+    if ($("ctx").classList.contains("open") && !e.target.closest("#ctx")) closeCtx();
+    if (!$("emojiPop").classList.contains("open")) return;
+    if (e.target.closest("#emojiPop") || e.target.closest("#emojiBtn")) return;
+    setEmojiPop(false);
+  });
+
+  $("leftBtn").addEventListener("click", () => {
+    showLeft = !showLeft;
+    try { localStorage.setItem("chatLeft", showLeft ? "1" : "0"); } catch { /* private mode */ }
+    applyRails();
+  });
+  $("rightBtn").addEventListener("click", () => {
+    showRight = !showRight;
+    try { localStorage.setItem("chatRight", showRight ? "1" : "0"); } catch { /* private mode */ }
+    applyRails();
+  });
 
   // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
+  applyRails();
+  buildEmojiPicker();
+  loadAutoLinks();
   load();
   try { host()?.ready?.(); } catch { /* not embedded */ }
 </script>

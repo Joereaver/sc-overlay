@@ -394,6 +394,20 @@
      only inside the `scaled` branch of applyFrame(), so the moment the last scaled widget became
      a box NOTHING honoured --wangle any more and both angle sliders in the app moved a value
      nobody read. */
+  /* ── Fade when idle ──────────────────────────────────────────────────────────────────────
+     PER WIDGET, not per window (Sub, 2026-08-09: "I want all my widgets visible like they were
+     before... make it so the chat app specifically" fades). Window opacity cannot express that
+     — it is one number for the whole canvas — so the fade is CSS on each widget, with the
+     global setting acting only as the DEFAULT each widget inherits.
+     🔑 Hovering a widget brings THAT widget back to full: "drawn out until you actually want to
+     read it" is exactly a hover. Arrange mode and the override hotkey force everything to full.
+     🔑 `opacity` creates a stacking context, so the widget composites as ONE unit against the
+     game — a group's members can't show through each other. */
+  .widget, #panel.canvas { opacity: var(--wdim, 1); transition: opacity 0.18s ease; }
+  .widget:hover, .widget.touched, .widget.grouped:hover, #panel.canvas:hover, #panel.canvas.touched { opacity: 1; }
+  /* Never fade while arranging (you cannot place what you cannot see), while the override
+     hotkey is held on, or while a notifier is actually saying something. */
+  html.no-dim .widget, html.no-dim #panel.canvas, .widget.notifier.live, .widget.moving { opacity: 1 !important; }
   .widget { position: absolute; left: var(--wx, 40px); top: var(--wy, 60px); z-index: var(--wz, 20);
     transform-origin: 0 0; /* top-left anchor, so tilting doesn't walk the widget off its corner */
     transform: perspective(1700px) rotateY(var(--wangle, 0deg)); }
@@ -1153,6 +1167,15 @@
      past the panel's rounded ones. */
   #mreport { display: none; position: absolute; inset: 0; z-index: 24; border-radius: 12px; overflow: hidden; }
   #mreport.show { display: block; }
+  /* 🔑 The tracker has NO z-index of its own while every `.widget` carries `z-index: 20`, so
+     ANY widget overlapping it stacks on top — and the report card lives INSIDE the tracker.
+     Sub hit this the day the Chat widget arrived (820×480, defaulting near the tracker): the
+     top of the card answered clicks and everything below the overlap did not, which reads as
+     "the questions are dead" rather than "something invisible is over them". The card is a
+     modal moment — it already tells the shell so — so the tracker rises above the widgets for
+     as long as it is up, and drops straight back after. 40 clears widgets (20-22) and the
+     notifier layers (21-22) while staying under arrange chrome (49+) and the hub (61). */
+  #panel.canvas.mr-open { z-index: 40; }
   /* 🔑 OPAQUE, not the panel's own translucent gradient (Sub, 2026-07-30): the panel is
      semi-transparent by design so gameplay reads through it, but this card is dense text you
      only get 40 seconds to read, and the game showing through made it harder to read for no
@@ -1290,6 +1313,8 @@
   /* "inferred" qualifier on the rank readout — it's a lower bound, not exact rep. */
   .mi-row .mi-hint { font-size: 8.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--cyan-dim); }
+  /* "+2" after a truncated "Pick up at" list — dimmed so the place names stay dominant. */
+  .mi-row .mi-more { font-size: 9px; font-weight: 700; color: var(--cyan-dim); }
   .mi-sec { margin: 8px 0 2px; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: var(--cyan-dim); }
   .mi-rep { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
@@ -1655,8 +1680,19 @@
   new MutationObserver(updateBrandTab).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class"] });
   updateBrandTab();
 
+  let lastOpacityPref = null;
   function applyPrefs() {
     $("panel").classList.toggle("hide-catbar", !!PREFS.hideCatbar);
+    // Window opacity belongs to the SHELL, but the setting is saved through the sidecar — so
+    // the prefs broadcast is what carries a save from ANY settings surface to the window that
+    // has to act on it. Only on change: this runs on every mission tick.
+    // The GLOBAL fade default. Per-widget overrides win over it (see wDim); this is only what
+    // a widget inherits when it has no opinion of its own.
+    if (typeof PREFS.unfocusedOpacity === "number" && PREFS.unfocusedOpacity !== lastOpacityPref) {
+      lastOpacityPref = PREFS.unfocusedOpacity;
+      globalDim = PREFS.unfocusedOpacity;
+      if (typeof applyAllDims === "function") applyAllDims();
+    }
     // Manufacturer theme (mobiglas default, drake, or the auto-resolved theme from the
     // server) + left↔right HUD-align angle. A ?theme= query param overrides for testing.
     const root = document.documentElement;
@@ -2044,7 +2080,10 @@
     const giver = v.giver, type = v.missionType;
     const rg = v.reputationGained || [], rl = v.reputationLost || [];
     const payTxt = payoutText(v.payout);
-    if (!giver && !type && !rg.length && !rl.length && !payTxt) return "";
+    // Where the contract is OFFERED. Station-first from the dataset, capped for width —
+    // a player wants two or three places they can fly to, not a gazetteer.
+    const where = (v.whereToGet || []).slice(0, 4);
+    if (!giver && !type && !rg.length && !rl.length && !payTxt && !where.length) return "";
     const open = !!forceOpen || infoOpen;
     let body = "";
     if (open) {
@@ -2056,6 +2095,16 @@
       // pull FixedReward — then it appears here automatically.
       if (payTxt) rows.push('<div class="mi-row"><span class="mi-k">Reward</span><span class="mi-v pos">' + escapeHtml(payTxt) + "</span></div>");
       if (giver) rows.push('<div class="mi-row"><span class="mi-k">Faction</span><span class="mi-v">' + escapeHtml(giver) + "</span></div>");
+      // 🔑 "Pick up at" is only shown once the VARIANT is resolved. Same-title variants are
+      // offered in different regions drawing from DIFFERENT pools, so before the tracker
+      // knows which one you took, naming places would send you somewhere that cannot drop
+      // what this panel lists. view() returns an empty list while ambiguous for that reason.
+      if (where.length) {
+        rows.push('<div class="mi-row"><span class="mi-k">Pick up at</span><span class="mi-v">' +
+          escapeHtml(where.join(" · ")) +
+          ((v.whereToGet || []).length > where.length ? ' <span class="mi-more">+' + ((v.whereToGet || []).length - where.length) + "</span>" : "") +
+          "</span></div>");
+      }
       // Reputation gained/lost. A single entry that just repeats the giver shown above becomes
       // a clean "Reputation gained: +N rep" row (no redundant name); multiple entries — or rep
       // with a DIFFERENT faction — keep the labeled section with per-faction names.
@@ -2133,9 +2182,24 @@
   const REPORT_HOLD_MS = 40000;
   // Once someone touches the card the countdown is cancelled — Sub's rule: "if they start
   // interacting with it, let it stay up". This is the ceiling on that, NOT a second countdown:
-  // a card that can never close is the trapped-user bug this project keeps rediscovering, and
-  // three minutes is far past any honest interaction with three controls.
-  const REPORT_MAX_MS = 180000;
+  // a card that can never close is the trapped-user bug this project keeps rediscovering.
+  //
+  // 🔑 The ceiling only runs while the player is AWAY — pointer off the card and the overlay
+  // window not focused. It used to be a flat three minutes from the last click, which expired
+  // on someone who answered the first question, alt-tabbed into the game for a couple of
+  // minutes, and came back to finish: the card was gone and the remaining questions could
+  // never be answered (Sub, 2026-08-09: "will it eventually time out and not let me select
+  // whether or not I did it solo? that's what happened to me sometimes").
+  //
+  // Answers are POSTed per click, so nothing already given was lost — what was lost was the
+  // chance to give the rest, which is the crowdsourced data the card exists to collect.
+  //
+  // The anti-trap guarantee is intact and is why this is a pause rather than a removal:
+  // the timer is ARMED by default and re-arms the moment you leave, so a card you walk away
+  // from still tidies itself up. Ten minutes rather than three, because "alt-tab, fly the next
+  // leg, come back and finish answering" is the behaviour being supported and three was inside
+  // it. The ceiling only has to beat "forgotten", not "busy".
+  const REPORT_MAX_MS = 600000;
   let mrAt = null, mrTimer = null, mrRaf = null, mrContract = null, mrAnswers = {};
 
   const DIFFICULTY = [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]];
@@ -2250,6 +2314,8 @@
       document.body.classList.remove("bp-hidden");
       mrForcedPanel = true;
     }
+    // Lift the tracker above every other widget while the card is up — see #panel.canvas.mr-open.
+    $("panel")?.classList.add("mr-open");
     mrContract = c.contractKey;
     mrAnswers = {};
     // Pre-select whatever this player said last time about this contract, so a re-run shows
@@ -2271,6 +2337,7 @@
     $("mrAsk").innerHTML = reportAsk(c);
     const box = $("mreport");
     box.classList.remove("answered");
+    mrAnswered = false;   // a new completion starts on the plain countdown, not the ceiling
     box.classList.add("show");
     mrCountdown(REPORT_HOLD_MS);
   }
@@ -2334,10 +2401,33 @@
     mrTimer = setTimeout(hideReport, ms);
   }
 
+  /* The post-interaction ceiling. Runs only while the card is unattended: the pointer is off it
+     AND the overlay window doesn't have focus. Either of those means the player is still with
+     it, and a card that vanishes out from under someone mid-answer is the bug this replaced. */
+  let mrAnswered = false, mrHovered = false, mrWinFocused = false;
+  function armReportCeiling() {
+    if (!mrAnswered) return;
+    if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
+    if (mrHovered || mrWinFocused) return;      // being used — no deadline while that's true
+    mrTimer = setTimeout(hideReport, REPORT_MAX_MS);
+  }
+  {
+    const card = $("mreport");
+    card.addEventListener("mouseenter", () => { mrHovered = true; armReportCeiling(); });
+    card.addEventListener("mouseleave", () => { mrHovered = false; armReportCeiling(); });
+    // Alt-tabbing to the overlay is "I am dealing with this now"; alt-tabbing away re-arms.
+    // 🔑 Plain window events, not the shell's focus IPC: this has to hold in the widget harness
+    // and in a browser tab too, where overlayApi doesn't exist at all.
+    window.addEventListener("focus", () => { mrWinFocused = true; armReportCeiling(); });
+    window.addEventListener("blur", () => { mrWinFocused = false; armReportCeiling(); });
+  }
+
   function hideReport() {
     if (mrTimer) { clearTimeout(mrTimer); mrTimer = null; }
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
+    mrAnswered = false;
     $("mreport").classList.remove("show");
+    $("panel")?.classList.remove("mr-open"); // back into the normal stacking order
     if (mrForcedPanel) { document.body.classList.add("bp-hidden"); mrForcedPanel = false; }
     // 🔑 mrAt is NOT cleared. It's the "already shown this completion" marker, and the server
     // keeps serving v.completion for its full 30s hold — so clearing it here would make the very
@@ -2379,9 +2469,9 @@
     sendFeedback();
     // Interaction cancels the countdown (Sub's rule) — replaced by the ceiling, not by nothing.
     $("mreport").classList.add("answered");
-    if (mrTimer) clearTimeout(mrTimer);
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
-    mrTimer = setTimeout(hideReport, REPORT_MAX_MS);
+    mrAnswered = true;
+    armReportCeiling();
     const cur = current && current.completion;
     if (cur) $("mrAsk").innerHTML = reportAsk(cur); // only the answers change; leave the summary alone
   });
@@ -2716,6 +2806,7 @@
         for (const k of [
           "pickPng", "pickLog", "setOverlayHotkey", "setBindingHotkey", "setMiningHotkey",
           "setWebViewHotkey", "setInteractHotkey", "setMoveHotkey", "setFabClaimHotkey",
+          "setOpacityHotkey", "setUnfocusedOpacity",
           "setHoldMode", "resetLayout", "metrics", "openDataFolder", "isElevated",
           "restartAsAdmin", "getOverlayEnabled", "setOverlayEnabled", "onOverlayEnabledChanged",
           // 🔑 This list is an ALLOWLIST, so a method added to config-preload.cjs reaches the
@@ -2791,8 +2882,14 @@
       // and history (src/chat.ts) — this page only renders and posts, so closing or regrouping
       // it drops nothing. No socket exists unless this widget is open (chatOpen is the gate).
       key: "chat", page: "chat.html", title: "Chat",
-      def: { x: 900, y: 420 }, size: { w: 360, h: 460, minW: 280, maxW: 900, minH: 240, maxH: 1100 },
+      // Three panes (channels · chat · members), so it defaults wider than a single-column
+      // widget; the rails collapse from its header when the user wants it narrow.
+      def: { x: 760, y: 400 }, size: { w: 820, h: 480, minW: 280, maxW: 1600, minH: 240, maxH: 1200 },
       focusFn: "__chatFocus",
+      // 🔑 Without this the blueprint/wiki/profile links fell back to window.open, which inside
+      // the canvas is an Electron popup, not the user's browser. Every widget that links OUT
+      // needs openUrl re-exposed — the base bridge does not carry it.
+      host: () => ({ openUrl: (u) => window.overlayApi?.openUrl?.(u) }),
       // Don't strand the keyboard grab: hiding mid-typing would leave the interact key suspended.
       onHide: (w) => { try { frameWin(w)?.__chatExitTyping?.(); } catch { /* iframe gone */ } },
     },
@@ -2956,6 +3053,10 @@
           + '<input type="range" class="wcfg-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1" value="0"'
           + ' title="Tilt this widget left or right" />'
           + '<span class="wcfg-angv"></span></div>')
+        + '<div class="wcfg-row wcfg-dimrow"><span class="wcfg-lbl">Fade when idle</span>'
+        + '<input type="range" class="wcfg-dim" min="20" max="100" step="5" value="100"'
+        + ' title="How faint this widget goes while you are not using it. 100% never fades." />'
+        + '<span class="wcfg-dimv"></span></div>'
         + '</div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -3132,9 +3233,31 @@
   // widget's tilt was forgotten on restart even once it applied.
   function persistW(w) {
     const layout = w.shape === "scaled"
-      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text }
-      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text };
+      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text, dim: w.s.dim }
+      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text, dim: w.s.dim };
     window.overlayApi?.saveWidget?.(w.key, layout);
+  }
+
+  // ── Per-widget fade ─────────────────────────────────────────────────────────────────────
+  // `w.s.dim` is 0.2–1, or null meaning "inherit the global setting". Null is the default, so
+  // a user who never opens this control keeps exactly the behaviour they had.
+  let globalDim = 1;                       // from prefs.unfocusedOpacity
+  const wDim = (w) => (typeof w.s.dim === "number" ? w.s.dim : globalDim);
+  function applyDim(w) {
+    const el = wEl(w); if (!el) return;
+    el.style.setProperty("--wdim", String(Math.max(0.2, Math.min(1, wDim(w)))));
+    const inp = el.querySelector(".wcfg-dim");
+    if (inp) inp.value = String(Math.round(wDim(w) * 100));
+    const out = el.querySelector(".wcfg-dimv");
+    if (out) out.textContent = wDim(w) >= 1 ? "Off" : Math.round(wDim(w) * 100) + "%";
+  }
+  function applyAllDims() { for (const w of WIDGETS) applyDim(w); }
+  function setWidgetDim(w, pct) {
+    const v = Math.max(0.2, Math.min(1, Number(pct) / 100));
+    // 100% means "never fade" for THIS widget — stored explicitly rather than as null, so it
+    // stays opaque even if the global default is later turned down.
+    w.s.dim = v;
+    applyDim(w);
   }
 
   // ── Per-widget text size ────────────────────────────────────────────────────────────────
@@ -3481,12 +3604,13 @@
   }
   function resetWidget(w) {
     if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
-    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null;
+    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null; w.s.dim = null;
     centreWidget(w);
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
     applyTextScale(w);
+    applyDim(w);  // back to inheriting the global default
     showAngle(w); // the sliders have to fall back to flat with it
     persistW(w);
   }
@@ -3667,6 +3791,10 @@
   }
   // Re-read the chart PNG whenever the shell asks (a re-exported chart shows up without a restart).
   window.overlayApi?.onBindingChartReload?.(() => { try { frameWin(WBY.bindingChart)?.__bindingReload?.(); } catch { /* not loaded */ } });
+  // The shell's fade override: the hotkey, and arrange mode. Per-widget values are untouched —
+  // this only suspends the fade while it is on.
+  window.overlayApi?.onDimOverride?.((off) => document.documentElement.classList.toggle("no-dim", !!off));
+  window.overlayApi?.onDimGlobal?.((v) => { if (Number.isFinite(v)) { globalDim = v; applyAllDims(); } });
 
   // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
   document.addEventListener("click", (e) => {
@@ -3739,6 +3867,7 @@
         }
         applyFrame(w);
         applyTextScale(w);
+        applyDim(w);
         if (w.local) probeSettings(w); // no iframe load event will ever fire for it
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
@@ -3887,6 +4016,10 @@
       angIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetAngle(w, angIn.value); });
       angIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
       angIn?.addEventListener("pointerdown", (e) => e.stopPropagation()); // don't start a widget drag
+      const dimIn = el.querySelector(".wcfg-dim");
+      dimIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetDim(w, dimIn.value); });
+      dimIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
+      dimIn?.addEventListener("pointerdown", (e) => e.stopPropagation());
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
       el.querySelector(".wh-reset")?.addEventListener("click", (e) => { e.stopPropagation(); resetWidget(w); });
       // Engaging a widget's own chrome reveals its header too (the iframe can't report this one).

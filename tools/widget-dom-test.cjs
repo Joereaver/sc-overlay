@@ -669,19 +669,22 @@ const MININGSAY = `(async () => {
      JSON.stringify(said && said.slugs));
   ok("...with the target chime", chimed);
 
-  // debris and unknown
+  // debris
   targetSet.clear();
   say(scan("debris", 6000, [], true));
   await sleep(30);
   ok("debris says Debris", said && said.slugs && said.slugs[0] === "n_debris", JSON.stringify(said && said.slugs));
   ok("...without the target chime", !chimed);
-  const UNK = ["c_unknown1", "c_unknown2", "c_unknown3", "c_unknown4", "c_unknown5"];
-  const seen = new Set();
-  for (let i = 0; i < 60; i++) { say(scan("unknown", 2500 + i, [], true)); await sleep(2); if (said && said.slugs) seen.add(said.slugs[0]); }
-  ok("unknown says it doesn't know — and varies", seen.size >= 3 && [...seen].every(s => UNK.includes(s)),
-     [...seen].sort().join(", "));
-  ok("...and the panel says Unknown, not Debris",
-     document.getElementById("scanNow").textContent.includes("Unknown"),
+
+  // unknown — a value the game cannot draw as a signature. The tracker refuses these outright now
+  // (Sub, 2026-08-09: the scanner was popping open mid-flight off a HUD number whose glyph check
+  // passed), so one should never arrive here at all. A stale scan persisted from an older build
+  // still has to RENDER without speaking, which is what this asserts.
+  say(scan("unknown", 2500, [], true));
+  await sleep(30);
+  ok("an unknown value is silent even with the glyph confirmed", said === null, JSON.stringify(said));
+  ok("...and never chimes or claims to be a rock", !chimed
+     && document.getElementById("scanNow").textContent.includes("Unknown"),
      document.getElementById("scanNow").textContent.slice(0, 60));
 
   // the switch
@@ -689,18 +692,15 @@ const MININGSAY = `(async () => {
   say(scan("debris", 8000, [], true));
   await sleep(30);
   ok("the switch silences debris", said === null);
-  say(scan("unknown", 9999, [], true));
-  await sleep(30);
-  ok("...and unknown", said === null);
   say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
   await sleep(30);
   ok("...and an ambiguous read you aren't hunting", said === null);
   targetSet.add("Bexalite");
   say(scan("ore-or-debris", 18000, [rock("Bexalite", 5)], true));
   await sleep(30);
-  // 18,000 is the OTHER real collision (Bexalite x5, Rare, vs nine panels). The "call out debris &
-  // unknown" switch governs everything that isn't the ore you came for — but a target is never
-  // suppressed by it, hedged phrasing or not.
+  // 18,000 is the OTHER real collision (Bexalite x5, Rare, vs nine panels). The "call out debris"
+  // switch governs everything that isn't the ore you came for — but a target is never suppressed
+  // by it, hedged phrasing or not.
   ok("...but NEVER a target", said && said.slugs && said.slugs[0] === "c_mightbe"
        && said.slugs[1] === "n_bexalite",
      JSON.stringify(said && said.slugs));
@@ -1868,6 +1868,425 @@ const COGHIDE = `(async () => {
 // It must: prefer the fabricator capture over the clay render, fall back when there's no capture,
 // never re-announce a receipt it has already shown, ignore stale ones an SSE reconnect replays,
 // and queue a burst instead of flickering. Local URLs stand in for the two image endpoints.
+// The completion card's auto-hide. Sub, 2026-08-09: he picked the rating, alt-tabbed, came back
+// and could no longer answer the solo question. The post-answer ceiling was a flat deadline that
+// kept counting while he was away in the game.
+const REPORTHOLD = `(async () => {
+  ${PRELUDE}
+  const card = document.getElementById("mreport");
+  const up = () => card.classList.contains("show");
+
+  const completion = {
+    title: "Deep space hit", at: new Date().toISOString(), contractKey: "TEST_KEY",
+    aUEC: 42000, payout: null, durationMs: 600000, blueprints: [], giver: "Headhunters",
+    missionType: "Assassination", rank: null, reputationGained: [], aUecPerHour: null,
+    timesCompleted: 3, poolProgress: { owned: 7, total: 15 },
+    classification: { combat: null, activity: null, source: null },
+  };
+
+  // Caught deliberately: a throw here surfaces as a bare "harness error" with no line and no
+  // suite name, which costs a bisection run every time. Naming it is one line.
+  try { showReport(completion); } catch (e) { ok("showReport threw", false, e && e.message); return out; }
+  ok("the card shows", up());
+  ok("...on the plain countdown, not the ceiling", !card.classList.contains("answered"));
+
+  // Answering is what switches it to the ceiling.
+  const opt = card.querySelector(".mr-opt");
+  ok("the questions rendered", !!opt);
+  opt.click();
+  await sleep(30);
+  ok("answering marks the card answered", card.classList.contains("answered"));
+  ok("...and it is still up", up());
+
+  // 🔑 The reported bug: away in the game, the ceiling ran and took the card with it. Blur then
+  // focus must leave the card up and cancel any pending deadline.
+  window.dispatchEvent(new Event("blur"));
+  await sleep(20);
+  window.dispatchEvent(new Event("focus"));
+  await sleep(20);
+  ok("coming back to the overlay keeps the card up", up());
+  ok("...with no deadline pending while it has focus", (mrTimer === null), String(mrTimer));
+
+  // Hovering counts as using it too.
+  window.dispatchEvent(new Event("blur"));
+  card.dispatchEvent(new MouseEvent("mouseenter"));
+  await sleep(20);
+  ok("a pointer on the card also holds it open", (mrTimer === null));
+  card.dispatchEvent(new MouseEvent("mouseleave"));
+  await sleep(20);
+  // Unattended: pointer off AND the window blurred. The ceiling has to come back, or a
+  // forgotten card lives forever — the trapped-user bug.
+  ok("left unattended, the ceiling re-arms", (mrTimer !== null));
+
+  ok("Close still dismisses it", (document.getElementById("mrClose").click(), !up()));
+  return out;
+})()`;
+
+// Chat's outbound links and the slash menu. Two things Sub reported on 2026-08-09: a blueprint
+// link and a starcitizen.tools item lookup rendered identically (only the tooltip differed), and
+// the command menu never appeared mid-sentence so the inline commands were undiscoverable.
+const CHATLINKS = `(async () => {
+  const out = [];
+  const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await sleep(300);
+
+  // ── link kind tags ──────────────────────────────────────────────────────
+  const render = (t) => { const d = document.createElement("div"); d.className = "msg";
+    d.appendChild(renderBody(t).frag); return d; };
+  const tagOf = (t) => { const e = render(t).querySelector(".lkk"); return e ? e.textContent : null; };
+
+  ok("a blueprint token is tagged BP", tagOf("[bp:Deadbolt III Cannon|abc-123]") === "BP",
+     tagOf("[bp:Deadbolt III Cannon|abc-123]"));
+  ok("an item token is tagged ITEM", tagOf("[item:Deadbolt III Cannon]") === "ITEM",
+     tagOf("[item:Deadbolt III Cannon]"));
+  ok("a mission token is tagged MISSION", tagOf("[mission:Deep space hit|HH_Pyro_RegionB]") === "MISSION",
+     tagOf("[mission:Deep space hit|HH_Pyro_RegionB]"));
+  // The whole bug: the SAME name as a blueprint and as an item must not look the same.
+  ok("the same name reads differently as a blueprint and as an item",
+     tagOf("[bp:Deadbolt III Cannon|abc-123]") !== tagOf("[item:Deadbolt III Cannon]"));
+
+  const bpNode = render("[bp:Deadbolt III Cannon|abc-123]").querySelector(".lnk");
+  ok("the link still shows the plain name, not the token",
+     bpNode.querySelector(".lkt").textContent === "Deadbolt III Cannon",
+     bpNode.querySelector(".lkt").textContent);
+  ok("the tag and the text are SIBLINGS", bpNode.querySelector(".lkk .lkt") === null);
+  // text-decoration draws through descendants and a child cannot cancel it, so a tag nested
+  // inside the underlined span would be underlined too. Measure, don't assume.
+  const deco = (el) => getComputedStyle(el).textDecorationLine;
+  document.body.appendChild(bpNode.parentNode ? bpNode.parentNode : bpNode);
+  ok("the name is underlined", deco(bpNode.querySelector(".lkt")).indexOf("underline") >= 0,
+     deco(bpNode.querySelector(".lkt")));
+  ok("the tag is NOT underlined", deco(bpNode.querySelector(".lkk")).indexOf("underline") < 0,
+     deco(bpNode.querySelector(".lkk")));
+
+  // A mention next to a token must still render as a mention, not get swallowed by it.
+  const mixed = render("hey @Rytharr want to run [mission:Deep space hit|HH_Pyro_RegionB]");
+  ok("a mention beside a token survives", mixed.querySelector(".at") !== null);
+  ok("...and the token beside it still links", mixed.querySelector(".lnk") !== null);
+
+  // ── /build: an erkul loadout the sender names ───────────────────────────
+  // erkul's share link is an opaque hash and its old API host no longer exists, so nothing can
+  // look the ship up — the sender supplies the name.
+  ok("a valid link becomes a build token",
+     applyCommand("/build Vulture salvage fit https://erkul.games/s/akeei4v0")
+       === "[build:Vulture salvage fit|https://erkul.games/s/akeei4v0]",
+     applyCommand("/build Vulture salvage fit https://erkul.games/s/akeei4v0"));
+  ok("www and the older /loadout/ form both work",
+     applyCommand("/build Old one https://www.erkul.games/loadout/Zjbboonv")
+       === "[build:Old one|https://erkul.games/loadout/Zjbboonv]",
+     applyCommand("/build Old one https://www.erkul.games/loadout/Zjbboonv"));
+  ok("a non-erkul link is refused", applyCommand("/build Sneaky https://evil.example/s/abcd") === null);
+
+  // 🔑 INLINE. It was anchored to the start of the message while being offered as an inline
+  // command, so this exact shape sent raw text and produced no link (Sub, 2026-08-09).
+  const inl = applyCommand("hey @Rytharr check this /build Vulture salvage fit https://erkul.games/s/akeei4v0 what do you reckon");
+  ok("/build works MID-MESSAGE",
+     inl === "hey @Rytharr check this [build:Vulture salvage fit|https://erkul.games/s/akeei4v0] what do you reckon", inl);
+  ok("...and the text after the link survives", (inl || "").endsWith("what do you reckon"));
+  const two = applyCommand("/build A https://erkul.games/s/aaaa1111 and /build B https://erkul.games/s/bbbb2222");
+  // 🔑 split(), not a regex: this suite is a TEMPLATE LITERAL, so a backslash escape like
+  // \[ collapses before the regex is ever compiled and leaves an unterminated character
+  // class - which throws at runtime and surfaces as a bare "harness error".
+  ok("...twice in one message", (two || "").split("[build:").length - 1 === 2, two);
+  const rendered = render(inl || "");
+  ok("...and the mention beside it still renders", rendered.querySelector(".at") !== null);
+  ok("...with the build as a real link", rendered.querySelector(".lnk .lkk").textContent === "BUILD");
+  ok("a name with no link is refused", applyCommand("/build just a name") === null);
+  ok("no arguments at all is refused", applyCommand("/build") === null);
+
+  const bt = render("[build:Vulture salvage fit|https://erkul.games/s/akeei4v0]");
+  ok("a build token renders tagged BUILD", bt.querySelector(".lkk").textContent === "BUILD",
+     bt.querySelector(".lkk").textContent);
+  ok("...showing the sender's name", bt.querySelector(".lkt").textContent === "Vulture salvage fit",
+     bt.querySelector(".lkt").textContent);
+  ok("...with the destination on hover, so you see where it goes",
+     (bt.querySelector(".lnk").title || "").indexOf("https://erkul.games/s/akeei4v0") >= 0,
+     bt.querySelector(".lnk").title);
+
+  // 🔴 The token arrives over the wire from another player, so validating only on SEND
+  // guarantees nothing. A hostile client must not be able to put an arbitrary URL — least of
+  // all a javascript: one — into somebody's real browser.
+  for (const nasty of ["javascript:alert(1)", "https://evil.example/s/abcd",
+                       "https://erkul.games.evil.example/s/abcd", "https://erkul.games/../etc"]) {
+    const n = render("[build:Click me|" + nasty + "]");
+    ok("a hostile build URL never becomes a link: " + nasty.slice(0, 34),
+       n.querySelector(".lnk") === null && n.textContent.indexOf("Click me") >= 0,
+       n.innerHTML.slice(0, 60));
+  }
+
+  // ── the slash menu, mid-message ─────────────────────────────────────────
+  const box = document.getElementById("slash");
+  const input = document.getElementById("sendInput");
+  const openCmds = () => [...box.children].map((r) => r.querySelector(".sc-cmd").textContent.split(" ")[0]);
+  const type = (v) => { input.value = v; renderSlash(v); };
+
+  type("/");
+  ok("a lone slash at the start opens the menu", box.classList.contains("open"));
+  ok("...offering every command", openCmds().indexOf("/me") >= 0 && openCmds().indexOf("/bp") >= 0,
+     openCmds().join(" "));
+
+  // This is the reported bug: the menu was anchored to the start of the message.
+  type("hey Bob, want to run /");
+  ok("a slash MID-MESSAGE opens the menu too", box.classList.contains("open"));
+  ok("...offering the inline link commands",
+     openCmds().indexOf("/bp") >= 0 && openCmds().indexOf("/mission") >= 0, openCmds().join(" "));
+  // /me rewrites the WHOLE message, so accepting it after the first word would mangle what is
+  // already typed. It is start-only on purpose.
+  ok("...but NOT the whole-message commands",
+     openCmds().indexOf("/me") < 0 && openCmds().indexOf("/shrug") < 0, openCmds().join(" "));
+
+  type("hey Bob, want to run /mis");
+  ok("a partial command mid-message filters", openCmds().join(" ") === "/mission", openCmds().join(" "));
+  acceptSugg(0);
+  ok("accepting it keeps the text before the slash",
+     input.value === "hey Bob, want to run /mission ", JSON.stringify(input.value));
+
+  // A slash inside a word is just a slash - "km/h" must not pop a menu.
+  type("we were doing 400 km/h");
+  ok("a slash inside a word opens nothing", !box.classList.contains("open"), input.value);
+  type("plain text with no slash");
+  ok("ordinary text opens nothing", !box.classList.contains("open"));
+
+  // ── creating a room: activity + privacy ─────────────────────────────────
+  // Drive off a stubbed view: the harness has no chat connection, and these are pure UI rules.
+  const CATS = [
+    { slug: "org-ops", label: "Org Operations" },
+    { slug: "mining", label: "Mining" },
+    { slug: "social", label: "Social / Other" },
+  ];
+  view = {
+    status: "connected", you: { handle: "IMC-Subliminal", verified: true },
+    channels: [], directory: [], categories: CATS, dmThreads: [], hasIdentity: true,
+  };
+
+  setCreatePop(true);
+  ok("the create panel opens", document.getElementById("createPop").classList.contains("open"));
+
+  // 🔴 It shipped 6px ABOVE the whole widget: off the canvas, and outside the rect the shell
+  // hit-tests, so unclickable as well as invisible. MEASURE it — reasoning about the CSS is
+  // exactly what missed it: rail-foot is not a positioned ancestor.
+  // The final clamp runs on the next frame, deliberately: the hint re-wraps and focusing the
+  // name field can scroll the panel, both after the arithmetic. Measure once it has settled.
+  await sleep(120);
+  {
+    const p = document.getElementById("createPop").getBoundingClientRect();
+    const box = document.getElementById("panel").getBoundingClientRect();
+    const inside = p.top >= box.top - 1 && p.left >= box.left - 1
+                && p.bottom <= box.bottom + 1 && p.right <= box.right + 1;
+    ok("...INSIDE the widget, on every edge", inside,
+       "pop " + Math.round(p.top) + "," + Math.round(p.left) + "," + Math.round(p.bottom) + "," + Math.round(p.right)
+       + " vs panel " + Math.round(box.top) + "," + Math.round(box.left) + "," + Math.round(box.bottom) + "," + Math.round(box.right));
+    ok("...and has real size", p.width > 40 && p.height > 40, p.width + "x" + p.height);
+  }
+  const opts = [...document.getElementById("cpCat").options].map((o) => o.value);
+  ok("the activity dropdown is built from the SERVER list",
+     opts.join(",") === "org-ops,mining,social", opts.join(","));
+  ok("...defaulting to Social / Other", document.getElementById("cpCat").value === "social");
+  const privOpts = [...document.getElementById("cpPriv").options].map((o) => o.value);
+  ok("privacy offers public and private", privOpts.join(",") === "public,private", privOpts.join(","));
+  ok("...defaulting to public", document.getElementById("cpPriv").value === "public");
+
+  document.getElementById("cpPriv").value = "private";
+  updateCreateHint();
+  const hintPriv = document.getElementById("cpHint").textContent;
+  ok("the private hint explains how people get in",
+     hintPriv.indexOf("code") >= 0 && hintPriv.indexOf("invite") >= 0, hintPriv);
+  document.getElementById("cpPriv").value = "public";
+  document.getElementById("cpCat").value = "mining";
+  updateCreateHint();
+  ok("the public hint names the activity it will be listed under",
+     document.getElementById("cpHint").textContent.indexOf("Mining") >= 0,
+     document.getElementById("cpHint").textContent);
+  setCreatePop(false);
+  ok("it closes again", !document.getElementById("createPop").classList.contains("open"));
+
+  // ── the directory groups by activity ────────────────────────────────────
+  view.directory = [
+    { ch: "custom:a", label: "Halo Run", category: "mining", count: 4 },
+    { ch: "custom:b", label: "Quant Run", category: "mining", count: 1 },
+    { ch: "custom:c", label: "Sunday Ops", category: "org-ops", count: 9 },
+  ];
+  // Browse is collapsed by default, so open it before asserting on its contents.
+  localStorage.removeItem("chatCollapsed");
+  collapsed = new Set();
+  renderChannels();
+  const subs = [...document.querySelectorAll("#chanList .subgrp")].map((e) => e.textContent);
+  ok("rooms you could join are grouped by activity", subs.length === 2, subs.join(" | "));
+  ok("...busiest activity first", subs[0] === "Org Operations", subs.join(" | "));
+
+  // 🔴 The heading has to tell the truth: other people's rooms are NOT "Your channels".
+  const groupOf = (label) => {
+    const g = [...document.querySelectorAll("#chanList .grp")].find((x) => x.textContent.indexOf(label) >= 0);
+    const out = [];
+    for (let n = g && g.nextElementSibling; n && !n.classList.contains("grp"); n = n.nextElementSibling) {
+      const nm = n.querySelector(".nm"); if (nm) out.push(nm.textContent);
+    }
+    return out;
+  };
+  ok("browsable rooms live under Browse rooms",
+     groupOf("Browse rooms").indexOf("Sunday Ops") >= 0, groupOf("Browse rooms").join(","));
+  ok("...and NOT under Your channels",
+     groupOf("Your channels").indexOf("Sunday Ops") < 0, groupOf("Your channels").join(","));
+  // Real check, not a tautology: with no stored preference the default must roll Browse up.
+  localStorage.removeItem("chatCollapsed");
+  ok("Browse is rolled up by default", listPref("chatCollapsed", ["browse"]).indexOf("browse") >= 0,
+     JSON.stringify(listPref("chatCollapsed", ["browse"])));
+
+  // ── the private-room bar ────────────────────────────────────────────────
+  const bar = document.getElementById("roomBar");
+  view.channels = [{ ch: "global", kind: "global", label: "Global", members: [], msgs: [], count: 1 }];
+  activeCh = "global";
+  renderRoomBar();
+  ok("no room bar on an ordinary channel", !bar.classList.contains("show"));
+
+  // A public room you OWN still gets the bar — that is where Delete lives — but nothing that
+  // only makes sense for a private room.
+  view.channels.push({ ch: "custom:pub", kind: "custom", label: "Open Room", members: [], msgs: [],
+                       count: 2, privacy: "public", owner: "imc-subliminal" });
+  activeCh = "custom:pub";
+  renderRoomBar();
+  ok("a PUBLIC room you own shows the bar (for Delete)", bar.classList.contains("show"));
+  ok("...with no join code", !bar.classList.contains("secret"));
+  ok("...and no invite box — anyone can already walk in",
+     document.getElementById("rbInvite").hidden === true);
+  ok("...but Delete is reachable", bar.classList.contains("owner")
+     && document.getElementById("rbDelete").offsetParent !== null);
+
+  // A public room you do NOT own has nothing to put in the bar.
+  view.channels[1].owner = "someoneelse";
+  renderRoomBar();
+  ok("no room bar on a public room you don't own", !bar.classList.contains("show"));
+  view.channels[1].owner = "imc-subliminal";
+
+  view.channels.push({ ch: "custom:ops", kind: "custom", label: "Sunday Ops", members: [], msgs: [],
+                       count: 3, privacy: "private", owner: "imc-subliminal", code: "K7M2QD" });
+  activeCh = "custom:ops";
+  renderRoomBar();
+  ok("a private room you own shows the bar", bar.classList.contains("show"));
+  ok("...and offers Delete", document.getElementById("rbDelete").offsetParent !== null);
+  ok("...with the join code", document.getElementById("rbCode").textContent === "K7M2QD",
+     document.getElementById("rbCode").textContent);
+  ok("...and the invite box, because it's yours", bar.classList.contains("owner"));
+
+  // Someone who was let in can pass the code on, but must not be able to invite.
+  view.channels[2].owner = "someoneelse";
+  renderRoomBar();
+  ok("a private room you DON'T own still shows the code", bar.classList.contains("show"));
+  ok("...but hides the invite box", !bar.classList.contains("owner"));
+
+  // The padlock in the channel list marks what isn't in the public directory.
+  view.directory = [];
+  renderChannels();
+  const locked = [...document.querySelectorAll("#chanList .crow")]
+    .filter((r) => r.querySelector(".lock")).map((r) => r.querySelector(".nm").textContent);
+  ok("only the private room gets a padlock", locked.join(",") === "Sunday Ops", locked.join(","));
+
+  // ── DMs ─────────────────────────────────────────────────────────────────
+  ok("a DM key is the ordered lowercase pair", dmChKey("Rytharr") === "dm:imc-subliminal|rytharr",
+     dmChKey("Rytharr"));
+  ok("...and the same both ways round", dmChKey("Rytharr") === dmChKey("RYTHARR"));
+  ok("the other person is read back out of the key",
+     dmOther("dm:imc-subliminal|rytharr") === "rytharr");
+
+  // Sub's call: DMs carry a standing disclaimer. Private from other PLAYERS, not encrypted.
+  ok("no DM warning on an ordinary channel",
+     !document.getElementById("dmWarn").classList.contains("show"));
+
+  openDm("Rytharr");
+  ok("opening a DM selects it", activeCh === "dm:imc-subliminal|rytharr", activeCh);
+  ok("...and the DM shows the privacy disclaimer",
+     document.getElementById("dmWarn").classList.contains("show"));
+  ok("...which says it plainly, and cannot be dismissed",
+     /not.{0,4}encrypted/i.test(document.getElementById("dmWarn").textContent)
+       && document.getElementById("dmWarn").querySelector("button") === null,
+     document.getElementById("dmWarn").textContent.slice(0, 70));
+  const dmRows = [...document.querySelectorAll("#chanList .crow .nm")].map((e) => e.textContent);
+  ok("...and it appears in the rail before any message exists", dmRows.indexOf("Rytharr") >= 0,
+     dmRows.join(","));
+  // A pending DM has no server room, so a state re-render must not bounce you back to Global.
+  renderAll();
+  ok("a state refresh keeps you in the unsent conversation",
+     activeCh === "dm:imc-subliminal|rytharr", activeCh);
+
+  openDm("IMC-Subliminal");
+  ok("you can't open a conversation with yourself", activeCh === "dm:imc-subliminal|rytharr", activeCh);
+
+  // 🔑 A DM opened from the menu must NOT also appear as a waiting conversation — that is the
+  // duplicate Sub saw pinned at the top of his DM list, which looked undeletable because a
+  // pending DM has no leave button until the room exists server-side.
+  view.dmThreads = [{ other: "rytharr", lastAt: new Date().toISOString() }];
+  renderChannels();
+  const rytharrRows = [...document.querySelectorAll("#chanList .crow .nm")]
+    .filter((e) => e.textContent.toLowerCase() === "rytharr");
+  ok("an open DM is not duplicated as a waiting thread", rytharrRows.length === 1, rytharrRows.length);
+
+  // ── collapsing groups, and hiding rooms you don't care about ────────────
+  view.dmThreads = [];
+  view.directory = [
+    { ch: "custom:a", label: "Halo Run", category: "mining", count: 4 },
+    { ch: "custom:b", label: "Quant Run", category: "mining", count: 1 },
+  ];
+  localStorage.removeItem("chatCollapsed"); localStorage.removeItem("chatHiddenRooms");
+  collapsed = new Set(); hiddenRooms = new Set();
+  renderChannels();
+  const grpFor = (title) => [...document.querySelectorAll("#chanList .grp")]
+    .find((g) => g.textContent.indexOf(title) >= 0);
+  const rowsAfter = (title) => {
+    const g = grpFor(title); const out = [];
+    for (let n = g.nextElementSibling; n && !n.classList.contains("grp"); n = n.nextElementSibling) out.push(n);
+    return out;
+  };
+  ok("a group lists its rooms when open", rowsAfter("Your channels").length > 0);
+  grpFor("Your channels").click();
+  ok("clicking the header collapses it", rowsAfter("Your channels").length === 0);
+  ok("...and it shows a count so the group stays honest",
+     !!grpFor("Your channels").querySelector(".gct"), grpFor("Your channels").textContent);
+  grpFor("Your channels").click();
+  ok("clicking again expands it", rowsAfter("Your channels").length > 0);
+
+  // Hiding is a DISPLAY choice — it must never join or leave anything.
+  const before = rowsAfter("Your channels").length;
+  const haloRow = [...document.querySelectorAll("#chanList .crow")]
+    .find((r) => r.querySelector(".nm")?.textContent === "Halo Run");
+  haloRow.querySelector(".x").click();
+  ok("hiding a browsable room removes it from the list",
+     ![...document.querySelectorAll("#chanList .crow .nm")].some((e) => e.textContent === "Halo Run"));
+  ok("...and it is remembered", JSON.parse(localStorage.getItem("chatHiddenRooms")).includes("custom:a"));
+  const un = [...document.querySelectorAll("#chanList .crow.unhide")][0];
+  ok("...with an obvious way back", !!un && /1 hidden/.test(un.textContent), un && un.textContent);
+  un.click();
+  ok("...which restores it", [...document.querySelectorAll("#chanList .crow .nm")].some((e) => e.textContent === "Halo Run"));
+  ok("...and the room count is back where it started", rowsAfter("Your channels").length === before);
+  localStorage.removeItem("chatCollapsed"); localStorage.removeItem("chatHiddenRooms");
+
+  // ── the member list offers the SAME right-click menu as a name in the log ──
+  view.channels[0].members = [{ handle: "Rytharr", verified: true }, { handle: "IMC-Subliminal", verified: true }];
+  activeCh = "global";
+  renderMembers();
+  const mrow = [...document.querySelectorAll("#memList .mrow")]
+    .find((r) => r.querySelector(".nm")?.textContent === "Rytharr");
+  ok("the member list has a row for them", !!mrow);
+  mrow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 200, clientY: 200 }));
+  const ctxOpen = document.getElementById("ctx").classList.contains("open");
+  const items = [...document.getElementById("ctx").querySelectorAll("button")].map((b) => b.textContent);
+  ok("right-clicking a member opens the menu", ctxOpen);
+  ok("...with direct message, mention, friends and profile",
+     items.some((t) => /direct message/i.test(t)) && items.some((t) => /Mention/i.test(t))
+       && items.some((t) => /friends/i.test(t)) && items.some((t) => /profile/i.test(t)),
+     items.join(" | "));
+  closeCtx();
+
+  // Conversations the server knows about but that aren't open tabs.
+  view.dmThreads = [{ other: "zed", lastAt: new Date().toISOString() }];
+  renderChannels();
+  const waiting = [...document.querySelectorAll("#chanList .crow")]
+    .filter((r) => r.querySelector(".dmdot")).map((r) => r.querySelector(".nm").textContent);
+  ok("a conversation waiting for you is listed", waiting.join(",") === "zed", waiting.join(","));
+
+  return out;
+})()`;
+
 const UNLOCK = `(async () => {
   const out = [];
   const ok = (n, c, d) => out.push({ name: n, pass: !!c, detail: d === undefined ? "" : String(d) });
@@ -1993,6 +2412,8 @@ app.whenReady().then(async () => {
     fails += await run("background service down", SVCDOWN, null);
     fails += await run("chrome over the native view", VIEWMASK, null);
     fails += await run("mining call-outs by verdict", MININGSAY, null, null, "mining.html");
+    fails += await run("chat links + slash menu", CHATLINKS, null, null, "chat.html");
+    fails += await run("completion card holds while you use it", REPORTHOLD, null);
   } catch (e) {
     // The message alone ("Cannot read properties of null") doesn't say WHICH suite or line, and
     // hunting that by bisection wastes a run each time.

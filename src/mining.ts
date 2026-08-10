@@ -62,8 +62,9 @@ const DEBRIS_STEP = 2000;
  *    ambiguous, and only flying over will settle it, so it is announced either way: the player
  *    has to go look regardless.
  *  - `debris` — a whole number of panels, no rock at that value.
- *  - `unknown` — in range, but neither. Not ore, not debris; a real scan of something we can't
- *    name (or an OCR read that came out wrong).
+ *  - `unknown` — in range, but neither. The game never draws a signature that isn't one of the
+ *    165 legal values, so this is always a misread or a number off some other part of the HUD.
+ *    It is REFUSED — shown in the scan-read box, never announced (see applyMineableRead).
  *  A read outside [MIN_SIGNATURE, maxSignature] gets no verdict at all — see classifySignature. */
 export type ScanVerdict = "ore" | "ore-or-debris" | "debris" | "unknown";
 
@@ -208,9 +209,8 @@ export class MiningTracker extends EventEmitter {
    *  it can only ever land on a value the game could have shown.
    *
    *  `confirmed` = the frame showed the scan glyph beside this number, so a real scan produced it.
-   *  A verdict that names a rock is applied either way — matching the table is its own evidence —
-   *  but `debris` and `unknown` need that glyph, because without it a bare number is as likely to
-   *  be some other bit of HUD the OCR grabbed as it is a contact. */
+   *  It is a corroborator, never a licence: the VALUE decides. Ore and debris are self-evident
+   *  (they are values the game can draw); `unknown` is refused outright, glyph or not. */
   applyMineableRead(signature: number, confirmed = false): ScanOutcome {
     if (!this.data) return { verdict: null, announced: false, used: false, why: "no rock table loaded" };
     // 🔑 A repair needs the GLYPH. An exact table hit is evidence on its own, but a repaired one is
@@ -231,15 +231,25 @@ export class MiningTracker extends EventEmitter {
         ? `ignored (below the ${MIN_SIGNATURE.toLocaleString()} floor)`
         : `ignored (above ${this.maxSignature().toLocaleString()}, the largest signature the game can show — misread)` });
     }
-    // 🔑 AN EXACT DEBRIS VALUE IS ITS OWN EVIDENCE, the same way a rock-table hit is (Sub,
-    // 2026-08-03). Debris is a whole number of 2,000-unit salvage panels inside the signature
-    // range — only 13 values in the whole band — so a read landing exactly on one is already a
-    // far tighter filter than the glyph was ever asked to be. Requiring the glyph on top of that
-    // meant a HUD the glyph check couldn't handle made debris permanently un-announceable, which
-    // is exactly what happened. `unknown` still needs the glyph: it is, by definition, a number we
-    // cannot vouch for, so a stray HUD figure must not become a call-out.
-    if (!matches.length && !confirmed && verdict !== "debris") {
-      return out({ verdict, announced: false, used: false, why: `${verdict}, not announced (no scan glyph beside the number)` });
+    // 🔑 THE VALUE IS THE EVIDENCE, AND `unknown` HAS NONE (Sub, 2026-08-09, superseding the
+    // glyph-gate below it). Ore and debris are both self-evident: they are values the game can
+    // actually draw — 155 rock signatures plus 13 whole-panel debris counts, 165 of the 23,801
+    // numbers in the band, 0.69%. An `unknown` read is by definition NOT one of them, so it is
+    // never a real contact: it is an OCR misread the 6/8 repair couldn't rescue, or a number off
+    // some other part of the HUD entirely. Announcing it meant the glyph check alone decided,
+    // and the glyph check is a brightness-and-shape heuristic that any bright pin-sized mark
+    // beside a number can pass. It duly did: a flight-HUD line reading
+    //   `Gas | 0h 2m 52 | 16.98km | 6,730 | c | G | 0 | 28.70°,148.94°,49.51G`
+    // came back `confirmed`, and the scanner popped itself open and spoke while Sub was flying,
+    // nowhere near a rock. So an unknown value is now refused outright — no call-out, no flash,
+    // no auto-show — whatever the glyph says. It is still BROADCAST to the scan-read box (dim +
+    // struck through, see the `read` frame in overlay-server.ts), which is where a number the app
+    // threw away belongs: beside the real signature, where a player calibrating can see it.
+    // 🔑 This is why the glyph can stay a loose heuristic. Its only remaining job is gating the
+    // 6/8 repair, where a wrong answer costs one unrepaired read rather than a false call-out.
+    if (verdict === "unknown") {
+      return out({ verdict, announced: false, used: false,
+        why: `unknown, refused (not a rock signature and not a whole number of debris panels${confirmed ? "; scan glyph found, which is not enough on its own" : ""})` });
     }
     // Ignore a repeat read of the same signature (the loop polls the same rock every ~3s);
     // only a CHANGED signature is news worth re-announcing.
