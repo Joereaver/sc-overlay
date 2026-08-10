@@ -2191,6 +2191,71 @@ const CHATLINKS = `(async () => {
   openDm("IMC-Subliminal");
   ok("you can't open a conversation with yourself", activeCh === "dm:imc-subliminal|rytharr", activeCh);
 
+  // 🔑 A DM opened from the menu must NOT also appear as a waiting conversation — that is the
+  // duplicate Sub saw pinned at the top of his DM list, which looked undeletable because a
+  // pending DM has no leave button until the room exists server-side.
+  view.dmThreads = [{ other: "rytharr", lastAt: new Date().toISOString() }];
+  renderChannels();
+  const rytharrRows = [...document.querySelectorAll("#chanList .crow .nm")]
+    .filter((e) => e.textContent.toLowerCase() === "rytharr");
+  ok("an open DM is not duplicated as a waiting thread", rytharrRows.length === 1, rytharrRows.length);
+
+  // ── collapsing groups, and hiding rooms you don't care about ────────────
+  view.dmThreads = [];
+  view.directory = [
+    { ch: "custom:a", label: "Halo Run", category: "mining", count: 4 },
+    { ch: "custom:b", label: "Quant Run", category: "mining", count: 1 },
+  ];
+  localStorage.removeItem("chatCollapsed"); localStorage.removeItem("chatHiddenRooms");
+  collapsed = new Set(); hiddenRooms = new Set();
+  renderChannels();
+  const grpFor = (title) => [...document.querySelectorAll("#chanList .grp")]
+    .find((g) => g.textContent.indexOf(title) >= 0);
+  const rowsAfter = (title) => {
+    const g = grpFor(title); const out = [];
+    for (let n = g.nextElementSibling; n && !n.classList.contains("grp"); n = n.nextElementSibling) out.push(n);
+    return out;
+  };
+  ok("a group lists its rooms when open", rowsAfter("Your channels").length > 0);
+  grpFor("Your channels").click();
+  ok("clicking the header collapses it", rowsAfter("Your channels").length === 0);
+  ok("...and it shows a count so the group stays honest",
+     !!grpFor("Your channels").querySelector(".gct"), grpFor("Your channels").textContent);
+  grpFor("Your channels").click();
+  ok("clicking again expands it", rowsAfter("Your channels").length > 0);
+
+  // Hiding is a DISPLAY choice — it must never join or leave anything.
+  const before = rowsAfter("Your channels").length;
+  const haloRow = [...document.querySelectorAll("#chanList .crow")]
+    .find((r) => r.querySelector(".nm")?.textContent === "Halo Run");
+  haloRow.querySelector(".x").click();
+  ok("hiding a browsable room removes it from the list",
+     ![...document.querySelectorAll("#chanList .crow .nm")].some((e) => e.textContent === "Halo Run"));
+  ok("...and it is remembered", JSON.parse(localStorage.getItem("chatHiddenRooms")).includes("custom:a"));
+  const un = [...document.querySelectorAll("#chanList .crow.unhide")][0];
+  ok("...with an obvious way back", !!un && /1 hidden/.test(un.textContent), un && un.textContent);
+  un.click();
+  ok("...which restores it", [...document.querySelectorAll("#chanList .crow .nm")].some((e) => e.textContent === "Halo Run"));
+  ok("...and the room count is back where it started", rowsAfter("Your channels").length === before);
+  localStorage.removeItem("chatCollapsed"); localStorage.removeItem("chatHiddenRooms");
+
+  // ── the member list offers the SAME right-click menu as a name in the log ──
+  view.channels[0].members = [{ handle: "Rytharr", verified: true }, { handle: "IMC-Subliminal", verified: true }];
+  activeCh = "global";
+  renderMembers();
+  const mrow = [...document.querySelectorAll("#memList .mrow")]
+    .find((r) => r.querySelector(".nm")?.textContent === "Rytharr");
+  ok("the member list has a row for them", !!mrow);
+  mrow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 200, clientY: 200 }));
+  const ctxOpen = document.getElementById("ctx").classList.contains("open");
+  const items = [...document.getElementById("ctx").querySelectorAll("button")].map((b) => b.textContent);
+  ok("right-clicking a member opens the menu", ctxOpen);
+  ok("...with direct message, mention, friends and profile",
+     items.some((t) => /direct message/i.test(t)) && items.some((t) => /Mention/i.test(t))
+       && items.some((t) => /friends/i.test(t)) && items.some((t) => /profile/i.test(t)),
+     items.join(" | "));
+  closeCtx();
+
   // Conversations the server knows about but that aren't open tabs.
   view.dmThreads = [{ other: "zed", lastAt: new Date().toISOString() }];
   renderChannels();

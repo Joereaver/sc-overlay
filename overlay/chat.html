@@ -197,6 +197,13 @@
     background: rgba(0,0,0,.28); border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
 
   /* A channel row for a room you could join, grouped under its activity. */
+  #chanList .grp { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
+  #chanList .grp:hover { color: var(--cyan-bright); }
+  #chanList .grp .tw { font-size: 8px; opacity: .75; width: 8px; }
+  #chanList .grp .gct { margin-left: auto; font-size: 9.5px; opacity: .7;
+    background: rgba(var(--accent-rgb), .16); border-radius: 7px; padding: 0 5px; }
+  #chanList .crow.unhide { opacity: .55; font-style: italic; }
+  #chanList .crow.unhide:hover { opacity: 1; }
   #chanList .subgrp { font-size: 9.5px; color: var(--faint); text-transform: uppercase;
     letter-spacing: .06em; padding: 4px 8px 2px 14px; opacity: .8; }
   #chanList .crow .lock { flex: none; font-size: 9px; color: var(--gold); margin-left: 3px; }
@@ -467,6 +474,15 @@
     const pair = ch.slice("dm:".length).split("|");
     return pair.find((h) => h !== me) ?? pair[0] ?? "";
   }
+  /* Which rail groups are rolled up, and which browsable rooms the user has waved away.
+     Sub, 2026-08-09: "I have a long list of chats... it's just a lot on my screen right now."
+     🔑 Both are LOCAL preferences, not membership — hiding a room you could join is a display
+     choice and must never leave or join anything on the server. Persisted per machine. */
+  const listPref = (k, d) => { try { return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; } catch { return d; } };
+  const listSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
+  let collapsed = new Set(listPref("chatCollapsed", []));
+  let hiddenRooms = new Set(listPref("chatHiddenRooms", []));
+
   /* A DM you have opened but not yet sent into. The room does not exist server-side until the
      first message, so the tab is local until then — otherwise clicking "Message" would create
      an empty room for someone who then changed their mind. */
@@ -767,6 +783,26 @@
     }
   }
 
+  /** "N hidden — show" row. Hiding is only useful if getting them back is obvious. */
+  function unhideRow(hidden) {
+    const row = document.createElement("div");
+    row.className = "crow unhide";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    nm.textContent = hidden.length + " hidden";
+    row.appendChild(nm);
+    const a = document.createElement("span");
+    a.className = "ct"; a.textContent = "show";
+    row.appendChild(a);
+    row.title = "Bring these back into the list";
+    row.addEventListener("click", () => {
+      for (const d of hidden) hiddenRooms.delete(d.ch);
+      listSave("chatHiddenRooms", [...hiddenRooms]);
+      renderChannels();
+    });
+    return row;
+  }
+
   /* The left rail is BOTH your channel list and the browser for ones you could join —
      the same thing EVE splits across two windows, which is why it reads as one list here. */
   function renderChannels() {
@@ -774,16 +810,50 @@
     list.textContent = "";
     for (const g of GROUPS) {
       const mine = chans().filter((c) => c.kind === g.kind);
-      const avail = g.kind === "custom" ? (view?.directory ?? []) : [];
+      let avail = g.kind === "custom" ? (view?.directory ?? []) : [];
       // Conversations the server knows about that aren't open as tabs — including any that
       // arrived while the app was closed, which is the case DMs exist for.
-      const threads = g.kind === "dm" ? (view?.dmThreads ?? []) : [];
       // A DM opened from the right-click menu has no server room yet, so it lives here.
       const pending = g.kind === "dm" && pendingDm && !chanOf(dmChKey(pendingDm)) ? [pendingDm] : [];
-      if (!mine.length && !avail.length && !threads.length && !pending.length) continue;
+      // 🔑 ...and it must then be EXCLUDED from the waiting-conversations list, or the person
+      // you just opened appears twice — once as the pending tab and once as a thread — and the
+      // duplicate looks undeletable because a DM has no leave button until it exists server-side
+      // (Sub, 2026-08-09: "the last DM you were in shows up a second time").
+      const threads = g.kind === "dm"
+        ? (view?.dmThreads ?? []).filter((t) => !pending.some((h) => h.toLowerCase() === t.other.toLowerCase()))
+        : [];
+      // Rooms the user has waved away stay out of the browsable list until they ask for them.
+      const hiddenHere = avail.filter((d) => hiddenRooms.has(d.ch));
+      avail = avail.filter((d) => !hiddenRooms.has(d.ch));
+      if (!mine.length && !avail.length && !threads.length && !pending.length && !hiddenHere.length) continue;
+
+      const isShut = collapsed.has(g.kind);
       const h = document.createElement("div");
-      h.className = "grp"; h.textContent = g.title;
+      h.className = "grp" + (isShut ? " shut" : "");
+      const tw = document.createElement("span");
+      tw.className = "tw"; tw.textContent = isShut ? "▸" : "▾";   // ▸ / ▾
+      h.appendChild(tw);
+      h.appendChild(document.createTextNode(g.title));
+      // The count is what makes a rolled-up group honest — you can see there is something in
+      // there without opening it.
+      const n = mine.length + avail.length + threads.length + pending.length;
+      if (isShut && n) {
+        const ct = document.createElement("span");
+        ct.className = "gct"; ct.textContent = String(n);
+        h.appendChild(ct);
+      }
+      h.title = (isShut ? "Show" : "Hide") + " " + g.title;
+      h.addEventListener("click", () => {
+        if (collapsed.has(g.kind)) collapsed.delete(g.kind); else collapsed.add(g.kind);
+        listSave("chatCollapsed", [...collapsed]);
+        renderChannels();
+      });
       list.appendChild(h);
+      if (isShut) {
+        // Still offer the way back for rooms hidden inside a collapsed group.
+        if (hiddenHere.length) list.appendChild(unhideRow(hiddenHere));
+        continue;
+      }
       for (const c of mine) {
         const row = document.createElement("div");
         row.className = "crow" + (c.ch === activeCh ? " on" : "");
@@ -840,6 +910,17 @@
           ct.className = "ct"; ct.textContent = String(d.count ?? 0);
           row.appendChild(ct);
           row.addEventListener("click", () => joinNamed(d.label, "join"));
+          // Wave a room away without touching membership — it is a room you could join, not one
+          // you are in, so this is purely "stop showing me this".
+          const hx = document.createElement("span");
+          hx.className = "x"; hx.textContent = "✕"; hx.title = "Hide this from the list";
+          hx.addEventListener("click", (e) => {
+            e.stopPropagation();
+            hiddenRooms.add(d.ch);
+            listSave("chatHiddenRooms", [...hiddenRooms]);
+            renderChannels();
+          });
+          row.appendChild(hx);
           list.appendChild(row);
         }
       }
@@ -860,6 +941,7 @@
         row.appendChild(x);
         list.appendChild(row);
       }
+      if (hiddenHere.length) list.appendChild(unhideRow(hiddenHere));
       for (const t of threads) {
         const row = document.createElement("div");
         row.className = "crow";
