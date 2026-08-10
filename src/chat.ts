@@ -20,6 +20,7 @@
 // widget open/close within a run.
 
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { regionOfShard } from "./missions-parser.js";
 
 export interface ChatIdentity { handle: string; verified: boolean }
@@ -41,7 +42,24 @@ export interface ChatOptions {
   channels: string[];
 }
 
-export type ChannelKind = "global" | "region" | "shard" | "org" | "custom" | "dm";
+export type ChannelKind = "global" | "region" | "shard" | "dgs" | "org" | "custom" | "dm";
+
+/** Hash a DGS endpoint into a channel key.
+ *
+ *  Sub asked the fair question: the game server's IP is not a secret, so why hash it? Two
+ *  reasons, and neither is player privacy - it is CIG's address, not a player's.
+ *  1. A channel key is BROADCAST to every connected user. Raw, it would publish a live,
+ *     continuously-updated map of which DGSs are up and who is on them. That is someone
+ *     else's infrastructure and a targeting vector; it is not ours to hand out.
+ *  2. Our own log-sharing strips IPs. Re-publishing them through chat would quietly undo that.
+ *  It costs nothing: keys are only ever compared for EQUALITY, so a hash groups people
+ *  identically. 10 hex chars is 40 bits - collision-free at any plausible server count.
+ *  Salted with the shard id, so the same endpoint in two shards cannot be conflated and the
+ *  digest is not a plain rainbow-table lookup of "ip:port". */
+export function dgsKey(shard: string | null, dgs: string | null): string | null {
+  if (!shard || !dgs) return null;
+  return createHash("sha256").update(shard + "|" + dgs).digest("hex").slice(0, 10);
+}
 
 /** The activity a custom room is for. The list is the SERVER's (welcome frame) — this type is
  *  just "some slug", so adding a category server-side needs no client release. */
@@ -110,6 +128,8 @@ export class ChatClient extends EventEmitter {
   private lastError: string | null = null;
   private you: ChatIdentity | null = null;
   private shard: string | null = null; // full id from the log; region derives from it
+  /** "<ip>:<port>" of the DGS. Kept ONLY to derive the hashed room key — never sent. */
+  private dgs: string | null = null;
   private channels = new Map<string, ChannelState>();
   /** Public custom-room directory as the server last broadcast it. Private rooms are never in
    *  it — the server omits them, so there is nothing to filter here. */
@@ -152,9 +172,15 @@ export class ChatClient extends EventEmitter {
   }
 
   /** The parser saw a shard change (null = left the PU). Region/shard channels follow. */
-  applyShard(shard: string | null): void {
-    if (shard === this.shard) return;
+  applyShard(shard: string | null, dgs?: string | null): void {
+    // 🔑 The DGS moves on its own. Server meshing hands you between DGSs as you travel WITHIN
+    // one shard, so a change with the same shard id is a real move to different neighbours and
+    // must re-key the room. Update Shard Id carries no endpoint, so `undefined` means "no news"
+    // and keeps the current value; an explicit null means we left the PU.
+    const nextDgs = dgs === undefined ? this.dgs : dgs;
+    if (shard === this.shard && nextDgs === this.dgs) return;
     this.shard = shard;
+    this.dgs = shard ? nextDgs : null;
     this.sendLoc();
     this.pushState(); // labels update even while disconnected
   }
@@ -220,7 +246,13 @@ export class ChatClient extends EventEmitter {
 
   private sendLoc(): void {
     if (this.status !== "connected") return;
-    this.wsSend({ t: "loc", region: regionOfShard(this.shard), shard: this.shard });
+    // 🔑 The HASH goes on the wire, never the endpoint. The server keys the room on whatever
+    // it is given, so if the raw ip:port ever left this process it would be published to every
+    // user of the channel.
+    this.wsSend({
+      t: "loc", region: regionOfShard(this.shard), shard: this.shard,
+      dgs: dgsKey(this.shard, this.dgs),
+    });
   }
 
   // ── The chat-server protocol (chat-server/server.mjs) ─────────────────────
@@ -329,6 +361,7 @@ export class ChatClient extends EventEmitter {
         : ch === "global" ? "global"
         : ch.startsWith("region:") ? "region"
         : ch.startsWith("shard:") ? "shard"
+        : ch.startsWith("dgs:") ? "dgs"
         : ch.startsWith("org:") ? "org"
         : ch.startsWith("dm:") ? "dm"
         : ch.startsWith("custom:") ? "custom"
@@ -343,6 +376,9 @@ export class ChatClient extends EventEmitter {
     if (kind === "global") return "Global";
     if (kind === "region") return regionLabel(ch.slice("region:".length));
     if (kind === "shard") return shardLabel(ch.slice("shard:".length));
+    // The key is a digest, so it can't be rendered — and it would mean nothing to a player if
+    // it could. What matters is what it MEANS: these are the people around you right now.
+    if (kind === "dgs") return "Nearby";
     // A DM is titled with the OTHER person. The key holds both handles lowercased, so pick the
     // one that isn't you; the server's joined frame carries their real casing and overwrites it.
     if (kind === "dm") {
@@ -436,7 +472,7 @@ export class ChatClient extends EventEmitter {
   /** Widget bootstrap + /api/chat/state. Channel order is the fixed hierarchy. */
   view() {
     // DMs sort last: they're a conversation list, not part of the channel hierarchy.
-    const order = { global: 0, region: 1, shard: 2, org: 3, custom: 4, dm: 5 } as const;
+    const order = { global: 0, region: 1, shard: 2, dgs: 3, org: 4, custom: 5, dm: 6 } as const;
     const channels = [...this.channels.values()]
       .sort((a, b) => order[a.kind] - order[b.kind] || a.ch.localeCompare(b.ch))
       .map((c) => ({

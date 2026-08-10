@@ -78,7 +78,12 @@ export type MissionEvent =
    *  ("pub_use1b_12326004_040"): env _ region/AZ _ cluster _ instance. Null = left the PU
    *  (the frontend runs on the sentinel "local_shard", which is not a place people meet).
    *  Drives the chat channels: region = segment 2, shard = the whole id. */
-  | { kind: "shard"; ts: string | null; shard: string | null };
+  | { kind: "shard"; ts: string | null; shard: string | null;
+      /** "<ip>:<port>" of the DGS from the Join PU line — the finest-grained "who is
+       *  actually near me" signal the log carries. Null on Update Shard Id (that line
+       *  names no endpoint) and when leaving the PU. NEVER used raw as a channel key:
+       *  see the hash in chat.ts. */
+      dgs?: string | null };
 
 const UUID = "[0-9a-fA-F-]{36}";
 
@@ -266,7 +271,18 @@ export function parseMissionEvent(e: LogEvent): MissionEvent | null {
     case "Join PU": {
       const sh = m.match(/shard\[([\w-]+)\]/);
       if (!sh) return null;
-      return { kind: "shard", ts: e.timestamp, shard: sh[1] === "local_shard" ? null : sh[1] };
+      // address + port is the DGS — the Dynamic Game Server actually running your area, and the
+      // only thing on this line that two players in the same place share. Measured across 480
+      // shared logs: 5–15 distinct ports per shard id, matching Sub's "six to ten DGSs, CIG
+      // changes it per patch". The other candidates do NOT work: `locationId` was byte-identical
+      // across two of his joins on different shards (it is his spawn point), and `id[uuid]` on
+      // the sibling line belongs to exactly one player each (a client session id).
+      const ep = m.match(/address\[([0-9a-fA-F.:]+)\]\s*port\[(\d+)\]/);
+      return {
+        kind: "shard", ts: e.timestamp,
+        shard: sh[1] === "local_shard" ? null : sh[1],
+        dgs: ep && sh[1] !== "local_shard" ? `${ep[1]}:${ep[2]}` : null,
+      };
     }
 
     // Belt-and-braces for a mid-session move: "<Update Shard Id> New Shard Id:

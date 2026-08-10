@@ -70,6 +70,10 @@ const HISTORY_KEEP = 200;   // ring size per room
 const HISTORY_SEND = 50;    // sent on join
 const MSG_MAX = 400;        // chars
 const RATE_N = 5, RATE_WINDOW_MS = 10_000; // msgs per window per connection
+// Access ATTEMPTS (join / dm / invite / delete) get their own, tighter budget. A legitimate
+// client sends a handful of joins on connect and then almost none; a code-guesser sends
+// thousands. 12 per 30s is far above real use and far below useful brute force.
+const ACT_N = 12, ACT_WINDOW_MS = 30_000;
 
 // CHAT_DATA_DIR: tests point this at a scratch dir so their bans/rooms never touch real state.
 const dataDir = process.env.CHAT_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), "data");
@@ -385,12 +389,23 @@ async function verifyIdentity(hello) {
 // ── Location → channel names. Validate hard: these strings come from clients. ──
 const REGION_RE = /^[a-z0-9]{3,12}$/;
 const SHARD_RE = /^[a-z0-9][a-z0-9_-]{4,63}$/i;
+// Exactly what dgsKey() emits: 10 lowercase hex characters. Nothing else is a DGS key.
+const DGS_RE = /^[0-9a-f]{10}$/;
 function locChannels(loc) {
   const out = [];
   const region = typeof loc.region === "string" ? loc.region.toLowerCase() : "";
   const shard = typeof loc.shard === "string" ? loc.shard : "";
+  const dgs = typeof loc.dgs === "string" ? loc.dgs.toLowerCase() : "";
   if (REGION_RE.test(region)) out.push(`region:${region}`);
   if (SHARD_RE.test(shard) && shard !== "local_shard") out.push(`shard:${shard.toLowerCase()}`);
+  // The DGS - the Dynamic Game Server running your area. Three tiers, finest last:
+  //   region  use1b            everyone in US East
+  //   shard   pub_use1b_..040  the persistent universe instance you are in
+  //   dgs     <hash>           the server actually running where you ARE
+  // 🔑 The client sends a HASH of ip:port, never the endpoint, so this server never learns and
+  // never rebroadcasts a CIG address. Shape-checked so the key space stays exactly what the
+  // client can produce and a crafted value cannot smuggle in a prefix.
+  if (DGS_RE.test(dgs)) out.push(`dgs:${dgs}`);
   return out;
 }
 
@@ -467,7 +482,8 @@ wss.on("connection", (ws) => {
     ws,
     handle: null, handleLower: null, verified: false,
     channels: new Set(),
-    stamps: [], // send timestamps for the rate limit
+    stamps: [], // send timestamps for the message rate limit
+    acts: [],   // and for access attempts (join / dm / invite / delete)
     alive: true,
     send(frame) { if (ws.readyState === 1) ws.send(JSON.stringify(frame)); },
   };
@@ -506,11 +522,27 @@ wss.on("connection", (ws) => {
     }
     if (!conn.handle) return; // nothing but hello before auth
 
+    // 🔴 Rate-limit the frames that ATTEMPT ACCESS, not just the one that talks. `msg` was
+    // limited from the start; `join` was not — and join doubles as "redeem this 6-character
+    // code", so an attacker could guess codes as fast as the socket allowed. `dm` and `invite`
+    // are here too: both reach a named stranger, so unlimited attempts are unlimited spam.
+    // Separate budget from messages, because a burst of joins on connect is normal and must not
+    // eat the allowance for actually speaking.
+    if (f.t === "join" || f.t === "dm" || f.t === "invite" || f.t === "deleteRoom") {
+      const now = Date.now();
+      conn.acts = (conn.acts ?? []).filter((s) => now - s < ACT_WINDOW_MS);
+      if (conn.acts.length >= ACT_N) {
+        conn.send({ t: "error", code: "rate", message: "Too many attempts — wait a moment." });
+        return;
+      }
+      conn.acts.push(now);
+    }
+
     if (f.t === "loc") {
       const want = new Set(locChannels(f));
       // Only the AUTO location channels churn with the log — global/org/custom stay put.
       for (const ch of [...conn.channels])
-        if ((ch.startsWith("region:") || ch.startsWith("shard:")) && !want.has(ch)) leaveRoom(conn, ch);
+        if ((ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dgs:")) && !want.has(ch)) leaveRoom(conn, ch);
       for (const ch of want) joinRoom(conn, ch);
       return;
     }
@@ -668,7 +700,7 @@ wss.on("connection", (ws) => {
       const r = rooms.get(ch);
       if (r) {
         r.members.delete(conn);
-        if (r.members.size === 0 && (ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dm:"))) rooms.delete(ch);
+        if (r.members.size === 0 && (ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dgs:") || ch.startsWith("dm:"))) rooms.delete(ch);
         else presence(ch);
       }
       if (ch.startsWith("custom:")) {

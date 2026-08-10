@@ -955,8 +955,10 @@ chat.on("channels", (names: string[]) => {
  *  and leaving the PU (quit/menu) drops them. Runs on the seed pass too, so a mid-session
  *  app start knows the current shard without waiting for a hop. */
 function applyChatSignals(ev: import("./missions-parser.js").MissionEvent): void {
-  if (ev.kind === "shard") chat.applyShard(ev.shard);
-  else if (ev.kind === "sessionEnd") chat.applyShard(null);
+  // `ev.dgs` is undefined on Update Shard Id (that line names no endpoint) — passing it
+  // through unchanged is what keeps the current DGS instead of clearing it.
+  if (ev.kind === "shard") chat.applyShard(ev.shard, ev.dgs);
+  else if (ev.kind === "sessionEnd") chat.applyShard(null, null);
 }
 
 const miningClients = new Set<ServerResponse>();
@@ -1737,6 +1739,24 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   }
 
   // ── Social chat: live stream + snapshot + send ──
+  // 🔴 READING chat is loopback-only, exactly like SENDING it. This server binds ALL interfaces
+  // on purpose (OBS browser sources run on another PC), so an ungated route is readable by
+  // anything that can reach port 8778 — the whole LAN, a flatmate, a VPN peer, a forwarded port.
+  // These two carry the ENTIRE chat state: every DM, every org message, and the JOIN CODE of
+  // every private room the user is in. That last one is the worst of it, because a leaked code
+  // is durable remote access to a private room from anywhere in the world, long after whoever
+  // read it left the network.
+  //
+  // Reported by a viewer on Sub's stream (2026-08-09) as "spoofing into DMs, private chats and
+  // org chats" — one hole, all three symptoms. The POST routes below already carried this rule
+  // and the reasoning behind it; the read paths were simply missed.
+  if (url === "/chat/events" || (url === "/api/chat" && req.method === "GET")) {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Chat can only be read from this machine." }));
+      return;
+    }
+  }
   if (url === "/chat/events") {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
     res.write("\n");

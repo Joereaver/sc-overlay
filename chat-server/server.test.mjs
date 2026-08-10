@@ -304,6 +304,47 @@ try {
   const junk = await owner.next((f) => f.t === "roominfo" && f.ch === "custom:junk-cat", "junk category");
   assert.equal(junk.category, "social", "an unknown category falls back rather than failing the create");
 
+  // ── the DGS tier, and the rate limit on access attempts ───────────────────
+  // region -> shard -> dgs. The DGS key is a HASH of the server's ip:port produced by the
+  // client, so this server never sees or rebroadcasts a CIG address.
+  const loc = client();
+  await loc.open();
+  loc.send({ t: "hello", handle: "Traveller" });
+  await loc.next((f) => f.t === "welcome", "welcome traveller");
+  loc.send({ t: "loc", region: "use1b", shard: "pub_use1b_12326004_040", dgs: "a3f9c21e04" });
+  await loc.next((f) => f.t === "joined" && f.ch === "dgs:a3f9c21e04", "joined the DGS room");
+  await loc.next((f) => f.t === "joined" && f.ch === "shard:pub_use1b_12326004_040", "and the shard");
+  await loc.next((f) => f.t === "joined" && f.ch === "region:use1b", "and the region");
+
+  // Meshing hands you to another DGS WITHIN the same shard - the finest room must follow.
+  loc.send({ t: "loc", region: "use1b", shard: "pub_use1b_12326004_040", dgs: "bb11cc22dd" });
+  await loc.next((f) => f.t === "left" && f.ch === "dgs:a3f9c21e04", "left the old DGS");
+  await loc.next((f) => f.t === "joined" && f.ch === "dgs:bb11cc22dd", "joined the new one");
+  assert(loc.frames.every((f) => !(f.t === "left" && f.ch === "shard:pub_use1b_12326004_040")),
+    "...without churning the shard room, which did not change");
+
+  // Anything that is not exactly what dgsKey() emits is not a DGS key. This is what stops a
+  // crafted value smuggling in a different key space.
+  // (Uppercase hex is NOT in this list: it lower-cases to a valid key, which is correct
+  // normalisation rather than a bypass — the key space is unchanged.)
+  for (const bad of ["1.2.3.4:64304", "a3f9c21e0", "a3f9c21e04x", "../global", "deadbeefzz"]) {
+    const mark = loc.frames.length;   // only judge frames from THIS attempt onwards
+    loc.send({ t: "loc", region: "use1b", shard: "pub_use1b_12326004_040", dgs: bad });
+    await wait(80);
+    const joined = loc.frames.slice(mark).filter((f) => f.t === "joined" && String(f.ch).startsWith("dgs:"));
+    assert.equal(joined.length, 0, "a malformed DGS key is refused: " + bad);
+  }
+
+  // Access attempts are rate limited. `msg` always was; `join` was not - and join doubles as
+  // "redeem this 6-character code", so unlimited attempts meant unlimited code guessing.
+  const bf = client();
+  await bf.open();
+  bf.send({ t: "hello", handle: "Bruteforcer" });
+  await bf.next((f) => f.t === "welcome", "welcome bruteforcer");
+  for (let i = 0; i < 20; i++) bf.send({ t: "join", name: "ABC" + String(i).padStart(3, "2") });
+  const limited = await bf.next((f) => f.t === "error" && f.code === "rate", "join attempts are rate limited");
+  assert(limited, "a code guesser is throttled");
+
   // ── deleting a room ───────────────────────────────────────────────────────
   // Sub's reason is moderation: a room's NAME is broadcast to every user in the directory, so
   // an inappropriate one is a problem the moment it exists — "wait for the 14-day idle prune"
