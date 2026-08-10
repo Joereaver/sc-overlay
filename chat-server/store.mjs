@@ -54,6 +54,15 @@ const roomRow = (slug, m) => ({
   created: m.created ?? Date.now(),
   lastActive: m.lastActive ?? Date.now(),
   invites: m.invites ?? [],
+  // Party-listing fields. Defaulted here so a room created before Tier 2 reads as a plain
+  // chat room rather than as a listing with empty everything.
+  isParty: m.isParty ?? false,
+  location: m.location ?? null,
+  sizeMax: m.sizeMax ?? null,
+  joinMode: m.joinMode ?? "open",
+  voice: m.voice ?? "none",
+  expiresAt: m.expiresAt ?? null,
+  applications: m.applications ?? [],
 });
 
 // ── file backend ────────────────────────────────────────────────────────────
@@ -97,6 +106,22 @@ function fileStore(dir, log) {
     },
     saveBan(h) { bans.add(h); writeJson(bansPath, [...bans]); },
     deleteBan(h) { bans.delete(h); writeJson(bansPath, [...bans]); },
+
+    // 🔑 Re-applying REPLACES your row rather than queueing a second one, so an eager applicant
+    // cannot bury the owner in duplicates of the same request.
+    addApplication(slug, handle, note) {
+      const r = rooms.get(slug);
+      if (!r) return;
+      r.applications = (r.applications ?? []).filter((a) => a.handle !== handle);
+      r.applications.push({ handle, note: note ?? null, at: Date.now() });
+      writeJson(channelsPath, Object.fromEntries(rooms));
+    },
+    deleteApplication(slug, handle) {
+      const r = rooms.get(slug);
+      if (!r) return;
+      r.applications = (r.applications ?? []).filter((a) => a.handle !== handle);
+      writeJson(channelsPath, Object.fromEntries(rooms));
+    },
 
     savePin(p) { pins.set(p.ch, p); writeJson(pinsPath, Object.fromEntries(pins)); },
     deletePin(ch) { pins.delete(ch); writeJson(pinsPath, Object.fromEntries(pins)); },
@@ -151,7 +176,15 @@ function pgStore(url, dir, schema, log) {
           slug: r.slug, label: r.label, category: r.category, privacy: r.privacy,
           code: r.code, owner: r.owner,
           created: +r.created, lastActive: +r.last_active, invites: r.invites,
+          isParty: !!r.is_party, location: r.location, sizeMax: r.size_max,
+          joinMode: r.join_mode ?? "open", voice: r.voice ?? "none",
+          expiresAt: r.expires_at === null ? null : +r.expires_at,
+          applications: [],
         });
+      }
+      const appsQ = await pool.query("SELECT slug, handle, note, at FROM room_applications ORDER BY at");
+      for (const a of appsQ.rows) {
+        rooms.get(a.slug)?.applications.push({ handle: a.handle, note: a.note, at: +a.at });
       }
       const namesQ = await pool.query("SELECT name FROM known_names");
       const bansQ = await pool.query("SELECT handle FROM bans");
@@ -200,13 +233,19 @@ function pgStore(url, dir, schema, log) {
 
     saveRoom(r) {
       bg("upsert room", pool.query(`
-        INSERT INTO rooms (slug, label, category, privacy, code, owner, created, last_active)
-        VALUES ($1,$2,$3,$4,$5,$6, to_timestamp($7/1000.0), to_timestamp($8/1000.0))
+        INSERT INTO rooms (slug, label, category, privacy, code, owner, created, last_active,
+                           is_party, location, size_max, join_mode, voice, expires_at)
+        VALUES ($1,$2,$3,$4,$5,$6, to_timestamp($7/1000.0), to_timestamp($8/1000.0),
+                $9,$10,$11,$12,$13, CASE WHEN $14::bigint IS NULL THEN NULL ELSE to_timestamp($14/1000.0) END)
         ON CONFLICT (slug) DO UPDATE SET
           label = excluded.label, category = excluded.category,
-          privacy = excluded.privacy, code = excluded.code, last_active = excluded.last_active`,
+          privacy = excluded.privacy, code = excluded.code, last_active = excluded.last_active,
+          is_party = excluded.is_party, location = excluded.location, size_max = excluded.size_max,
+          join_mode = excluded.join_mode, voice = excluded.voice, expires_at = excluded.expires_at`,
         [r.slug, r.label, r.category ?? "social", r.privacy ?? "public", r.code ?? null,
-         r.owner ?? null, r.created ?? Date.now(), r.lastActive ?? Date.now()]));
+         r.owner ?? null, r.created ?? Date.now(), r.lastActive ?? Date.now(),
+         r.isParty ?? false, r.location ?? null, r.sizeMax ?? null,
+         r.joinMode ?? "open", r.voice ?? "none", r.expiresAt ?? null]));
     },
     deleteRoom(slug) {
       bg("delete room", pool.query("DELETE FROM rooms WHERE slug = $1", [slug]));
@@ -222,6 +261,16 @@ function pgStore(url, dir, schema, log) {
     },
     saveBan(h) { bg("ban", pool.query("INSERT INTO bans (handle) VALUES ($1) ON CONFLICT DO NOTHING", [h])); },
     deleteBan(h) { bg("unban", pool.query("DELETE FROM bans WHERE handle = $1", [h])); },
+
+    addApplication(slug, handle, note) {
+      bg("apply", pool.query(
+        `INSERT INTO room_applications (slug, handle, note) VALUES ($1,$2,$3)
+         ON CONFLICT (slug, handle) DO UPDATE SET note = excluded.note, at = now()`,
+        [slug, handle, note ?? null]));
+    },
+    deleteApplication(slug, handle) {
+      bg("unapply", pool.query("DELETE FROM room_applications WHERE slug = $1 AND handle = $2", [slug, handle]));
+    },
 
     savePin(p) {
       bg("pin", pool.query(`

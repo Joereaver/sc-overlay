@@ -78,11 +78,31 @@ interface ChannelState {
   owner?: string | null;
   /** Only ever present for a private room you are INSIDE — it is what admits the next person. */
   code?: string;
+  /** Party-listing fields, present only on a room advertising for members. `applications` is
+   *  owner-only — the server simply omits it for everyone else. */
+  party?: boolean;
+  location?: string | null;
+  sizeMax?: number | null;
+  joinMode?: "open" | "apply";
+  voice?: "none" | "optional" | "required";
+  expiresAt?: number | null;
+  applications?: { handle: string; note: string | null; at: number }[];
   /** The room's pinned message, or null. Held on the CHANNEL rather than pushed straight at the
    *  widget, because a widget iframe reloads on every regroup — a pin delivered only as an event
    *  would vanish the first time someone stacked the chat widget and not come back until it was
    *  re-pinned. State the widget can re-read survives that; an event does not. */
   pin?: ChatPin | null;
+}
+
+/** What the widget asks for when creating a party listing. Every field is clamped server-side. */
+export interface PartyRequest {
+  party: true;
+  location?: string | null;
+  sizeMax?: number | null;
+  joinMode?: "open" | "apply";
+  voice?: "none" | "optional" | "required";
+  /** How long to advertise for, in MINUTES. Never an absolute time — see the server. */
+  minutes?: number;
 }
 
 /** A pinned message. `id` is null when a moderator pinned free text rather than an existing
@@ -198,6 +218,12 @@ export class ChatClient extends EventEmitter {
   }
 
   /** The parser saw a shard change (null = left the PU). Region/shard channels follow. */
+  /** Are we currently claiming to be somewhere? Lets the staleness check skip the file stat
+   *  entirely when there is nothing to drop. */
+  hasLocation(): boolean {
+    return this.shard !== null;
+  }
+
   applyShard(shard: string | null, dgs?: string | null): void {
     // 🔑 The DGS moves on its own. Server meshing hands you between DGSs as you travel WITHIN
     // one shard, so a change with the same shard id is a real move to different neighbours and
@@ -334,6 +360,15 @@ export class ChatClient extends EventEmitter {
         c.privacy = f.privacy;
         c.owner = f.owner ?? null;
         if (typeof f.code === "string") c.code = f.code;
+        c.party = f.party === true;
+        c.location = f.location ?? null;
+        c.sizeMax = f.sizeMax ?? null;
+        c.joinMode = f.joinMode ?? "open";
+        c.voice = f.voice ?? "none";
+        c.expiresAt = f.expiresAt ?? null;
+        // Owner-only, so an ABSENT list means "not yours to see" — leave whatever we had rather
+        // than blanking it, since a non-owner frame must not wipe the owner's own view.
+        if (Array.isArray(f.applications)) c.applications = f.applications;
         this.pushState();
         return;
       }
@@ -384,6 +419,9 @@ export class ChatClient extends EventEmitter {
         this.pushState();
         return;
       }
+      case "applied":
+        this.emit("sse", { type: "notice", level: "info", text: "Request sent. The group's owner decides." });
+        return;
       case "reported":
         // Reporting is silent by design on the server — nothing is broadcast and nothing changes
         // in the room — so this acknowledgement is the ONLY feedback the reporter ever gets.
@@ -467,7 +505,8 @@ export class ChatClient extends EventEmitter {
    *  server tries a code first when the text is code-shaped.
    *  `category` and `privacy` apply only when CREATING — joining an existing room can't restyle
    *  it, which would otherwise let anyone flip someone else's private room public. */
-  join(name: string, mode?: "join" | "create", category?: string, privacy?: "public" | "private"):
+  join(name: string, mode?: "join" | "create", category?: string, privacy?: "public" | "private",
+       party?: PartyRequest):
     { ok: boolean; message?: string } {
     if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
     const n = name.trim();
@@ -477,6 +516,9 @@ export class ChatClient extends EventEmitter {
       ...(mode ? { mode } : {}),
       ...(mode === "create" && category ? { category } : {}),
       ...(mode === "create" && privacy ? { privacy } : {}),
+      // Only meaningful on create. The server clamps every field, so this is a request, not a
+      // setting — and it sends a DURATION, never a wall-clock expiry off this machine's clock.
+      ...(mode === "create" && party ? party : {}),
     });
     return { ok: true };
   }
@@ -542,6 +584,22 @@ export class ChatClient extends EventEmitter {
     return { ok: true };
   }
 
+  /** Ask to join an apply-only listing. 🔑 This does NOT join you — the owner decides. */
+  apply(ch: string, note?: string): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    this.wsSend({ t: "apply", ch, ...(note ? { note } : {}) });
+    return { ok: true };
+  }
+
+  /** Owner: admit or turn away an applicant. Accepting writes a normal invite. */
+  resolveApplication(ch: string, handle: string, accept: boolean): { ok: boolean; message?: string } {
+    if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
+    const h = handle.trim();
+    if (!h) return { ok: false, message: "Which applicant?" };
+    this.wsSend({ t: accept ? "acceptApplication" : "declineApplication", ch, handle: h });
+    return { ok: true };
+  }
+
   /** Leave a custom room (the server refuses auto/org channels). */
   leave(ch: string): { ok: boolean; message?: string } {
     if (this.status !== "connected") return { ok: false, message: "Chat is not connected." };
@@ -559,6 +617,9 @@ export class ChatClient extends EventEmitter {
         ch: c.ch, kind: c.kind, label: c.label, count: c.count, members: c.members, msgs: c.msgs,
         category: c.category, privacy: c.privacy, owner: c.owner, code: c.code,
         pin: c.pin ?? null,
+        party: c.party ?? false, location: c.location ?? null, sizeMax: c.sizeMax ?? null,
+        joinMode: c.joinMode ?? "open", voice: c.voice ?? "none", expiresAt: c.expiresAt ?? null,
+        applications: c.applications ?? [],
       }));
     return {
       status: this.status,

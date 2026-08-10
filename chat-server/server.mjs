@@ -190,13 +190,44 @@ function roomByCode(code) {
  *  an invite, or ownership. Redeeming a code records an invite (see the join handler), so
  *  after the first entry the invite list is the single answer to "who is allowed in here". */
 function mayJoin(conn, meta, typed) {
-  if (meta.privacy !== "private") return true;
   if (meta.owner && meta.owner === conn.handleLower) return true;
   if (meta.invites?.includes(conn.handleLower)) return true;
+  // 🔴 An 'apply' listing is PUBLIC — it has to be, or nobody could find it to apply. So the
+  // approval gate cannot live in `privacy`; without this check a plain join by name walks
+  // straight past it and "you approve people" is decorative. Accepting an application writes an
+  // invite, which is why the invite check above is what lets an approved person in.
+  if (meta.isParty && meta.joinMode === "apply") return false;
+  if (meta.privacy !== "private") return true;
   return !!(meta.code && typed && String(typed).toUpperCase() === meta.code);
 }
 
 /** Display name → slug. The slug is the identity; the label keeps the user's casing. */
+/** Validate the party-listing half of a create frame. Everything is clamped server-side: these
+ *  fields are broadcast to every connected user, so "the client wouldn't send that" is not a
+ *  guarantee worth resting a directory on.
+ *
+ *  🔑 The client sends a DURATION, not an `expiresAt`. A wall-clock timestamp from a machine we
+ *  do not control is a listing that never expires (clock behind) or is dead on arrival (clock
+ *  ahead) — and desktop clocks are wrong often enough that this would look random. */
+const PARTY_MAX_MINUTES = 12 * 60;
+const JOIN_MODES = new Set(["open", "apply"]);
+const VOICE_MODES = new Set(["none", "optional", "required"]);
+function partyFieldsFrom(f) {
+  if (!f || f.party !== true) return { isParty: false };
+  const mins = Number(f.minutes);
+  const size = Number(f.sizeMax);
+  return {
+    isParty: true,
+    // Free text: it is either what the leader typed or the region label their client offered
+    // after they opted in. The server never derives it — we are not told where anyone is.
+    location: typeof f.location === "string" ? f.location.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, 60) || null : null,
+    sizeMax: Number.isFinite(size) ? Math.min(50, Math.max(2, Math.round(size))) : null,
+    joinMode: JOIN_MODES.has(f.joinMode) ? f.joinMode : "open",
+    voice: VOICE_MODES.has(f.voice) ? f.voice : "none",
+    expiresAt: Date.now() + Math.min(PARTY_MAX_MINUTES, Math.max(15, Number.isFinite(mins) ? Math.round(mins) : 120)) * 60_000,
+  };
+}
+
 function slugOfName(name) {
   const s = String(name ?? "").trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9._-]/g, "");
   return /^[a-z0-9][a-z0-9._-]{2,29}$/.test(s) ? s : null;
@@ -208,11 +239,23 @@ function dirPayload() {
   const out = [];
   for (const [slug, meta] of customDir) {
     if (meta.privacy === "private") continue;
+    // An EXPIRED listing stops being advertised as one, but the room itself carries on as an
+    // ordinary chat room — people are still in it talking. Dropping the room would evict them
+    // for the crime of the leader picking a short window.
+    const live = meta.isParty && (!meta.expiresAt || meta.expiresAt > Date.now());
     out.push({
       ch: `custom:${slug}`,
       label: meta.label,
       category: meta.category ?? DEFAULT_CATEGORY,
       count: new Set([...(rooms.get(`custom:${slug}`)?.members ?? [])].map((c) => c.handleLower)).size,
+      ...(live ? {
+        party: true,
+        location: meta.location ?? null,
+        sizeMax: meta.sizeMax ?? null,
+        joinMode: meta.joinMode ?? "open",
+        voice: meta.voice ?? "none",
+        expiresAt: meta.expiresAt ?? null,
+      } : {}),
     });
   }
   return out;
@@ -369,16 +412,33 @@ function destroyRoom(slug, label) {
  *  🔑 The join CODE only ever goes to someone already inside the room — it is what admits the
  *  next person, so shipping it in the directory or on a refusal would defeat the whole gate. */
 function joinCustom(conn, slug, meta) {
-  const ch = `custom:${slug}`;
-  joinRoom(conn, ch, meta.label, "custom");
+  joinRoom(conn, `custom:${slug}`, meta.label, "custom");
+  sendRoomInfo(conn, slug, meta);
+  touchRoom(slug);
+}
+
+/** Describe a room to ONE connection. Split out of joinCustom so the same frame can be re-sent
+ *  when something about the room changes for that person — an application arriving, or being
+ *  accepted — instead of only ever at join time.
+ *  🔑 The pending applications go ONLY to the owner. They are a list of who wants in, which is
+ *  nobody else's business, and the frame is per-connection precisely so it can differ. */
+function sendRoomInfo(conn, slug, meta) {
   conn.send({
-    t: "roominfo", ch,
+    t: "roominfo", ch: `custom:${slug}`,
     category: meta.category ?? DEFAULT_CATEGORY,
     privacy: meta.privacy ?? "public",
     owner: meta.owner ?? null,
     ...(meta.privacy === "private" ? { code: meta.code } : {}),
+    ...(meta.isParty ? {
+      party: true,
+      location: meta.location ?? null,
+      sizeMax: meta.sizeMax ?? null,
+      joinMode: meta.joinMode ?? "open",
+      voice: meta.voice ?? "none",
+      expiresAt: meta.expiresAt ?? null,
+    } : {}),
+    ...(meta.owner === conn.handleLower ? { applications: meta.applications ?? [] } : {}),
   });
-  touchRoom(slug);
 }
 
 function leaveRoom(conn, ch) {
@@ -682,6 +742,14 @@ wss.on("connection", (ws) => {
       if (f.mode === "create" && existing) { conn.send({ t: "error", code: "channel_exists", message: `“${existing.label}” already exists — join it instead.` }); return; }
 
       if (existing) {
+        // 🔑 An apply-only listing is the one refusal that must NOT be vague. It is public and
+        // sitting on the board with its name on it, so "no such channel" would be an obvious lie
+        // and would leave the person with no idea what to do next. Tell them to ask.
+        if (existing.isParty && existing.joinMode === "apply"
+            && existing.owner !== conn.handleLower && !existing.invites?.includes(conn.handleLower)) {
+          conn.send({ t: "error", code: "not_invited", message: `“${existing.label}” approves people first — ask to join.` });
+          return;
+        }
         // 🔑 A private room must be indistinguishable from one that does not exist. Saying
         // "that's private" confirms the name to anyone guessing, which is half of finding it.
         if (!mayJoin(conn, existing, typed)) {
@@ -704,7 +772,8 @@ wss.on("connection", (ws) => {
       const code = privacy === "private" ? makeCode() : null;
       if (privacy === "private" && !code) { conn.send({ t: "error", code: "bad_channel", message: "Couldn't allocate a join code — try again." }); return; }
       const meta = { slug, label: typed, category, privacy, code, owner: conn.handleLower,
-                     created: Date.now(), lastActive: Date.now(), invites: [] };
+                     created: Date.now(), lastActive: Date.now(), invites: [], applications: [],
+                     ...partyFieldsFrom(f) };
       customDir.set(slug, meta);
       store.saveRoom(meta);
       broadcastDir();     // a no-op for a private room, which is never in the directory
@@ -770,6 +839,61 @@ wss.on("connection", (ws) => {
       const src = room(ch).history.find((m) => m.id === id);
       if (!src) { conn.send({ t: "error", code: "bad_msg", message: "That message is no longer here." }); return; }
       setPin(ch, { ch, id, handle: src.from.handle, text: src.text, by: conn.handle, at: Date.now() });
+      return;
+    }
+
+    // ── applying to a party listing ──────────────────────────────────────
+    // 🔑 Applying does NOT join you. That is the whole difference between join_mode 'open' and
+    // 'apply': the owner decides. Accepting writes a normal room_invite, so admission runs down
+    // the exact path invites already use and there is no second way into a room to get wrong.
+    if (f.t === "apply") {
+      const slug = String(f.ch ?? "").startsWith("custom:") ? String(f.ch).slice("custom:".length) : "";
+      const meta = slug ? customDir.get(slug) : null;
+      if (!meta || !meta.isParty) { conn.send({ t: "error", code: "no_such_channel", message: "No such listing." }); return; }
+      if (meta.joinMode !== "apply") { conn.send({ t: "error", code: "bad_channel", message: "That group is open — just join it." }); return; }
+      if (meta.owner === conn.handleLower) { conn.send({ t: "error", code: "bad_handle", message: "It's your own group." }); return; }
+      if (!underRate(conn)) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return; }
+      conn.stamps.push(Date.now());
+      const note = typeof f.note === "string" ? f.note.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, 140) : null;
+      meta.applications = (meta.applications ?? []).filter((a) => a.handle !== conn.handleLower);
+      meta.applications.push({ handle: conn.handleLower, note, at: Date.now() });
+      store.addApplication(slug, conn.handleLower, note);
+      conn.send({ t: "applied", ch: f.ch });
+      // Tell the owner if they are online. If they are not, it is waiting in roominfo when they
+      // next open the room — an application must not depend on both people being on at once.
+      for (const c of conns) {
+        if (c.handleLower === meta.owner && c.ws.readyState === 1) {
+          c.send({ t: "notice", level: "info", text: `${conn.handle} asked to join “${meta.label}”.` });
+          sendRoomInfo(c, slug, meta);
+        }
+      }
+      return;
+    }
+
+    if (f.t === "acceptApplication" || f.t === "declineApplication") {
+      const slug = String(f.ch ?? "").startsWith("custom:") ? String(f.ch).slice("custom:".length) : "";
+      const meta = slug ? customDir.get(slug) : null;
+      if (!meta) { conn.send({ t: "error", code: "no_such_channel", message: "No such channel." }); return; }
+      if (meta.owner !== conn.handleLower) { conn.send({ t: "error", code: "not_owner", message: "Only the group's owner can do that." }); return; }
+      const who = String(f.handle ?? "").toLowerCase();
+      if (!(meta.applications ?? []).some((a) => a.handle === who)) {
+        conn.send({ t: "error", code: "bad_handle", message: "No application from them." });
+        return;
+      }
+      meta.applications = meta.applications.filter((a) => a.handle !== who);
+      store.deleteApplication(slug, who);
+      if (f.t === "acceptApplication") {
+        // Admission IS an invite — same record, same effect on a reconnect.
+        if (!meta.invites.includes(who)) meta.invites.push(who);
+        store.addInvite(slug, who, conn.handleLower);
+      }
+      const word = f.t === "acceptApplication" ? "accepted" : "declined";
+      for (const c of conns) {
+        if (c.handleLower === who && c.ws.readyState === 1) {
+          c.send({ t: "notice", level: "info", text: `Your request to join “${meta.label}” was ${word}.` });
+        }
+      }
+      sendRoomInfo(conn, slug, meta);
       return;
     }
 

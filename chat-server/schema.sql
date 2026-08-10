@@ -40,6 +40,44 @@ CREATE TABLE IF NOT EXISTS rooms (
 -- A code has to identify exactly one room to be worth typing. Partial: public rooms have none.
 CREATE UNIQUE INDEX IF NOT EXISTS rooms_code ON rooms (code) WHERE code IS NOT NULL;
 
+-- ── Party listings (Tier 2) ────────────────────────────────────────────────────────────────
+-- 🔴 THESE MUST BE `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, NOT extra lines in the CREATE
+-- above. `rooms` already exists in production, so `CREATE TABLE IF NOT EXISTS` is a NO-OP there
+-- and any column added to it would silently never appear — the server would then read undefined
+-- for every listing field and the whole feature would look broken on the live server while
+-- passing every test against a fresh scratch schema.
+--
+-- A party listing IS a room, not a separate entity: it inherits membership, invites, the join
+-- code, scrollback, presence, the pin and moderation. These columns are the only thing a
+-- listing adds.
+--   is_party   this room is advertising for members; plain chat rooms stay false
+--   location   free text, or the leader's real region if they opted in when creating
+--   size_max   headcount they want; the live count comes from presence, not from here
+--   join_mode  'open'  anyone may walk in
+--              'apply' they ask first and the owner accepts (accepting reuses the invite path)
+--   voice      'none' | 'optional' | 'required' — expectation only; we host no voice
+--   expires_at when the listing stops being advertised. A stale LFG board is a dead one.
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS is_party   boolean     NOT NULL DEFAULT false;
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS location   text;
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS size_max   integer;
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS join_mode  text        NOT NULL DEFAULT 'open';
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS voice      text        NOT NULL DEFAULT 'none';
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+-- The board's only read pattern: live listings, soonest to expire.
+CREATE INDEX IF NOT EXISTS rooms_party ON rooms (expires_at) WHERE is_party;
+
+-- Applications, for a listing whose join_mode is 'apply'. Accepting one writes a normal
+-- room_invite, so the "let them in" path is code that already exists and is already tested.
+-- 🔑 One row per (slug, handle): re-applying updates your note, it does not queue a second
+-- application the owner has to dismiss twice.
+CREATE TABLE IF NOT EXISTS room_applications (
+  slug   text        NOT NULL REFERENCES rooms(slug) ON DELETE CASCADE,
+  handle text        NOT NULL,
+  note   text,
+  at     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (slug, handle)
+);
+
 -- Invite-by-handle, the second way into a private room. Handles are stored lowercase; the RSI
 -- handle is the identity everywhere in this server.
 CREATE TABLE IF NOT EXISTS room_invites (

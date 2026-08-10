@@ -133,6 +133,52 @@ try {
   ok("...and keeping the NEWEST", after[9].text === "spam 139", after[9].text);
   ok("...per channel, not globally", (await store.loadHistory(k1.ch, 50)).length === 1);
 
+  // ── pins ────────────────────────────────────────────────────────────────
+  store.savePin({ ch: "global", id: 3, handle: "Rytharr", text: "meet at Checkmate", by: "IMC-Subliminal", at: 1786000000000 });
+  await settle();
+  let reboot = await store.init();
+  ok("a pin survives a restart", reboot.pins.get("global")?.text === "meet at Checkmate",
+     reboot.pins.get("global")?.text);
+  ok("...carrying who wrote it and who pinned it",
+     reboot.pins.get("global")?.handle === "Rytharr" && reboot.pins.get("global")?.by === "IMC-Subliminal");
+  ok("...with the message id as a NUMBER, not a bigint string",
+     typeof reboot.pins.get("global")?.id === "number", typeof reboot.pins.get("global")?.id);
+
+  // One pin per room: pinning again REPLACES rather than accumulating.
+  store.savePin({ ch: "global", id: 4, handle: "Zed", text: "new plan", by: "IMC-Subliminal", at: 1786000001000 });
+  await settle();
+  reboot = await store.init();
+  ok("pinning again replaces the old pin", reboot.pins.get("global")?.text === "new plan", reboot.pins.get("global")?.text);
+  ok("...and there is still only one", reboot.pins.size === 1, reboot.pins.size);
+
+  // 🔑 A moderator pin has no message behind it, so the id must be allowed to be NULL.
+  store.savePin({ ch: "region:use1b", id: null, handle: "Moderator", text: "server going down", by: "admin", at: 1786000002000 });
+  await settle();
+  reboot = await store.init();
+  ok("a moderator pin with no message id is stored", reboot.pins.get("region:use1b")?.text === "server going down");
+  ok("...and its id reads back as null", reboot.pins.get("region:use1b")?.id === null, String(reboot.pins.get("region:use1b")?.id));
+
+  store.deletePin("global");
+  await settle();
+  reboot = await store.init();
+  ok("unpinning removes it", !reboot.pins.has("global"));
+  ok("...without touching another room's pin", reboot.pins.has("region:use1b"));
+
+  // ── reports ─────────────────────────────────────────────────────────────
+  store.saveReport({ ch: "global", about: "rytharr", by: "imc-subliminal", reason: null, id: 3, text: "something rude", at: Date.now() });
+  store.saveReport({ ch: "global", about: "rytharr", by: "zed", reason: "spam", id: null, text: null, at: Date.now() });
+  await settle();
+  const reports = await store.listReports(50);
+  ok("both reports are kept", reports.length === 2, reports.length);
+  // 🔑 Two people reporting the same handle is TWO rows — the second one is the signal.
+  ok("...including two about the same person", reports.filter((r) => r.about === "rytharr").length === 2);
+  const withText = reports.find((r) => r.text);
+  ok("...with the reported message snapshotted", withText?.text === "something rude", withText?.text);
+  ok("...and its id as a number", typeof withText?.id === "number", typeof withText?.id);
+  const noMsg = reports.find((r) => r.reason === "spam");
+  ok("a report with no message still stores", !!noMsg && noMsg.id === null && noMsg.text === null);
+  ok("...newest first", reports[0].at >= reports[1].at);
+
   await store.close();
 } finally {
   await admin.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);

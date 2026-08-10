@@ -552,6 +552,87 @@ try {
   guest2.send({ t: "report", ch: room.ch, handle: "not a handle!" });
   await guest2.next((f) => f.t === "error" && f.code === "bad_handle", "a malformed handle is refused");
 
+  // ── party listings + applications ────────────────────────────────────────
+  const pfLead = client();
+  await pfLead.open();
+  pfLead.send({ t: "hello", handle: "PartyLead" });
+  await pfLead.next((f) => f.t === "welcome", "welcome PartyLead");
+  pfLead.send({
+    t: "join", name: "Halo Mining Run", mode: "create", category: "mining", privacy: "public",
+    party: true, location: "Aaron Halo", sizeMax: 4, joinMode: "apply", voice: "optional", minutes: 90,
+  });
+  const pfRoom = await pfLead.next((f) => f.t === "roominfo" && f.party === true, "the listing is created");
+  assert.equal(pfRoom.location, "Aaron Halo", "location is carried");
+  assert.equal(pfRoom.sizeMax, 4, "size is carried");
+  assert.equal(pfRoom.joinMode, "apply", "join mode is carried");
+  assert(pfRoom.expiresAt > Date.now(), "it expires in the future");
+  // 🔑 A DURATION was sent, never a timestamp — the server owns the clock.
+  assert(pfRoom.expiresAt <= Date.now() + 91 * 60_000, "expiry comes from the duration, not the client clock");
+
+  // Clamping: the server must not trust any of it.
+  pfLead.send({
+    t: "join", name: "Silly Numbers", mode: "create", category: "mining", privacy: "public",
+    party: true, sizeMax: 9999, joinMode: "whatever", voice: "shouting", minutes: 99999,
+  });
+  const pfClamp = await pfLead.next((f) => f.t === "roominfo" && f.ch === "custom:silly-numbers", "clamped listing");
+  assert.equal(pfClamp.sizeMax, 50, "an absurd size is clamped, not stored");
+  assert.equal(pfClamp.joinMode, "open", "an unknown join mode falls back to open");
+  assert.equal(pfClamp.voice, "none", "an unknown voice mode falls back to none");
+  assert(pfClamp.expiresAt <= Date.now() + (12 * 60 + 1) * 60_000, "expiry is capped");
+
+  const pfSeeker = client();
+  await pfSeeker.open();
+  pfSeeker.send({ t: "hello", handle: "Seeker" });
+  await pfSeeker.next((f) => f.t === "welcome", "welcome Seeker");
+  const pfDir = await pfSeeker.next(
+    (f) => f.t === "dir" && f.channels.some((c) => c.ch === "custom:halo-mining-run" && c.party), "the listing reaches the board");
+  const pfEntry = pfDir.channels.find((c) => c.ch === "custom:halo-mining-run");
+  assert.equal(pfEntry.location, "Aaron Halo", "the board shows where");
+  assert.equal(pfEntry.joinMode, "apply", "the board shows how to get in");
+
+  // 🔑 Applying must NOT join you — that is the entire difference from an open listing.
+  pfSeeker.send({ t: "apply", ch: "custom:halo-mining-run", note: "have a Prospector" });
+  await pfSeeker.next((f) => f.t === "applied", "the applicant is acknowledged");
+  await wait(200);
+  assert(!pfSeeker.frames.some((f) => f.t === "joined" && f.ch === "custom:halo-mining-run"),
+    "applying does not put you in the room");
+  await pfLead.next((f) => f.t === "notice" && /Seeker asked to join/.test(f.text ?? ""), "the owner is told");
+  const pfWithApps = await pfLead.next(
+    (f) => f.t === "roominfo" && Array.isArray(f.applications) && f.applications.length === 1, "the owner sees the application");
+  assert.equal(pfWithApps.applications[0].handle, "seeker", "the applicant is named");
+  assert.equal(pfWithApps.applications[0].note, "have a Prospector", "their note comes with it");
+
+  // 🔴 THE GATE. An 'apply' listing is public so people can find it, so the approval check
+  // cannot live in `privacy` — without an explicit refusal here, joining by NAME walks straight
+  // past the owner's approval and "you approve people" means nothing.
+  pfSeeker.send({ t: "join", name: "Halo Mining Run" });
+  await pfSeeker.next((f) => f.t === "error" && f.code === "not_invited", "you cannot just walk into an apply-only group");
+  await wait(150);
+  assert(!pfSeeker.frames.some((f) => f.t === "joined" && f.ch === "custom:halo-mining-run"),
+    "and no membership was handed out anyway");
+
+  // Only the owner may resolve an application.
+  pfSeeker.send({ t: "acceptApplication", ch: "custom:halo-mining-run", handle: "seeker" });
+  await pfSeeker.next((f) => f.t === "error" && f.code === "not_owner", "an applicant cannot accept themselves");
+
+  pfLead.send({ t: "acceptApplication", ch: "custom:halo-mining-run", handle: "seeker" });
+  await pfSeeker.next((f) => f.t === "notice" && /was accepted/.test(f.text ?? ""), "the applicant is told");
+
+  // 🔑 Accepting writes an INVITE, so the ordinary join path now admits them — one way in, not
+  // two. And the application list is OWNER-ONLY: nobody else learns who wants in.
+  pfSeeker.send({ t: "join", name: "Halo Mining Run" });
+  const pfSeekerInfo = await pfSeeker.next((f) => f.t === "roominfo" && f.ch === "custom:halo-mining-run", "an accepted applicant can now join");
+  assert.equal(pfSeekerInfo.applications, undefined, "a non-owner is never shown the applicant list");
+  const pfCleared = await pfLead.next(
+    (f) => f.t === "roominfo" && Array.isArray(f.applications) && f.applications.length === 0, "the application is cleared");
+  assert(pfCleared, "resolving removes it from the queue");
+  pfLead.send({ t: "acceptApplication", ch: "custom:halo-mining-run", handle: "seeker" });
+  await pfLead.next((f) => f.t === "error" && f.code === "bad_handle", "the same application cannot be resolved twice");
+
+  // An OPEN listing refuses applications outright — there is nothing to apply for.
+  pfSeeker.send({ t: "apply", ch: "custom:silly-numbers" });
+  await pfSeeker.next((f) => f.t === "error" && f.code === "bad_channel", "an open listing has nothing to apply to");
+
   console.log("chat-server tests passed");
 } finally {
   server.kill();

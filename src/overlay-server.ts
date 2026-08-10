@@ -962,6 +962,35 @@ function applyChatSignals(ev: import("./missions-parser.js").MissionEvent): void
   else if (ev.kind === "sessionEnd") chat.applyShard(null, null);
 }
 
+/* 🔴 A LOCATION WE CANNOT REFRESH IS A LOCATION WE MUST NOT PUBLISH.
+ *
+ *  Clearing used to depend ENTIRELY on a `<Channel Destroyed>` line reading as sessionEnd. Quit
+ *  the game any other way — alt-F4, a crash, killing the process — and that line is never
+ *  written, so the client kept its last shard forever while the overlay stayed open. Reported
+ *  twice by Sub (2026-08-10): a player sat in "US East 1B" for hours with the game shut.
+ *
+ *  🔑 The invariant is the LOG FILE'S OWN MTIME, not a parser event. Events only fire when
+ *  something interesting happens, so "no events" is normal during quiet play and would false-
+ *  clear; but the game appends to game.log continuously while it runs, and stops the instant it
+ *  exits. Statting one file is also far cheaper than anything that inspects processes.
+ *
+ *  Deliberately generous (15 min): over-reporting presence is the bug being fixed, but dropping
+ *  someone mid-session would be a worse one, and the same over-reporting is what got the whole
+ *  shard tier deleted in 0.1.42 ("it reported three people when one was genuinely nearby"). */
+const LOC_STALE_MS = 15 * 60 * 1000;
+const LOC_CHECK_MS = 60 * 1000;
+function dropStaleLocation(): void {
+  if (!chat.hasLocation()) return;          // nothing to clear — don't stat for no reason
+  const p = config.logPath;
+  if (!p) return;
+  let mtime = 0;
+  try { mtime = statSync(p).mtimeMs; } catch { return; }   // log gone: leave it to the watcher
+  if (Date.now() - mtime < LOC_STALE_MS) return;
+  console.log(`[chat] game.log untouched for ${Math.round((Date.now() - mtime) / 60000)}m — dropping location`);
+  chat.applyShard(null, null);
+}
+setInterval(dropStaleLocation, LOC_CHECK_MS).unref();
+
 const miningClients = new Set<ServerResponse>();
 // ── Where the player is ─────────────────────────────────────────────────────
 // The body-name map rides in the dataset (`pyro2` -> "Monox"), so it refreshes per
@@ -1884,6 +1913,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   if ((url === "/api/chat/join" || url === "/api/chat/leave" || url === "/api/chat/invite"
        || url === "/api/chat/dm" || url === "/api/chat/dmlist"
        || url === "/api/chat/pin" || url === "/api/chat/unpin" || url === "/api/chat/report"
+       || url === "/api/chat/apply" || url === "/api/chat/application"
        || url === "/api/chat/delete-room") && req.method === "POST") {
     if (!fromThisMachine(req)) {
       res.writeHead(403, { "Content-Type": "application/json" });
@@ -1896,13 +1926,24 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
         String(body.name ?? ""),
         body.mode === "join" || body.mode === "create" ? body.mode : undefined,
         body.category ? String(body.category) : undefined,
-        body.privacy === "private" || body.privacy === "public" ? body.privacy : undefined)
+        body.privacy === "private" || body.privacy === "public" ? body.privacy : undefined,
+        body.party === true ? {
+          party: true,
+          location: body.location ? String(body.location) : null,
+          sizeMax: Number.isFinite(Number(body.sizeMax)) ? Number(body.sizeMax) : null,
+          joinMode: body.joinMode === "apply" ? "apply" : "open",
+          voice: body.voice === "optional" || body.voice === "required" ? body.voice : "none",
+          minutes: Number.isFinite(Number(body.minutes)) ? Number(body.minutes) : undefined,
+        } : undefined)
       : url.endsWith("/invite") ? chat.invite(String(body.ch ?? ""), String(body.handle ?? ""))
       : url.endsWith("/delete-room") ? chat.deleteRoom(String(body.ch ?? ""))
       : url.endsWith("/dmlist") ? chat.dmList()
       : url.endsWith("/dm") ? chat.dm(String(body.to ?? ""), String(body.text ?? ""))
       : url.endsWith("/pin") ? chat.pin(String(body.ch ?? ""), Number(body.id))
       : url.endsWith("/unpin") ? chat.unpin(String(body.ch ?? ""))
+      : url.endsWith("/apply") ? chat.apply(String(body.ch ?? ""), body.note ? String(body.note) : undefined)
+      : url.endsWith("/application") ? chat.resolveApplication(
+        String(body.ch ?? ""), String(body.handle ?? ""), body.accept === true)
       : url.endsWith("/report") ? chat.report(
         String(body.ch ?? ""), String(body.handle ?? ""),
         Number.isFinite(Number(body.id)) ? Number(body.id) : null,

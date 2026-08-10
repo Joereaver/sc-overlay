@@ -92,8 +92,42 @@
   .rail-foot .row .hbtn { flex: 1; text-align: center; }
 
   /* centre: tab strip */
-  #tabs { flex: none; display: flex; align-items: stretch; gap: 3px; padding: 6px 8px 0;
-    overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--divider); }
+  /* The row owns the divider and the positioning context; #tabs only owns the scrolling part,
+     so the cog cannot scroll away with the tabs. */
+  #tabrow { flex: none; display: flex; align-items: stretch; position: relative;
+    border-bottom: 1px solid var(--divider); }
+  #tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 3px; padding: 6px 8px 0;
+    overflow-x: auto; overflow-y: hidden; }
+  #chanCog { flex: none; align-self: center; margin: 0 6px 0 2px; }
+  #chanCog.on { color: var(--cyan-bright); background: rgba(var(--accent-rgb), 0.28); border-color: var(--cyan); }
+
+  /* Per-channel settings. 🔑 `top: 100%` anchors it to the row by construction — no measuring,
+     which matters because rAF never fires in the widget harness so a measured position is
+     untestable. 🔑 The [hidden] guard is mandatory: an author `display` rule beats the UA
+     stylesheet's [hidden], which is the shipped 0.1.38 Unlock Alerts bug. */
+  #chanSettings { position: absolute; right: 6px; top: 100%; z-index: 9; width: 232px;
+    display: flex; flex-direction: column; gap: 7px; padding: 9px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-solid, rgba(10,20,28,.98)); box-shadow: 0 12px 30px rgba(0,0,0,.55); }
+  #chanSettings[hidden] { display: none; }
+  #chanSettings .cs-head { font-size: 10px; font-weight: 800; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--gold); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  #chanSettings .cs-sec { display: flex; flex-direction: column; gap: 5px;
+    padding-top: 7px; border-top: 1px solid var(--divider); }
+  #chanSettings .cs-sec[hidden] { display: none; }
+  #chanSettings .cs-row { display: flex; align-items: center; gap: 6px; }
+  #chanSettings .cs-lbl { flex: 1; min-width: 0; font-size: 11px; color: var(--cyan-text); }
+  #chanSettings .cs-note { font-size: 9.5px; line-height: 1.35; color: var(--faint); }
+  #chanSettings .cs-note[hidden] { display: none; }
+  #chanSettings .cs-pin { font-size: 10.5px; line-height: 1.35; color: var(--cyan-dim);
+    max-height: 46px; overflow: hidden; }
+  #chanSettings code { font-size: 11.5px; letter-spacing: .12em; color: var(--gold); }
+  #chanSettings input { flex: 1; min-width: 0; font-family: var(--sans); font-size: 11px;
+    color: var(--cyan-bright); background: rgba(0,0,0,.25); border: 1px solid var(--divider);
+    border-radius: 6px; padding: 4px 6px; outline: none; }
+  #chanSettings input:focus { border-color: var(--cyan); }
+  #csDelete { width: 100%; text-align: center; }
   .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
     color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.07);
     border: 1px solid var(--divider); border-bottom: none; border-radius: 6px 6px 0 0;
@@ -183,28 +217,28 @@
   #createPop select option { background: #0b1a22; color: #cfe9ef; }
   #createPop .cp-hint { font-size: 10px; color: var(--faint); line-height: 1.35; margin: 2px 0 7px; min-height: 26px; }
   #createPop .cp-btns { display: flex; gap: 6px; justify-content: flex-end; }
+  /* 🔑 Every `hidden` in these pages needs its [hidden] guard — an author display rule beats
+     the UA stylesheet, which is the shipped 0.1.38 Unlock Alerts bug. */
+  #cpPartyFields { display: flex; flex-direction: column; gap: 6px;
+    padding-top: 7px; border-top: 1px solid var(--divider); }
+  #cpPartyFields[hidden] { display: none; }
+  #createPop .cp-row.chk { display: flex; align-items: center; gap: 6px; }
+  #createPop .cp-row.chk[hidden] { display: none; }
+  #createPop .cp-row.chk label { flex: 1; min-width: 0; }
+  #createPop .cp-row.chk input { flex: none; width: auto; accent-color: var(--cyan); }
+  #createPop input[type="number"] { width: 62px; }
+  /* A party listing on the browse board: the extra line that makes it worth choosing. */
+  .crow .pmeta { flex: none; max-width: 58%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 9px; letter-spacing: .03em; color: var(--cyan-dim); }
+  .crow .pflag { flex: none; font-size: 8px; font-weight: 800; letter-spacing: .06em;
+    color: var(--gold); }
 
-  /* The private-room bar: the join code, and the owner's invite box. */
-  #roomBar { display: none; align-items: center; gap: 6px; flex: none; padding: 4px 8px;
-    border-bottom: 1px solid var(--border); background: rgba(var(--accent-rgb), .07); }
-  #roomBar.show { display: flex; }
-  #roomBar .rb-lock svg { width: 12px; height: 12px; fill: none; stroke: var(--gold); stroke-width: 1.4; display: block; }
-  #roomBar .rb-lbl { font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
-  #roomBar code { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--gold);
-    letter-spacing: .12em; background: rgba(0,0,0,.3); border-radius: 4px; padding: 1px 6px; }
-  #roomBar #rbOwnerOnly { display: none; align-items: center; gap: 4px; margin-left: auto; }
-  #roomBar.owner #rbOwnerOnly { display: flex; }
-  /* The code half only exists for a private room; a public room you own shows just Delete. */
-  #roomBar .rb-lock, #roomBar .rb-lbl, #roomBar code, #roomBar #rbCopy { display: none; }
-  #roomBar.secret .rb-lock { display: block; }
-  #roomBar.secret .rb-lbl, #roomBar.secret code, #roomBar.secret #rbCopy { display: inline-block; }
   /* Destructive, and it takes the room away from everyone in it — so it does not look like
-     the buttons beside it. */
-  #roomBar .hbtn.danger { color: #ff8a7a; border-color: rgba(255,138,122,.45); }
-  #roomBar .hbtn.danger:hover { color: #fff; background: rgba(255,90,70,.35); border-color: #ff8a7a; }
-  #roomBar .hbtn.danger.confirm { color: #fff; background: rgba(255,70,50,.45); border-color: #ff8a7a; }
-  #roomBar input { width: 110px; font-family: var(--sans); font-size: 11px; color: var(--cyan-bright);
-    background: rgba(0,0,0,.28); border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
+     the buttons beside it. (Lives in the channel-settings popover since 2026-08-10; the old
+     always-on room bar is gone, along with the Delete button that sat exposed the whole time.) */
+  .hbtn.danger { color: #ff8a7a; border-color: rgba(255,138,122,.45); }
+  .hbtn.danger:hover { color: #fff; background: rgba(255,90,70,.35); border-color: #ff8a7a; }
+  .hbtn.danger.confirm { color: #fff; background: rgba(255,70,50,.45); border-color: #ff8a7a; }
 
   /* A channel row for a room you could join, grouped under its activity. */
   #chanList .grp { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
@@ -221,9 +255,14 @@
     background: var(--gold); margin-left: 4px; }
 
   /* Right-click menu on a name (member list or message). */
+  /* 🔑 This menu CANNOT hang outside the widget. The chat page is an IFRAME on the canvas, and an
+     iframe's content is clipped to its own box by the browser — no z-index or overflow setting
+     changes that. Escaping it would mean moving the menu up to the canvas document
+     (missions.html), which is a different feature. So it must always FIT: it scrolls rather than
+     overflow, and placeCtx() flips it toward whichever corner has room. */
   #ctx { position: absolute; display: none; z-index: 8; min-width: 150px; padding: 4px;
     border: 1px solid var(--border); border-radius: 8px; background: var(--panel-solid, rgba(10,20,28,.98));
-    box-shadow: 0 12px 30px rgba(0,0,0,.55); }
+    box-shadow: 0 12px 30px rgba(0,0,0,.55); overflow-y: auto; overscroll-behavior: contain; }
   #ctx.open { display: block; }
   #ctx .ct-who { padding: 5px 8px 6px; font-size: 10px; font-weight: 700; letter-spacing: .06em;
     color: var(--gold); border-bottom: 1px solid var(--divider); margin-bottom: 3px;
@@ -409,6 +448,46 @@
                 <option value="private">Private — code or invite only</option>
               </select></div>
             <div class="cp-hint" id="cpHint"></div>
+
+            <!-- Looking for people turns an ordinary room into a LISTING. Off by default: most
+                 rooms are just rooms, and a board full of chat channels is a dead board. -->
+            <div class="cp-row chk">
+              <label for="cpParty">Looking for people</label>
+              <input id="cpParty" type="checkbox" />
+            </div>
+            <div id="cpPartyFields" hidden>
+              <div class="cp-row"><label for="cpWhere">Where</label>
+                <input id="cpWhere" type="text" maxlength="60" spellcheck="false" autocomplete="off" placeholder="Aaron Halo" /></div>
+              <!-- 🔑 Sub's call, 2026-08-10: publishing your shard is OPT-IN, per listing. It is
+                   off unless ticked, and nothing leaks from merely having the widget open. -->
+              <div class="cp-row chk" id="cpHereRow" hidden>
+                <label for="cpHere">Use where I am now</label>
+                <input id="cpHere" type="checkbox" />
+              </div>
+              <div class="cp-row"><label for="cpSize">Group size</label>
+                <input id="cpSize" type="number" min="2" max="50" value="4" /></div>
+              <div class="cp-row sel"><label for="cpJoin">Joining</label>
+                <select id="cpJoin">
+                  <option value="open">Open — anyone can join</option>
+                  <option value="apply">Ask first — you approve people</option>
+                </select></div>
+              <div class="cp-row sel"><label for="cpVoice">Voice</label>
+                <select id="cpVoice">
+                  <option value="none">No voice</option>
+                  <option value="optional">Voice optional</option>
+                  <option value="required">Voice required</option>
+                </select></div>
+              <div class="cp-row sel"><label for="cpMins">Listed for</label>
+                <select id="cpMins">
+                  <option value="60">1 hour</option>
+                  <option value="120" selected>2 hours</option>
+                  <option value="240">4 hours</option>
+                  <option value="720">12 hours</option>
+                </select></div>
+              <div class="cp-hint">We can't put you in a party in-game — this is how people find
+                you, then you invite them the normal way.</div>
+            </div>
+
             <div class="cp-btns">
               <button id="cpCancel" class="hbtn sm" type="button">Cancel</button>
               <button id="cpGo" class="hbtn sm" type="button">Create</button>
@@ -418,21 +497,64 @@
       </div>
 
       <div id="center">
-        <div id="tabs"></div>
-        <!-- Only for a PRIVATE room you are inside: the code that admits the next person, and
-             (if it's yours) the invite box. Hidden entirely otherwise. -->
-        <div id="roomBar">
-          <span class="rb-lock" title="Private room" aria-hidden="true">
-            <svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
-          </span>
-          <span class="rb-lbl">Join code</span>
-          <code id="rbCode"></code>
-          <button id="rbCopy" class="hbtn sm" type="button" title="Copy the code">Copy</button>
-          <span id="rbOwnerOnly">
-            <input id="rbInvite" type="text" placeholder="RSI handle…" maxlength="30" spellcheck="false" autocomplete="off" />
-            <button id="rbInviteGo" class="hbtn sm" type="button" title="Let this handle in">Invite</button>
-            <button id="rbDelete" class="hbtn sm danger" type="button" title="Delete this room for everyone">Delete</button>
-          </span>
+        <!-- 🔑 The cog lives OUTSIDE #tabs, not inside it. #tabs scrolls horizontally once you
+             have a few channels, and a control that scrolls off is not "always there" — which is
+             the whole point of it (Sub, 2026-08-10). So the row is a wrapper: tabs take the slack
+             and scroll, the cog is pinned. -->
+        <div id="tabrow">
+          <div id="tabs"></div>
+          <button id="chanCog" class="hbtn sm tog" type="button" title="Settings for this channel" aria-label="Channel settings">
+            <!-- 🔑 A real gear: a toothed RIM, not a hub with rays. The first version was a circle
+                 with eight radiating lines, which is the universal brightness/sun glyph — Sub read
+                 it as a light/dark toggle. Teeth are what say "settings". -->
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.15"/><path d="M13.1 9.4a1.1 1.1 0 0 0 .22 1.21l.04.04a1.33 1.33 0 1 1-1.89 1.89l-.04-.04a1.1 1.1 0 0 0-1.21-.22 1.1 1.1 0 0 0-.67 1.01v.11a1.33 1.33 0 0 1-2.66 0v-.06a1.1 1.1 0 0 0-.72-1 1.1 1.1 0 0 0-1.21.22l-.04.04a1.33 1.33 0 1 1-1.89-1.89l.04-.04a1.1 1.1 0 0 0 .22-1.21 1.1 1.1 0 0 0-1.01-.67h-.11a1.33 1.33 0 0 1 0-2.66h.06a1.1 1.1 0 0 0 1-.72 1.1 1.1 0 0 0-.22-1.21l-.04-.04a1.33 1.33 0 1 1 1.89-1.89l.04.04a1.1 1.1 0 0 0 1.21.22h.05a1.1 1.1 0 0 0 .67-1.01v-.11a1.33 1.33 0 0 1 2.66 0v.06a1.1 1.1 0 0 0 .67 1.01 1.1 1.1 0 0 0 1.21-.22l.04-.04a1.33 1.33 0 1 1 1.89 1.89l-.04.04a1.1 1.1 0 0 0-.22 1.21v.05a1.1 1.1 0 0 0 1.01.67h.11a1.33 1.33 0 0 1 0 2.66h-.06a1.1 1.1 0 0 0-1.01.67z"/></svg>
+          </button>
+          <!-- Everything you or the owner might change about THIS channel, in one place. Replaces
+               the old always-on room bar, whose Delete button sat exposed the whole time you were
+               in a room you made. Anchored to the row with top:100% so it needs no arithmetic —
+               measuring here would be fragile and rAF never fires in the widget harness. -->
+          <div id="chanSettings" hidden>
+            <div class="cs-head" id="csTitle"></div>
+
+            <div class="cs-row">
+              <span class="cs-lbl">Mention call-outs</span>
+              <button id="csMute" class="hbtn sm" type="button"></button>
+            </div>
+            <div class="cs-note" id="csMuteNote"></div>
+
+            <div class="cs-sec" id="csPinRow" hidden>
+              <div class="cs-row">
+                <span class="cs-lbl">Pinned</span>
+                <button id="csPinRemove" class="hbtn sm danger" type="button" title="Remove this room's pin">Remove</button>
+              </div>
+              <div class="cs-pin" id="csPinText"></div>
+              <div class="cs-note">Pin a different message by right-clicking it.</div>
+            </div>
+
+            <div class="cs-sec" id="csCodeRow" hidden>
+              <div class="cs-row">
+                <span class="cs-lbl">Join code</span>
+                <code id="csCode"></code>
+                <button id="csCopy" class="hbtn sm" type="button" title="Copy the code">Copy</button>
+              </div>
+              <div class="cs-note">Anyone with this code can join.</div>
+            </div>
+
+            <div class="cs-sec" id="csInviteRow" hidden>
+              <div class="cs-lbl">Invite someone</div>
+              <div class="cs-row">
+                <input id="csInvite" type="text" placeholder="RSI handle…" maxlength="30" spellcheck="false" autocomplete="off" />
+                <button id="csInviteGo" class="hbtn sm" type="button" title="Let this handle in">Invite</button>
+              </div>
+            </div>
+
+            <div class="cs-sec" id="csDangerRow" hidden>
+              <button id="csDelete" class="hbtn sm danger" type="button" title="Delete this room for everyone">Delete this room</button>
+              <div class="cs-note">Everyone is removed and the history goes with it.</div>
+            </div>
+
+            <div class="cs-note" id="csNothing" hidden>Nothing to change for this channel.</div>
+          </div>
         </div>
         <!-- Sub's call, 2026-08-09: DMs get a standing disclaimer. They are private from other
              PLAYERS, not from the service — messages are stored in plain text on the chat
@@ -842,13 +964,21 @@
   function placeCtx(clientX, clientY) {
     const ctx = $("ctx");
     const box = $("panel").getBoundingClientRect();
+    // Cap the height BEFORE measuring, so a menu taller than a small widget scrolls instead of
+    // being cut off with its last items unreachable (Sub, 2026-08-10: "it will get cut off").
+    ctx.style.maxHeight = Math.max(72, box.height - 8) + "px";
     ctx.classList.add("open");
     const w = ctx.offsetWidth, h = ctx.offsetHeight;
-    let x = clientX - box.left, y = clientY - box.top;
-    if (x + w > box.width - 4) x = Math.max(4, box.width - w - 4);
-    if (y + h > box.height - 4) y = Math.max(4, box.height - h - 4);
-    ctx.style.left = x + "px";
-    ctx.style.top = y + "px";
+    // 🔑 FLIP toward the free side rather than clamping. Clamping slides the menu back under the
+    // cursor, so whichever item happens to land there is the one you are about to click — which
+    // is how a "Delete" ends up under a pointer that was aiming at a name. Opening up-and-left
+    // from the cursor keeps the pointer at a CORNER of the menu, never on top of an item.
+    let x = (clientX - box.left) + w > box.width - 4 ? (clientX - box.left) - w : (clientX - box.left);
+    let y = (clientY - box.top) + h > box.height - 4 ? (clientY - box.top) - h : (clientY - box.top);
+    // Only after flipping does clamping make sense: it is the last resort for a widget so small
+    // the menu does not fit either way.
+    ctx.style.left = Math.max(4, Math.min(x, box.width - w - 4)) + "px";
+    ctx.style.top = Math.max(4, Math.min(y, box.height - h - 4)) + "px";
     try { host()?.summonCog?.(); } catch { /* not embedded */ }
   }
 
@@ -1075,10 +1205,38 @@
           const nm = document.createElement("span");
           nm.className = "nm"; nm.style.color = "var(--faint)"; nm.textContent = d.label;
           row.appendChild(nm);
+          // A listing has to say enough to be worth choosing over the one below it. Anything
+          // absent is simply left out rather than rendered as an empty field.
+          if (d.party) {
+            const flag = document.createElement("span");
+            flag.className = "pflag";
+            flag.textContent = d.joinMode === "apply" ? "ASK" : "OPEN";
+            flag.title = d.joinMode === "apply" ? "The owner approves who joins" : "Anyone can join";
+            row.appendChild(flag);
+            const bits = [];
+            if (d.location) bits.push(d.location);
+            if (d.voice && d.voice !== "none") bits.push(d.voice === "required" ? "voice req" : "voice ok");
+            if (bits.length) {
+              const meta = document.createElement("span");
+              meta.className = "pmeta"; meta.textContent = bits.join(" · ");
+              row.appendChild(meta);
+            }
+          }
           const ct = document.createElement("span");
-          ct.className = "ct"; ct.textContent = String(d.count ?? 0);
+          ct.className = "ct";
+          // 🔑 The live count comes from PRESENCE, never from sizeMax — sizeMax is what the
+          // leader wants, not who is actually there, and showing it as though it were real
+          // headcount is the "confidently wrong" failure this project keeps relearning.
+          ct.textContent = d.party && d.sizeMax ? (d.count ?? 0) + "/" + d.sizeMax : String(d.count ?? 0);
           row.appendChild(ct);
-          row.addEventListener("click", () => joinNamed(d.label, "join"));
+          // 🔑 An apply listing must not be clicked into. The server refuses it anyway, but
+          // sending a join we KNOW will bounce, just to show the user an error, is a worse
+          // experience than doing the right thing from the start.
+          row.addEventListener("click", () => {
+            if (d.party && d.joinMode === "apply") void post("/api/chat/apply", { ch: d.ch });
+            else joinNamed(d.label, "join");
+          });
+          if (d.party && d.joinMode === "apply") row.title = "Ask to join " + d.label;
           // Wave a room away without touching membership — it is a room you could join, not one
           // you are in, so this is purely "stop showing me this".
           const hx = document.createElement("span");
@@ -1136,28 +1294,53 @@
   /* The private-room strip: the join code, and — if the room is yours — the invite box.
      🔑 It is only ever shown for a room you are ALREADY IN. The code is what admits the next
      person, so it must never appear anywhere someone outside the room can reach. */
-  function renderRoomBar() {
-    const bar = $("roomBar");
+  /* Everything about the CURRENT channel, behind one cog (Sub, 2026-08-10). Replaces the old
+     always-on room bar — its Delete button sat exposed for as long as you were in a room you
+     made, which is exactly the kind of destructive control that should take a deliberate act to
+     reach. 🔑 The cog is ALWAYS present, even on Global where the only thing to change is the
+     mute, because a control that appears and disappears is one people stop looking for. */
+  function renderChanSettings() {
     const c = chanOf(activeCh);
     const me = (view?.you?.handle ?? "").toLowerCase();
     const mine = !!c && c.kind === "custom" && !!c.owner && c.owner === me;
     const secret = !!c && c.kind === "custom" && c.privacy === "private" && !!c.code;
-    // The bar earns its space for a private room (it carries the join code) OR for any room you
-    // OWN (it carries Delete). A public room you don't own has nothing to put in it.
-    bar.classList.toggle("show", secret || mine);
-    bar.classList.toggle("owner", mine);
-    bar.classList.toggle("secret", secret);
-    if (secret) $("rbCode").textContent = c.code;
-    // The DM disclaimer rides the same render pass, so it can never disagree with which
-    // channel is actually on screen.
+
+    $("csTitle").textContent = c?.label ?? (activeCh.startsWith("dm:") ? dmOther(activeCh) || "Conversation" : "Channel");
+
+    const muted = isMuted(activeCh);
+    $("csMute").textContent = muted ? "Muted" : "On";
+    $("csMute").classList.toggle("active", !muted);
+    $("csMuteNote").textContent = muted
+      ? "You will still see the highlight and the unread dot — you just won't hear it."
+      : "HAL says so when someone @mentions you here.";
+
+    // The pin section shows for anyone (it is the room's notice) but only the owner may clear it.
+    const pin = c?.pin ?? null;
+    $("csPinRow").hidden = !pin;
+    if (pin) {
+      $("csPinText").textContent = pin.handle + ": " + pin.text;
+      $("csPinRemove").hidden = !canPin(activeCh);
+    }
+
+    $("csCodeRow").hidden = !secret;
+    if (secret) $("csCode").textContent = c.code;
+    // Inviting is meaningless for a public room — anyone can already walk in.
+    $("csInviteRow").hidden = !(secret && mine);
+    $("csDangerRow").hidden = !mine;
+    $("csNothing").hidden = !!(pin || secret || mine);
+
+    // The DM disclaimer rides the same render pass, so it can never disagree with which channel
+    // is actually on screen.
     // 🔑 Keyed off the CHANNEL, not the channel object: a DM you have opened but not yet sent
-    // into has no server-side room, so chanOf() is null for it — and that is exactly the
-    // moment the warning matters most, right before someone types their first message.
+    // into has no server-side room, so chanOf() is null for it — and that is exactly the moment
+    // the warning matters most, right before someone types their first message.
     $("dmWarn").classList.toggle("show", activeCh.startsWith("dm:"));
-    // Inviting is meaningless for a public room — anyone can already walk in — so the box only
-    // appears where it does something.
-    $("rbInvite").hidden = !secret;
-    $("rbInviteGo").hidden = !secret;
+  }
+
+  function setChanSettings(open) {
+    $("chanSettings").hidden = !open;
+    $("chanCog").classList.toggle("on", !!open);
+    if (open) { renderChanSettings(); try { host()?.summonCog?.(); } catch { /* not embedded */ } }
   }
 
   /* ── pinned notice ────────────────────────────────────────────────────────
@@ -1295,7 +1478,7 @@
   function select(ch) {
     activeCh = ch;
     unread.delete(ch);
-    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderPin(); renderLog();
+    renderTabs(); renderChannels(); renderMembers(); renderChanSettings(); renderPin(); renderLog();
   }
 
   /** Open a conversation with someone. Local until the first message — see `pendingDm`. */
@@ -1335,7 +1518,7 @@
     // Once the real room exists the placeholder has done its job.
     if (pendingCh && chanOf(pendingCh)) pendingDm = null;
     applyRails();
-    renderTabs(); renderChannels(); renderMembers(); renderRoomBar(); renderPin(); renderLog();
+    renderTabs(); renderChannels(); renderMembers(); renderChanSettings(); renderPin(); renderLog();
     if (view?.status === "error" && view.error) sys(view.error);
     else if (view?.status === "connecting") sys("Connecting…");
     else if (view && view.status === "off" && view.hasIdentity) sys("Chat is off. Open the Chat widget on the overlay to connect.");
@@ -1773,6 +1956,7 @@
     const pop = $("createPop");
     pop.classList.toggle("open", !!on);
     if (!on) return;
+    syncPartyFields();   // the "use where I am" row depends on whether the log has told us yet
     // Rebuild the activity list from the server's every time it opens, so a category added
     // server-side shows up without an app release.
     const sel = $("cpCat");
@@ -1806,8 +1990,18 @@
   async function createRoom() {
     const name = $("cpName").value.trim();
     if (!name) { $("cpName").focus(); return; }
+    const party = $("cpParty").checked;
     const ok = await post("/api/chat/join", {
       name, mode: "create", category: $("cpCat").value, privacy: $("cpPriv").value,
+      ...(party ? {
+        party: true,
+        // The opt-in decides whether the REAL region goes out. Unticked, only what they typed.
+        location: ($("cpHere").checked ? (view?.regionLabel ?? "") : $("cpWhere").value.trim()) || null,
+        sizeMax: Number($("cpSize").value) || null,
+        joinMode: $("cpJoin").value,
+        voice: $("cpVoice").value,
+        minutes: Number($("cpMins").value) || 120,
+      } : {}),
     });
     if (!ok) return;
     setCreatePop(false);
@@ -1820,7 +2014,7 @@
      otherwise it forgets, so a stray click can never delete a room. */
   let rbArmed = 0;
   async function deleteRoom() {
-    const btn = $("rbDelete");
+    const btn = $("csDelete");
     const c = chanOf(activeCh);
     if (!c) return;
     if (Date.now() > rbArmed) {
@@ -1828,20 +2022,20 @@
       btn.textContent = "Really delete?";
       btn.classList.add("confirm");
       setTimeout(() => {
-        if (Date.now() > rbArmed) { btn.textContent = "Delete"; btn.classList.remove("confirm"); }
+        if (Date.now() > rbArmed) { btn.textContent = "Delete this room"; btn.classList.remove("confirm"); }
       }, 4100);
       return;
     }
     rbArmed = 0;
-    btn.textContent = "Delete";
+    btn.textContent = "Delete this room";
     btn.classList.remove("confirm");
     await post("/api/chat/delete-room", { ch: c.ch });
   }
 
   async function inviteToRoom() {
-    const h = $("rbInvite").value.trim();
-    if (!h) { $("rbInvite").focus(); return; }
-    if (await post("/api/chat/invite", { ch: activeCh, handle: h })) $("rbInvite").value = "";
+    const h = $("csInvite").value.trim();
+    if (!h) { $("csInvite").focus(); return; }
+    if (await post("/api/chat/invite", { ch: activeCh, handle: h })) $("csInvite").value = "";
   }
 
   // ── identity gate (dev builds only; production uses the verified account) ──
@@ -1893,16 +2087,29 @@
   $("typeBtn").addEventListener("click", () => setTyping(!typing, "send"));
   $("joinBtn").addEventListener("click", () => joinNamed($("chanInput").value, "join"));
   $("createBtn").addEventListener("click", () => setCreatePop(!$("createPop").classList.contains("open")));
+  function syncPartyFields() {
+    const on = $("cpParty").checked;
+    $("cpPartyFields").hidden = !on;
+    // 🔑 Offering "use where I am now" when we have no location would be a tickbox that does
+    // nothing — the log has not told us a shard, so there is nothing to publish.
+    const here = !!(view?.regionLabel && view?.shard);
+    $("cpHereRow").hidden = !here;
+    if (!here) $("cpHere").checked = false;
+    $("cpWhere").disabled = $("cpHere").checked;
+    $("cpWhere").placeholder = $("cpHere").checked ? (view?.regionLabel ?? "") : "Aaron Halo";
+  }
+  $("cpParty").addEventListener("change", syncPartyFields);
+  $("cpHere").addEventListener("change", syncPartyFields);
   $("cpCancel").addEventListener("click", () => setCreatePop(false));
   $("cpGo").addEventListener("click", () => void createRoom());
   $("cpPriv").addEventListener("change", updateCreateHint);
   $("cpCat").addEventListener("change", updateCreateHint);
   $("cpName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void createRoom(); } });
-  $("rbInviteGo").addEventListener("click", () => void inviteToRoom());
-  $("rbDelete").addEventListener("click", () => void deleteRoom());
-  $("rbInvite").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void inviteToRoom(); } });
-  $("rbCopy").addEventListener("click", () => {
-    const code = $("rbCode").textContent;
+  $("csInviteGo").addEventListener("click", () => void inviteToRoom());
+  $("csDelete").addEventListener("click", () => void deleteRoom());
+  $("csInvite").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); void inviteToRoom(); } });
+  $("csCopy").addEventListener("click", () => {
+    const code = $("csCode").textContent;
     // The overlay runs without a secure-context clipboard in some shells, so say what happened
     // either way rather than failing silently and looking like a dead button.
     try { navigator.clipboard.writeText(code).then(() => sys("Join code " + code + " copied."),
@@ -1910,7 +2117,7 @@
     catch { sys("Join code: " + code); }
   });
   // Typing-mode focus rules, same as the other fields: focusing asks for the keyboard grab.
-  for (const id of ["cpName", "rbInvite"]) {
+  for (const id of ["cpName", "csInvite"]) {
     $(id).addEventListener("focus", () => { if (!typing) setTyping(true, "chan"); });
   }
   $("chanInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); joinNamed($("chanInput").value); } });
@@ -1926,6 +2133,7 @@
     // drops the keyboard grab and the next keystroke reaches the game.
     if ($("ctx").classList.contains("open")) { e.preventDefault(); closeCtx(); return; }
     if ($("createPop").classList.contains("open")) { e.preventDefault(); setCreatePop(false); return; }
+    if (!$("chanSettings").hidden) { e.preventDefault(); setChanSettings(false); return; }
     if ($("slash").classList.contains("open")) { e.preventDefault(); $("slash").classList.remove("open"); return; }
     if ($("emojiPop").classList.contains("open")) { e.preventDefault(); setEmojiPop(false); return; }
     if (typing) { e.preventDefault(); setTyping(false); }
@@ -1960,6 +2168,23 @@
   }
   $("rightBtn").addEventListener("click", () => pickRight("here"));
   $("friendsBtn").addEventListener("click", () => pickRight("friends"));
+
+  // ── the per-channel cog ──────────────────────────────────────────────────
+  $("chanCog").addEventListener("click", () => setChanSettings($("chanSettings").hidden));
+  $("csMute").addEventListener("click", () => {
+    if (isMuted(activeCh)) mutedChans.delete(activeCh); else mutedChans.add(activeCh);
+    listSave("chatMuted", [...mutedChans]);
+    renderChanSettings();
+    renderChannels();   // the bell on the channel row is the same state
+  });
+  $("csPinRemove").addEventListener("click", () => void post("/api/chat/unpin", { ch: activeCh }));
+  // Clicking outside closes it — but NOT a click inside the popover or on the cog itself, or
+  // every control in there would shut the thing it lives in.
+  document.addEventListener("pointerdown", (e) => {
+    if ($("chanSettings").hidden) return;
+    if (e.target.closest("#chanSettings") || e.target.closest("#chanCog")) return;
+    setChanSettings(false);
+  });
   $("pinX").addEventListener("click", () => post("/api/chat/unpin", { ch: activeCh }));
 
   // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.

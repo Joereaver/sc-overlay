@@ -2133,47 +2133,71 @@ const CHATLINKS = `(async () => {
   ok("Browse is rolled up by default", listPref("chatCollapsed", ["browse"]).indexOf("browse") >= 0,
      JSON.stringify(listPref("chatCollapsed", ["browse"])));
 
-  // ── the private-room bar ────────────────────────────────────────────────
-  const bar = document.getElementById("roomBar");
+  // ── the per-channel cog (replaced the always-on room bar, 2026-08-10) ────
+  const csShown = (id) => document.getElementById(id).hidden === false;
   view.channels = [{ ch: "global", kind: "global", label: "Global", members: [], msgs: [], count: 1 }];
   activeCh = "global";
-  renderRoomBar();
-  ok("no room bar on an ordinary channel", !bar.classList.contains("show"));
+  setChanSettings(true);
+  // 🔑 The cog is present on EVERY channel. The old bar appeared and vanished, and a control that
+  // comes and goes is one people stop looking for.
+  ok("the cog is always there", document.getElementById("chanCog").offsetParent !== null);
+  ok("an ordinary channel still opens settings", csShown("chanSettings"));
+  ok("...offering the mute, which every channel has", !!document.getElementById("csMute").textContent);
+  ok("...but no code, invite or delete",
+     !csShown("csCodeRow") && !csShown("csInviteRow") && !csShown("csDangerRow"));
+  ok("...and it says so rather than showing an empty box", csShown("csNothing"));
 
-  // A public room you OWN still gets the bar — that is where Delete lives — but nothing that
-  // only makes sense for a private room.
   view.channels.push({ ch: "custom:pub", kind: "custom", label: "Open Room", members: [], msgs: [],
                        count: 2, privacy: "public", owner: "imc-subliminal" });
   activeCh = "custom:pub";
-  renderRoomBar();
-  ok("a PUBLIC room you own shows the bar (for Delete)", bar.classList.contains("show"));
-  ok("...with no join code", !bar.classList.contains("secret"));
-  ok("...and no invite box — anyone can already walk in",
-     document.getElementById("rbInvite").hidden === true);
-  ok("...but Delete is reachable", bar.classList.contains("owner")
-     && document.getElementById("rbDelete").offsetParent !== null);
+  renderChanSettings();
+  ok("a PUBLIC room you own offers Delete", csShown("csDangerRow"));
+  ok("...with no join code", !csShown("csCodeRow"));
+  ok("...and no invite box — anyone can already walk in", !csShown("csInviteRow"));
 
-  // A public room you do NOT own has nothing to put in the bar.
   view.channels[1].owner = "someoneelse";
-  renderRoomBar();
-  ok("no room bar on a public room you don't own", !bar.classList.contains("show"));
+  renderChanSettings();
+  ok("a public room you DON'T own offers no Delete", !csShown("csDangerRow"));
   view.channels[1].owner = "imc-subliminal";
 
   view.channels.push({ ch: "custom:ops", kind: "custom", label: "Sunday Ops", members: [], msgs: [],
                        count: 3, privacy: "private", owner: "imc-subliminal", code: "K7M2QD" });
   activeCh = "custom:ops";
-  renderRoomBar();
-  ok("a private room you own shows the bar", bar.classList.contains("show"));
-  ok("...and offers Delete", document.getElementById("rbDelete").offsetParent !== null);
-  ok("...with the join code", document.getElementById("rbCode").textContent === "K7M2QD",
-     document.getElementById("rbCode").textContent);
-  ok("...and the invite box, because it's yours", bar.classList.contains("owner"));
+  renderChanSettings();
+  ok("a private room you own shows the join code", csShown("csCodeRow")
+     && document.getElementById("csCode").textContent === "K7M2QD",
+     document.getElementById("csCode").textContent);
+  ok("...the invite box, because it's yours", csShown("csInviteRow"));
+  ok("...and Delete", csShown("csDangerRow"));
+  ok("...titled with the room it belongs to",
+     document.getElementById("csTitle").textContent === "Sunday Ops",
+     document.getElementById("csTitle").textContent);
 
-  // Someone who was let in can pass the code on, but must not be able to invite.
+  // Someone who was let in can pass the code on, but must not be able to invite or delete.
   view.channels[2].owner = "someoneelse";
-  renderRoomBar();
-  ok("a private room you DON'T own still shows the code", bar.classList.contains("show"));
-  ok("...but hides the invite box", !bar.classList.contains("owner"));
+  renderChanSettings();
+  ok("a private room you DON'T own still shows the code", csShown("csCodeRow"));
+  ok("...but hides the invite box", !csShown("csInviteRow"));
+  ok("...and hides Delete", !csShown("csDangerRow"));
+
+  // 🔑 Delete must not sit exposed — reaching it is a deliberate act now (Sub's complaint).
+  setChanSettings(false);
+  ok("with the cog closed, Delete is not on screen at all",
+     document.getElementById("csDelete").offsetParent === null);
+
+  // The pin section is the room's notice, so everyone sees it; only the owner may clear it.
+  view.channels[2].owner = "imc-subliminal";
+  view.channels[2].pin = { ch: "custom:ops", id: 7, handle: "Rytharr", text: "form up at Orison", by: "IMC-Subliminal", at: Date.now() };
+  activeCh = "custom:ops";
+  setChanSettings(true);
+  ok("the pin shows in settings", csShown("csPinRow")
+     && /form up at Orison/.test(document.getElementById("csPinText").textContent));
+  ok("...and the owner can clear it", document.getElementById("csPinRemove").hidden === false);
+  view.channels[2].owner = "someoneelse";
+  renderChanSettings();
+  ok("...but a member cannot", document.getElementById("csPinRemove").hidden === true);
+  view.channels[2].pin = null;
+  setChanSettings(false);
 
   // The padlock in the channel list marks what isn't in the public directory.
   view.directory = [];
@@ -2441,6 +2465,25 @@ const CHATLINKS = `(async () => {
   activeCh = gCh.ch;
   gCh.pin = null;
   renderPin();
+
+  // ── the menu must always FIT: this page is an iframe and cannot paint outside it ──────────
+  const ctxPanel = () => document.getElementById("panel").getBoundingClientRect();
+  const ctxBox0 = ctxPanel();
+  const ctxCorners = [[6, 6], [ctxBox0.width - 6, ctxBox0.height - 6],
+                      [ctxBox0.width - 6, 6], [6, ctxBox0.height - 6]];
+  let ctxEscaped = null;
+  for (const [cx, cy] of ctxCorners) {
+    openCtx("Rytharr", cx, cy);
+    const cb = document.getElementById("ctx").getBoundingClientRect();
+    const pb = ctxPanel();
+    if (cb.left < pb.left - 1 || cb.top < pb.top - 1 || cb.right > pb.right + 1 || cb.bottom > pb.bottom + 1) {
+      ctxEscaped = "from " + Math.round(cx) + "," + Math.round(cy)
+        + " menu " + Math.round(cb.left) + "," + Math.round(cb.top) + " " + Math.round(cb.width) + "x" + Math.round(cb.height)
+        + " vs panel " + Math.round(pb.left) + "," + Math.round(pb.top) + " " + Math.round(pb.width) + "x" + Math.round(pb.height);
+    }
+    closeCtx();
+  }
+  ok("the menu stays inside the widget from every corner", ctxEscaped === null, ctxEscaped);
 
   // Conversations the server knows about but that aren't open tabs.
   view.dmThreads = [{ other: "zed", lastAt: new Date().toISOString() }];
