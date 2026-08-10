@@ -33,6 +33,7 @@
     --sans: "Inter", system-ui, sans-serif;
     --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", monospace;
     --leg: #ff9d5c; --epic: #c98bff; --rare: #5aa9ff; --unc: #4fd6a0; --common: #9fb4c0;
+    --gem: #ffd479; --ast: #8fa3b0;
   }
   /* Drake Interplanetary theme (mirrors the HUD): burnt-orange chrome on warm gunmetal. Only
      the tokens change; --border/--divider derive from --accent-rgb so they retint automatically. */
@@ -499,8 +500,14 @@
   const DEFAULT_ANGLE = -5; // this widget's resting skew until the user changes it (angles left-in)
   let widget = { x: null, y: null, scale: null };
   let miningBaseScale = 100; // baseline from config.overlayScale; a per-widget scale overrides it
-  const RAR = { Legendary: "--leg", Epic: "--epic", Rare: "--rare", Uncommon: "--unc", Common: "--common" };
-  const RAR_ORDER = ["Legendary", "Epic", "Rare", "Uncommon", "Common"];
+  // 🔑 A rarity missing from RAR_ORDER is INVISIBLE in the target picker — renderTargets
+  // iterates this list, not the data. The datacore-generated table added two groups that are
+  // not ore rarities at all ("Gem" for the hand-mined family, "Asteroid" for the C/S/P/M/Q/E
+  // types); without them you could see a gem scan but never hunt for one. They sort last —
+  // they are rock KINDS, so ordering them among rarities would be arbitrary.
+  const RAR = { Legendary: "--leg", Epic: "--epic", Rare: "--rare", Uncommon: "--unc", Common: "--common",
+                Gem: "--gem", Asteroid: "--ast" };
+  const RAR_ORDER = ["Legendary", "Epic", "Rare", "Uncommon", "Common", "Gem", "Asteroid"];
   let view = { rocks: [], targets: [], scan: null, jobs: [] };
   const targetSet = new Set();
 
