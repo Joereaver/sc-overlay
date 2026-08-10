@@ -1977,6 +1977,21 @@ const CHATLINKS = `(async () => {
        === "[build:Old one|https://erkul.games/loadout/Zjbboonv]",
      applyCommand("/build Old one https://www.erkul.games/loadout/Zjbboonv"));
   ok("a non-erkul link is refused", applyCommand("/build Sneaky https://evil.example/s/abcd") === null);
+
+  // 🔑 INLINE. It was anchored to the start of the message while being offered as an inline
+  // command, so this exact shape sent raw text and produced no link (Sub, 2026-08-09).
+  const inl = applyCommand("hey @Rytharr check this /build Vulture salvage fit https://erkul.games/s/akeei4v0 what do you reckon");
+  ok("/build works MID-MESSAGE",
+     inl === "hey @Rytharr check this [build:Vulture salvage fit|https://erkul.games/s/akeei4v0] what do you reckon", inl);
+  ok("...and the text after the link survives", (inl || "").endsWith("what do you reckon"));
+  const two = applyCommand("/build A https://erkul.games/s/aaaa1111 and /build B https://erkul.games/s/bbbb2222");
+  // 🔑 split(), not a regex: this suite is a TEMPLATE LITERAL, so a backslash escape like
+  // \[ collapses before the regex is ever compiled and leaves an unterminated character
+  // class - which throws at runtime and surfaces as a bare "harness error".
+  ok("...twice in one message", (two || "").split("[build:").length - 1 === 2, two);
+  const rendered = render(inl || "");
+  ok("...and the mention beside it still renders", rendered.querySelector(".at") !== null);
+  ok("...with the build as a real link", rendered.querySelector(".lnk .lkk").textContent === "BUILD");
   ok("a name with no link is refused", applyCommand("/build just a name") === null);
   ok("no arguments at all is refused", applyCommand("/build") === null);
 
