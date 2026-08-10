@@ -2,7 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readFile, readdirSync, statSync, mkdirSync, copyFileSync, rmSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
-import { extname, join, dirname, basename } from "node:path";
+import { extname, join, dirname, basename, resolve, sep } from "node:path";
 
 import { resolveLoadout, type Build } from "./erkul.js";
 import { LogWatcher } from "./watcher.js";
@@ -1429,6 +1429,33 @@ const server = createServer((req, res) => {
 async function handleRequest(req: import("node:http").IncomingMessage, res: ServerResponse) {
   const url = (req.url ?? "/").split("?")[0];
 
+  // ── Network policy ────────────────────────────────────────────────────────
+  // 🔴 This server binds ALL interfaces so OBS browser sources on a second PC can read the
+  // widget pages. That makes every route reachable by the whole LAN, and it was previously
+  // open house: a security report from a viewer on Sub's stream (2026-08-09) chained
+  // unauthenticated POST /api/config into full sync-token theft — repoint `chatServerUrl` at
+  // your own WebSocket and the sidecar cheerfully sends `{t:"hello", token}` straight to you.
+  //
+  // The rule now, in one place rather than per-route:
+  //   • ANY mutating request (non-GET/HEAD) must come from this machine. OBS is a DISPLAY
+  //     surface — it reads. Nothing on another PC has business changing this user's settings,
+  //     spending their Twitch credential, or driving their chat identity.
+  //   • Sensitive GETs are loopback-only too: they carry credentials (config), name paths on
+  //     disk (diagnostics/setup), read arbitrary files (mining tone), or fetch arbitrary URLs
+  //     on the LAN's behalf (can-embed, an SSRF hop into the private network).
+  // Everything else — widget pages, their read-only data and event streams — stays public so
+  // OBS keeps working.
+  const SENSITIVE_GET = new Set([
+    "/api/config", "/api/diagnostics", "/api/setup", "/api/mining/tone", "/api/scfeed/tone",
+    "/api/can-embed", "/api/dev/note",
+  ]);
+  const mutating = req.method !== "GET" && req.method !== "HEAD";
+  if ((mutating || SENSITIVE_GET.has(url)) && !fromThisMachine(req)) {
+    res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ error: "This endpoint is only available on the machine running SC Overlay." }));
+    return;
+  }
+
   // Live event stream for the overlay.
   if (url === "/events") {
     res.writeHead(200, {
@@ -2756,8 +2783,27 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   }
 
   // Static files.
+  // 🔴 PATH TRAVERSAL. This was `join(overlayDir, decodeURIComponent(url))` with no containment
+  // check, so `GET /..%2f..%2f…/config.json` walked straight out of the overlay directory and
+  // returned the user's config — INCLUDING THEIR SYNC TOKEN — to anything that could reach port
+  // 8778. Unauthenticated remote arbitrary file read, and the token is the whole account: chat
+  // identity, collection, the lot. Reported by a viewer on Sub's stream (2026-08-09) and
+  // reproduced here before fixing.
+  //
+  // 🔑 Decode FIRST, then resolve, then verify containment. Checking the raw string for ".."
+  // is the classic non-fix — `%2e%2e%2f` sails past it, and it is `decodeURIComponent` that
+  // turns it back into `../`. Only comparing the RESOLVED absolute path can be trusted, and it
+  // needs the trailing separator or a sibling directory like `overlay-secrets/` also matches.
   let p = url === "/" ? "/index.html" : url;
-  readFile(join(overlayDir, decodeURIComponent(p)), (err, buf) => {
+  let decoded: string;
+  try { decoded = decodeURIComponent(p); } catch { res.writeHead(400); res.end("bad path"); return; }
+  const target = resolve(overlayDir, "." + (decoded.startsWith("/") ? decoded : "/" + decoded));
+  const root = resolve(overlayDir) + sep;
+  if (!target.startsWith(root)) {
+    res.writeHead(403); res.end("forbidden");
+    return;
+  }
+  readFile(target, (err, buf) => {
     if (err) {
       res.writeHead(404);
       res.end("not found");

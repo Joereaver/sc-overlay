@@ -424,6 +424,15 @@ function readBody(req) {
 const server = createServer(async (req, res) => {
   const url = (req.url ?? "/").split("?")[0];
   if (url === "/health") {
+    // 🔑 A health check says "I am alive", not "here is every room and who is in it". The room
+    // map named every private and custom room and its occupancy to anyone on the internet —
+    // which, for rooms whose whole point is not being listed, defeats the feature. The detail
+    // moved to the loopback admin side, where the ban and room tools already live.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, mode: AUTH_MODE, connections: wss.clients.size, rooms: rooms.size }));
+    return;
+  }
+  if (url === "/admin/health" && loopback(req)) {
     const roomStats = {};
     for (const [ch, r] of rooms) roomStats[ch] = r.members.size;
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -474,7 +483,11 @@ const server = createServer(async (req, res) => {
 });
 
 // ── WebSocket ───────────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ server, path: "/ws" });
+// 🔴 maxPayload. Without it `ws` will buffer a frame of ANY size — a single client streaming
+// a huge message is an out-of-memory kill of the whole chat server for everyone. 16 KB is
+// forty times the 400-character message limit, which leaves room for the biggest legitimate
+// frame (a hello with a token) and nothing like enough for an attack.
+const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 16 * 1024 });
 const conns = new Set();
 
 wss.on("connection", (ws) => {
@@ -729,6 +742,15 @@ setInterval(() => {
     .then((n) => { if (n) console.log(`[chat-server] pruned ${n} old message(s)`); })
     .catch((e) => console.error("[chat-server] message prune failed:", e?.message));
 }, PRUNE_EVERY_MS).unref();
+
+// 🔴 Deploy footgun: CHAT_AUTH defaults to "dev", which accepts ANY hello.handle as verified.
+// Mis-set (or unset) in production and every identity in chat is free to claim. Refuse to start
+// that way unless someone says so out loud.
+if (AUTH_MODE === "dev" && process.env.CHAT_ALLOW_DEV_AUTH !== "1") {
+  console.error("[chat-server] REFUSING TO START: CHAT_AUTH is 'dev', which trusts any handle. "
+    + "Set CHAT_AUTH=site for production, or CHAT_ALLOW_DEV_AUTH=1 if this really is a local test.");
+  process.exit(1);
+}
 
 server.listen(PORT, () => {
   console.log(`[chat-server] listening on :${PORT} (auth=${AUTH_MODE}, store=${store.mode}, `

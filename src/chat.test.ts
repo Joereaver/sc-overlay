@@ -43,6 +43,8 @@ async function testCustom(): Promise<void> {
       ...process.env,
       CHAT_PORT: String(CUSTOM_PORT),
       CHAT_AUTH: "dev",
+      // Dev auth trusts any handle, so the server refuses to boot with it unless told to.
+      CHAT_ALLOW_DEV_AUTH: "1",
       CHAT_DATA_DIR: mkdtempSync(join(tmpdir(), "sc-chat-client-test-")),
     },
     stdio: "ignore",

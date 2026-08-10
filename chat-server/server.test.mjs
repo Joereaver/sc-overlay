@@ -14,7 +14,9 @@ import { tmpdir } from "node:os";
 const scratchData = mkdtempSync(join(tmpdir(), "sc-chat-test-"));
 
 const server = spawn(process.execPath, [join(here, "server.mjs")], {
-  env: { ...process.env, CHAT_PORT: String(PORT), CHAT_AUTH: "dev", CHAT_DATA_DIR: scratchData },
+  env: { ...process.env, CHAT_PORT: String(PORT), CHAT_AUTH: "dev", CHAT_DATA_DIR: scratchData,
+         // Dev auth trusts any handle, so the server refuses to boot with it unless told.
+         CHAT_ALLOW_DEV_AUTH: "1" },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
 });
