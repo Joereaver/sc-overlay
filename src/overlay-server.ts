@@ -1450,9 +1450,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     "/api/can-embed", "/api/dev/note",
   ]);
   const mutating = req.method !== "GET" && req.method !== "HEAD";
-  if ((mutating || SENSITIVE_GET.has(url)) && !fromThisMachine(req)) {
+  const sensitive = mutating || SENSITIVE_GET.has(url);
+  if (sensitive && !fromThisMachine(req)) {
     res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({ error: "This endpoint is only available on the machine running SC Overlay." }));
+    return;
+  }
+  // 🔑 Loopback is NOT enough on its own. The Web Page widget will load any http(s) URL, and a
+  // page open in it runs ON this machine — so a hostile site can fetch http://127.0.0.1:8778/…
+  // and every loopback check above passes. Same for any browser the user happens to have open.
+  // A browser stamps `Origin` on cross-origin requests, and our own widgets are same-origin
+  // (no Origin on same-origin GETs, and our own host when there is one), so an Origin naming
+  // somebody else is proof the caller is a web page that has no business here.
+  const origin = req.headers.origin;
+  if (sensitive && typeof origin === "string" && origin && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin)) {
+    res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ error: "Cross-origin requests are not accepted." }));
     return;
   }
 
