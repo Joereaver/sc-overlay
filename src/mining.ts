@@ -201,6 +201,21 @@ export class MiningTracker extends EventEmitter {
     return (this.data as unknown as { harvest?: { plants?: string[] } })?.harvest?.plants ?? [];
   }
 
+  /** Every ORE a player can actually come away with — ship-mined rocks plus the hand-mined gems.
+   *
+   *  🔑 An umbrella entry is replaced by what it CONTAINS, not listed alongside it: "Hand-mined
+   *  Gem" is a signature family (all eight read 3,000), not a thing anyone puts in a loot split.
+   *  Used by the Loot Split name autocomplete, which is why this is the mining table and not the
+   *  commodity map — that map is the whole economy, ships and helmets and drugs included. */
+  oreNames(): string[] {
+    const out = new Set<string>();
+    for (const r of this.data?.rocks ?? []) {
+      if (r.contains?.length) for (const c of r.contains) out.add(c);
+      else out.add(r.name);
+    }
+    return [...out].sort((a, b) => a.localeCompare(b));
+  }
+
   maxSignature(): number {
     if (this.maxSig === null) {
       this.maxSig = Math.max(0, ...(this.data?.rocks ?? []).flatMap((r) => r.sigs));

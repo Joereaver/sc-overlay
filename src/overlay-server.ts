@@ -1572,26 +1572,46 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     // rocks) is what makes the ¤ sell-price lookup beside it always resolve: same source, so a
     // name the widget offered can never be a name the lookup then rejects.
     if (new URL(req.url ?? "", "http://x").searchParams.get("names")) {
-      // 🔑 The raw map is not a list a human should be offered. Measured 2026-08-11: 734 entries
-      // holding "Aphorite" three times over, plus internal rock identifiers that leak straight out
-      // of the game data — `MineableRock_SurfaceLegendary_Quantainium`, and even CIG's own typo
-      // `MineableRock_test_Hephasestanite`. Offering those as spellings, in a control whose whole
-      // job is spelling the hard names correctly, would be worse than offering nothing.
-      // Underscores mark the internal keys; display names never carry one. "(Raw)" and "(R)"
-      // variants DO stay — raw versus refined is a real distinction a crew splits on.
-      const seen = new Set<string>();
-      const names: string[] = [];
-      for (const c of Object.values(economy.commodities())) {
-        const n = (c.name || "").trim();
-        if (!n || n.includes("_")) continue;
-        const dedupe = n.toLowerCase();
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
-        names.push(n);
+      // 🔑 ORES ONLY, and grouped raw vs refined (Sub, 2026-08-11). The first cut offered the whole
+      // commodity map and it was unusable: 734 entries carrying ships (Aegis Avenger Titan),
+      // helmets, drugs, a literal "<= PLACEHOLDER =>", the STALE AsteroidCTypeMineableRock family
+      // the game stopped showing, and internal identifiers including CIG's own typo
+      // MineableRock_test_Hephasestanite. A list that long also cannot be got through — the native
+      // control gave up around "Bracer".
+      //
+      // The mining table is the right source precisely because it is the list of things you can
+      // come away with: ship-mined rock plus hand-mined gems. The economy map then supplies the
+      // real commodity spellings and, via `refinesTo`, which side of the refine each one sits on —
+      // an authority in the data instead of guessing from the suffix, which is inconsistent
+      // anyway ("(Ore)", "(Raw)", "(Pure)", "(R)" are all in use.)
+      //
+      // Anything with no commodity at all (Ice) is dropped rather than offered: every name here
+      // must be one the ¤ sell-price lookup beside it can resolve, or the autocomplete would hand
+      // people a spelling the next control rejects. The field stays free text regardless — this
+      // is a suggestion list, never a whitelist.
+      // ⚠️ `refinesTo` is the authority but it is NOT complete: the gem ores "Jaclium (Ore)" and
+      // "Saldynium (Ore)" declare no refine target and landed under Refined on the first run. The
+      // suffix backs it up. "(Pure)" is deliberately NOT a raw marker — Carinite (Pure) is the
+      // processed form, so treating every parenthesis as "raw" would have moved it the wrong way.
+      const RAW_SUFFIX = /\((?:ore|raw|r)\)$/i;
+      const commodities = Object.values(economy.commodities())
+        .map((c) => ({ name: (c.name ?? "").trim(), refines: !!c.refinesTo }))
+        .filter((c) => c.name && !c.name.includes("_"));
+      const raw: string[] = [];
+      const refined: string[] = [];
+      for (const ore of mining.oreNames()) {
+        for (const c of commodities) {
+          if (c.name !== ore && !c.name.startsWith(ore + " (")) continue;
+          const bucket = c.refines || RAW_SUFFIX.test(c.name) ? raw : refined;
+          if (!bucket.includes(c.name)) bucket.push(c.name);
+        }
       }
-      names.sort((a, b) => a.localeCompare(b));
+      const groups = [
+        { label: "Raw / unrefined", names: raw.sort((a, b) => a.localeCompare(b)) },
+        { label: "Refined", names: refined.sort((a, b) => a.localeCompare(b)) },
+      ].filter((g) => g.names.length);
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-      res.end(JSON.stringify({ names }));
+      res.end(JSON.stringify({ groups }));
       return;
     }
     const key = new URL(req.url ?? "", "http://x").searchParams.get("item")?.trim();

@@ -78,6 +78,21 @@
   .rfmenu .rfstation { font-size: 9.5px; color: var(--faint); }
   .rfmenu .rfscu { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--gold); }
   .rfmenu .rfnone { padding: 9px; font-size: 10.5px; line-height: 1.4; color: var(--cyan-dim); }
+
+  /* Ore-name autocomplete. A native <datalist> was the first attempt and was wrong three ways: it
+     cannot be styled, cannot show group headings, and Chromium caps how much of a long list it
+     will show — it dead-ended around "Bracer" with no way to scroll (Sub, 2026-08-11). This is the
+     same shape as the refinery picker above: inside the widget's own box, so the shell hit-tests
+     it and #panel's overflow:hidden cannot eat it. */
+  .acmenu { position: absolute; z-index: 21; max-height: 190px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--panel-solid);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5); }
+  .acmenu .acgroup { position: sticky; top: 0; padding: 5px 9px 3px; font-size: 8.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint);
+    background: var(--panel-solid); border-bottom: 1px solid var(--divider); }
+  .acmenu .acitem { padding: 5px 9px; font-size: 11.5px; color: var(--cyan-text); cursor: pointer; }
+  .acmenu .acitem:hover, .acmenu .acitem.on { background: rgba(var(--accent-rgb), 0.18); color: var(--cyan-bright); }
+  .acmenu .acnone { padding: 8px 9px; font-size: 10.5px; color: var(--cyan-dim); }
   .lrow { display: flex; align-items: center; gap: 5px; padding: 4px 12px 6px; }
   .lrow input { font-family: var(--sans); font-size: 11.5px; color: var(--cyan-bright);
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 5px;
@@ -257,7 +272,6 @@
       <div id="slist"></div>
     </div>
   </div>
-  <datalist id="oreNames"></datalist>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -566,11 +580,15 @@
         return i;
       };
       const nameInput = mk("ln", l.name, "Aluminum", (v) => { l.name = v; });
-      // 🔑 Autocomplete off the SAME list the ¤ sell-price lookup resolves against, so a name the
-      // widget offered can never be one the lookup then rejects. Sub, 2026-08-11: "it's pretty
-      // hard to spell some of these ore names... some of this shit's just made up" — Hephaestanite
-      // and Aphorite are not words anybody types correctly at 2am after a mining run.
-      nameInput.setAttribute("list", "oreNames");
+      // 🔑 Suggestions come from the MINING TABLE (ship-mined rock + hand-mined gems), grouped raw
+      // vs refined, not from the whole commodity map — see /api/commodities?names=1. Sub,
+      // 2026-08-11: "it's pretty hard to spell some of these ore names... some of this shit's just
+      // made up". Hephaestanite and Aphorite are not words anybody types right after a long run.
+      nameInput.setAttribute("autocomplete", "off");
+      nameInput.addEventListener("focus", () => openAc(nameInput, l));
+      nameInput.addEventListener("input", () => openAc(nameInput, l));
+      nameInput.addEventListener("blur", () => setTimeout(closeAc, 120));
+      nameInput.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAc(); });
       row.append(
         nameInput,
         mk("lq", l.qty, "0", (v) => { l.qty = Math.max(0, Number(v) || 0); }, "number"),
@@ -770,17 +788,65 @@
   // Commodity names for the item autocomplete. Names ONLY (`?names=1`) — the full economy map is
   // ~600KB of per-terminal prices and this widget wants none of it. Best-effort: a failed fetch
   // just means typing without suggestions, which is exactly today's behaviour.
+  let oreGroups = [];   // [{ label, names }] — raw / refined, from the mining table
   async function loadOreNames() {
     try {
       const d = await (await fetch("/api/commodities?names=1", { cache: "no-store" })).json();
-      const dl = $("oreNames");
-      dl.textContent = "";
-      for (const n of d.names || []) {
-        const o = document.createElement("option");
-        o.value = n;
-        dl.appendChild(o);
-      }
+      oreGroups = d.groups || [];
     } catch { /* no suggestions, still fully typeable */ }
+  }
+
+  // ---- ore-name autocomplete -------------------------------------------------
+  // 🔑 A SUGGESTION LIST, NEVER A WHITELIST. The field stays ordinary free text — salvage, boxes
+  // of cargo and anything else a crew divides still type in exactly as before. This only saves
+  // people spelling Hephaestanite and Aphorite correctly at 2am.
+  let acMenu = null;
+  function closeAc() {
+    acMenu?.remove();
+    acMenu = null;
+    $("loot").classList.remove("rfopen");
+  }
+  function openAc(input, item) {
+    closeAc();
+    const typed = (input.value || "").trim().toLowerCase();
+    // Filter within each group so the RAW/REFINED split survives typing — that grouping is the
+    // point (Sub asked for it explicitly), not decoration on the unfiltered list.
+    const groups = oreGroups
+      .map((g) => ({ label: g.label, names: (g.names || []).filter((n) => !typed || n.toLowerCase().includes(typed)) }))
+      .filter((g) => g.names.length);
+    if (!groups.length) return;                 // nothing matches: get out of the way entirely
+    const menu = document.createElement("div");
+    menu.className = "acmenu";
+    for (const g of groups) {
+      const h = document.createElement("div");
+      h.className = "acgroup";
+      h.textContent = g.label;
+      menu.appendChild(h);
+      for (const n of g.names) {
+        const el = document.createElement("div");
+        el.className = "acitem";
+        el.textContent = n;
+        // mousedown, not click: the input's blur would tear the menu down first.
+        el.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          input.value = n;
+          item.name = n;
+          closeAc();
+          renderCuts(); scheduleSave();
+        });
+        menu.appendChild(el);
+      }
+    }
+    const wrap = $("loot");
+    const row = input.closest(".lrow");
+    // Positioned against #loot, which is the offset parent — same containment as the refinery
+    // picker, so it can never hang outside the rect the shell hit-tests.
+    menu.style.top = (row.offsetTop + row.offsetHeight) + "px";
+    menu.style.left = "12px";
+    menu.style.right = "12px";
+    wrap.classList.add("rfopen");
+    wrap.appendChild(menu);
+    acMenu = menu;
   }
 
   (async () => {
