@@ -1149,6 +1149,27 @@
     color: #1a0d0b; background: var(--red); }
   #svcDown .sd-go[disabled] { opacity: 0.5; cursor: default; }
 
+  /* Screen reading is switched ON but the OCR engine failed a self-test it could not fail by
+     chance. Amber rather than red, and BELOW #svcDown: the app is working, one opt-in feature
+     is not, and a dead sidecar outranks this if both ever land at once. Same --prim-* anchoring
+     as every other fixed thing here, because this window spans every monitor. */
+  #ocrWarn { display: none; position: fixed; z-index: 95;
+    left: calc(var(--prim-left, 0px) + var(--prim-w, 100%) / 2); transform: translateX(-50%);
+    top: calc(var(--prim-top, 0px) + 88px);
+    width: min(460px, calc(var(--prim-w, 100%) - 60px));
+    align-items: center; gap: 12px; padding: 11px 14px;
+    border: 1px solid var(--gold); border-radius: 9px;
+    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot)), var(--panel-solid);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
+  #ocrWarn.show { display: flex; }
+  #ocrWarn .ow-txt { flex: 1; min-width: 0; }
+  #ocrWarn .ow-title { font-family: var(--sans); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); }
+  #ocrWarn .ow-body { font-size: 11.5px; line-height: 1.45; color: var(--cyan-text); margin-top: 3px; }
+  #ocrWarn .ow-x { flex: none; width: 21px; height: 21px; display: grid; place-items: center;
+    cursor: pointer; border: 1px solid var(--border); border-radius: 5px; color: var(--cyan-dim); }
+  #ocrWarn .ow-x:hover { color: var(--gold); border-color: var(--gold); }
+
   /* ── Mission report ─────────────────────────────────────────────────────────────────────
      The after-mission card TAKES OVER the Mission & BP Tracker widget: it covers #panel edge to
      edge for its ~40s, then uncovers it. Sub's call (2026-07-30) over the screen-centred modal
@@ -1582,6 +1603,13 @@
       <div class="sd-body" id="sdBody"></div>
     </div>
     <button class="sd-go" id="sdRetry">Try again</button>
+  </div>
+  <div id="ocrWarn">
+    <div class="ow-txt">
+      <div class="ow-title">Screen reading isn't working</div>
+      <div class="ow-body" id="owBody"></div>
+    </div>
+    <span class="ow-x" id="owX" title="Dismiss">✕</span>
   </div>
   <div id="setupNudge">
     <div class="sn-txt">
@@ -2200,7 +2228,15 @@
   // leg, come back and finish answering" is the behaviour being supported and three was inside
   // it. The ceiling only has to beat "forgotten", not "busy".
   const REPORT_MAX_MS = 600000;
-  let mrAt = null, mrTimer = null, mrRaf = null, mrContract = null, mrAnswers = {};
+  // 🔑 mrCard is the completion the card was BUILT from, and it is why this is not read off
+  // `current.completion`. The card deliberately outlives that: the server holds a completion for
+  // 30s, the card for 40s, and indefinitely once you touch it. So `current.completion` goes NULL
+  // with the card still on screen — and every re-render guarded on it silently stopped happening.
+  // Answers kept saving and kept POSTing; only the repaint was skipped, so selecting an option did
+  // nothing VISIBLE and an answer already given could not be changed. Close still worked, because
+  // its handler never reads the completion — which is what made it look like a stacking bug
+  // (Sub, 2026-08-10: "that's the only button I can click"). Hold the object, don't re-fetch it.
+  let mrAt = null, mrTimer = null, mrRaf = null, mrContract = null, mrAnswers = {}, mrCard = null;
 
   const DIFFICULTY = [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]];
   const COMBAT_OPTS = [["fps", "On foot"], ["ship", "Ship"], ["mixed", "Both"], ["none", "No combat"]];
@@ -2317,6 +2353,7 @@
     // Lift the tracker above every other widget while the card is up — see #panel.canvas.mr-open.
     $("panel")?.classList.add("mr-open");
     mrContract = c.contractKey;
+    mrCard = c;
     mrAnswers = {};
     // Pre-select whatever this player said last time about this contract, so a re-run shows
     // their own answer rather than asking the same question from blank.
@@ -2380,7 +2417,7 @@
       const sig = reportSig(c);
       if (sig === mrSig) return;
       mrSig = sig;
-      if ($("mreport").classList.contains("show")) { $("mrBody").innerHTML = reportBody(c); $("mrAsk").innerHTML = reportAsk(c); }
+      if ($("mreport").classList.contains("show")) { mrCard = c; $("mrBody").innerHTML = reportBody(c); $("mrAsk").innerHTML = reportAsk(c); }
     } catch (err) {
       mrNote("report FAILED to render: " + (err && err.message ? err.message : err));
     }
@@ -2433,7 +2470,7 @@
     // keeps serving v.completion for its full 30s hold — so clearing it here would make the very
     // next view tick decide this was a new completion and pop the card straight back up. A ✕ has
     // to mean gone.
-    mrContract = null; mrAnswers = {};
+    mrContract = null; mrAnswers = {}; mrCard = null;
   }
 
   // `?harness=1` = the widget DOM suite, which drives the LIVE sidecar and the LIVE config. A stray
@@ -2472,8 +2509,7 @@
     if (mrRaf) { cancelAnimationFrame(mrRaf); mrRaf = null; }
     mrAnswered = true;
     armReportCeiling();
-    const cur = current && current.completion;
-    if (cur) $("mrAsk").innerHTML = reportAsk(cur); // only the answers change; leave the summary alone
+    if (mrCard) $("mrAsk").innerHTML = reportAsk(mrCard); // only the answers change; leave the summary alone
   });
 
   // Mission picker: the log can't tell us which mission you've *selected* to track,
@@ -2774,7 +2810,7 @@
       onShow: (w) => { try { frameWin(w)?.__miningSetHidden?.(false); } catch { /* not ready */ } syncScanBox(); },
       onHide: (w) => { try { frameWin(w)?.__miningSetHidden?.(true); } catch { /* not ready */ } syncScanBox(); },
       host: (w) => ({
-        setModal: (on) => window.overlayApi?.setModal?.(!!on),
+        setModal: (on) => { miningModal = !!on; syncModal(); },
         requestAutoShow: () => window.overlayApi?.miningAutoShow?.(),
         // "Show the scan read area": drawn here, because only the canvas spans the screen. The page
         // has already written the pref, and syncScanBox reads it — one rule for the toggle, the
@@ -3471,6 +3507,28 @@
     window.overlayApi?.maskWebView?.(chromeOpen);
   }
 
+  /** The hold-to-interact bypass. `modalOpen` is ONE boolean in the shell, and four callers (the
+   *  hub, what's-new, the settings cog, mining's cog) each used to write it directly — so closing
+   *  any one of them cleared it for whichever others were still open. Exactly the trap the native
+   *  view mask above describes, so it gets the same answer: compute the OR from the DOM in ONE
+   *  place and report that.
+   *  ⚠️ THE MISSION REPORT IS DELIBERATELY NOT IN THIS LIST, and must not be added (Sub, 2026-08-10).
+   *  Everything here is something the player OPENED; the report arrives unbidden. This flag bypasses
+   *  the hold for the WHOLE canvas, so a card nobody asked for would make every widget rect swallow
+   *  game clicks for its entire lifetime — "I don't want them to accidentally do it when they're
+   *  just playing the game because it's very annoying." Reaching the card is the same deal as every
+   *  other widget: alt-tab to the overlay, or hold the interact key. Clicking it from mobiGlas is
+   *  fine and wanted, and needs nothing from us — the game has already released the cursor there.
+   *  🔑 Mining's cog lives in an IFRAME and has no selector here, so it reports through the bridge. */
+  let miningModal = false;
+  function syncModal() {
+    const open = !!document.querySelector("#hub.open")
+      || !!document.querySelector("#whatsnew.show")
+      || !!document.querySelector("#cogMenu.open")
+      || miningModal;
+    window.overlayApi?.setModal?.(open);
+  }
+
   let webViewHole = null;   // last rect the page told us, in page coordinates
   function reportWebViewHole(w, r) {
     if (r) webViewHole = r;
@@ -4127,7 +4185,7 @@
       gc.classList.toggle("open", open);
       syncViewMask(); // the hub can land on top of the native view too
 
-      if (!open) { window.overlayApi.setModal?.(false); window.overlayApi.hover?.(false); rescheduleCogHide(); return; }
+      if (!open) { syncModal(); window.overlayApi.hover?.(false); rescheduleCogHide(); return; }
       clearTimeout(cogHideT); // keep the cog shown while the hub is open
       // Read the RAW config for appearance (theme may be "auto" — PREFS carries the resolved
       // value, so read config directly to show the real setting).
@@ -4136,7 +4194,7 @@
       }).catch(() => { /* fall back to whatever's in the inputs */ });
       $("wgBlueprint").checked = WBY.blueprint.s.visible !== false;
       window.overlayApi.widgetStates?.().then((s) => { if (s) { $("wgMining").checked = !!s.mining; $("wgNotepad").checked = !!s.notepad; $("wgTwitchChat").checked = !!s.twitchChat; $("wgScFeed").checked = !!s.scFeed; $("wgUnlockAlert").checked = !!s.unlockAlert; $("wgParty").checked = !!s.party; $("wgBattaglia").checked = !!s.battaglia; $("wgChat").checked = !!s.chat; $("wgWebView").checked = !!s.webView; $("wgBindingChart").checked = !!s.bindingChart; } });
-      window.overlayApi.setModal?.(true); window.overlayApi.hover?.(true);
+      syncModal(); window.overlayApi.hover?.(true);
     }
     gc.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); setHub(!hub.classList.contains("open")); });
     hub.addEventListener("click", (e) => { e.stopPropagation(); armGameHide(); });
@@ -4376,7 +4434,7 @@
       // twice for no gain.
       // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
     // it would swallow game clicks along a blank strip above the taskbar for the whole session.
-    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #arrangeScrim .ab, #arrangeScrim .nudge, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #ocrWarn.show, #arrangeScrim .ab, #arrangeScrim .nudge, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.
@@ -4405,7 +4463,7 @@
         try { await fetch("/api/changelog-seen?v=" + encodeURIComponent(wnVersion), { method: "POST" }); } catch { /* best-effort */ }
       }
       $("whatsnew").classList.remove("show");
-      window.overlayApi.setModal?.(false);
+      syncModal();
       window.overlayApi.hover(false);
     };
     async function showWhatsNew(force) {
@@ -4428,7 +4486,7 @@
         $("wnVer").textContent = "v" + (entries[0].version || version);
         $("wnList").innerHTML = wnListHtml(entries);
         card.classList.add("show");
-        window.overlayApi.setModal?.(true);
+        syncModal();
       } catch { /* changelog is best-effort */ }
     }
     // Close + hover wiring (attached once; the hub button re-opens the same card).
@@ -4462,6 +4520,40 @@
     $("snGo").addEventListener("click", () => { window.overlayApi.openSetupWizard?.(); closeNudge(); });
     nudge.addEventListener("mouseenter", () => window.overlayApi.hover(true));
     nudge.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+    // ── screen reading blocked ────────────────────────────────────────────────────────────
+    // Shown ONLY when a screen-reading feature is switched on AND the engine failed a self-test
+    // (it is handed an image we ship, so "no text" cannot be an innocent explanation). Silence
+    // for everybody else — a warning aimed at people who deliberately have OCR off is pure nag,
+    // and every OCR opt-in is off by default.
+    {
+      const box = $("ocrWarn");
+      const DISMISSED = "sco.ocrWarnDismissed";
+      box.addEventListener("mouseenter", () => window.overlayApi.hover(true));
+      box.addEventListener("mouseleave", () => window.overlayApi.hover(false));
+      // Dismissing is FOREVER, not per-launch: someone may know exactly why their OCR is off and
+      // not care, and re-nagging them every start would earn the app a place in the ignore pile.
+      // The state stays in /api/diagnostics either way, so support never loses it.
+      $("owX").addEventListener("click", () => {
+        try { localStorage.setItem(DISMISSED, "1"); } catch { /* private mode — warn again, fine */ }
+        box.classList.remove("show");
+        window.overlayApi.hover(false);
+      });
+      const checkOcr = () => {
+        try { if (localStorage.getItem(DISMISSED) === "1") return; } catch { /* carry on */ }
+        fetch("/api/ocr/health").then((r) => r.json()).then((d) => {
+          // `enabled` is what separates "OCR is off" from "OCR is broken". Warning on the first
+          // would be telling people about a feature they switched off on purpose.
+          if (!d || !d.enabled || !d.health || d.health.ok !== false) { box.classList.remove("show"); return; }
+          $("owBody").textContent = d.health.reason || "Screen reading isn't working on this PC.";
+          box.classList.add("show");
+        }).catch(() => { /* the sidecar has its own banner for being down */ });
+      };
+      checkOcr();
+      // Re-checked so somebody who allow-lists the app mid-session sees it clear itself. The
+      // sidecar caches the verdict for 60s, so this costs a cheap request, not an OCR run.
+      setInterval(checkOcr, 300000);
+    }
+
     // ── background service down ───────────────────────────────────────────────────────────
     // Pure display: the shell decides the state and pushes every transition, including a re-push
     // once this page loads, so the banner cannot be stranded on after recovery or missed because
@@ -4528,10 +4620,10 @@
 
       updateOcr();
       summonGlobalCog(); // clicking a widget cog reveals the global settings cog
-      window.overlayApi?.setModal?.(true);
+      syncModal();
       window.overlayApi?.hover?.(true);
     } else {
-      window.overlayApi?.setModal?.(false);
+      syncModal();
       rescheduleCogHide(); // menu closed — restart the global cog's 10s countdown
     }
   }
