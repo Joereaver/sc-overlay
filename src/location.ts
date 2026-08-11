@@ -105,7 +105,22 @@ export function debrisStepWording(units: number, place: Place): { lead: string; 
   const n = units === 1 ? "1" : String(units);
   const panels = `${n} debris panel${units === 1 ? "" : "s"}`;
   const flora = `${n} harvestable${units === 1 ? "" : "s"}`;
-  if (place.kind === "planet") return { lead: flora, detail: `or ${panels}` };
+  // 🔑 PLANET-SIDE NAMES ONLY HARVESTABLES (Sub, 2026-08-11: "it definitely shouldn't say debris
+  // when they're playing planetside — I don't know that I've ever seen debris on a planet").
+  //
+  // This is NOT the "never suppress" rule at the top of this file being broken. The call-out still
+  // happens and the COUNT is untouched, because both kinds step by exactly 2,000 — the only thing
+  // dropped is a second kind the player says does not occur down there. Suppressing a call-out
+  // means going silent about a contact; this stays just as loud and says one fewer wrong thing.
+  //
+  // ⚠️ The trade it DOES make: a reading is trusted for up to PLACE_STALE_MS, and you can leave a
+  // planet in well under that, so a stale "planet" over a real debris field now says
+  // "harvestables" where it used to hedge. That is a mislabel, never a miss, and the widget shows
+  // the reading's age next to an Auto/Planet/Space override for exactly this case.
+  if (place.kind === "planet") return { lead: flora, detail: "" };
+  // Space keeps the pairing: flora in space is the unlikely half here, but nobody has ruled it
+  // out the way Sub has ruled out debris planet-side, and inventing symmetry he didn't ask for is
+  // how the asteroid types got shipped and retracted.
   if (place.kind === "space") return { lead: panels, detail: `or ${flora}` };
   return { lead: `${n} units`, detail: `debris panels or harvestables` };
 }

@@ -78,7 +78,11 @@ console.log("\nwording a 2,000-step signature");
   const planet: Place = { kind: "planet", body: "pyro2", name: "Monox", at: 0 };
   const space: Place = { kind: "space", at: 0 };
   ok("planet-side leads with harvestables", debrisStepWording(6, planet).lead === "6 harvestables");
-  ok("...but still names debris", debrisStepWording(6, planet).detail.includes("debris"));
+  // Reversed 2026-08-11 on Sub's ruling — it used to offer "or 6 debris panels" here. He has never
+  // seen debris on a planet, and hearing it called that was the complaint. The COUNT is unchanged;
+  // only the kind he says cannot occur is dropped.
+  ok("...and does NOT name debris planet-side", !debrisStepWording(6, planet).detail.includes("debris"));
+  ok("...saying nothing rather than padding the line", debrisStepWording(6, planet).detail === "");
   ok("in space it leads with debris", debrisStepWording(6, space).lead === "6 debris panels");
   ok("...but still names harvestables", debrisStepWording(6, space).detail.includes("harvestable"));
   const u = debrisStepWording(6, { kind: "unknown" });

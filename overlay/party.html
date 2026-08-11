@@ -19,9 +19,6 @@
   /* Apply ?theme= before first paint (no flash). The parent canvas keeps this in sync live (same-origin). */
   { const q = new URLSearchParams(location.search); const r = document.documentElement;
     const t = q.get("theme"); if (t) r.setAttribute("data-theme", t); }</script>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/widget-theme.css" />
 <style>
   /* Party roster + reward split. Theme tokens come from the shared /widget-theme.css.
@@ -64,6 +61,23 @@
   .lhead { display: flex; align-items: center; gap: 6px; padding: 7px 12px 4px; }
   .lhead .lbl { flex: 1; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: var(--faint); }
+  /* "Pull a finished refine into the split" picker. Rendered INSIDE the widget's own box on
+     purpose: #panel is overflow:hidden and the shell only hit-tests the rects the page reports,
+     so chrome hanging outside a widget is both clipped and unclickable. #loot and #list are
+     siblings at the same z-index, so #loot is lifted only while the menu is open — the same
+     trick the mission report uses, and it puts the stacking back the moment it closes. */
+  #loot.rfopen { z-index: 20; }
+  .rfmenu { position: absolute; left: 12px; right: 12px; top: 100%; margin-top: 2px; z-index: 20;
+    max-height: 168px; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--panel-solid);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5); }
+  .rfmenu .rfitem { display: flex; align-items: baseline; gap: 6px; padding: 6px 9px; cursor: pointer;
+    font-size: 11px; color: var(--cyan-text); border-bottom: 1px solid var(--divider); }
+  .rfmenu .rfitem:last-child { border-bottom: 0; }
+  .rfmenu .rfitem:hover { background: rgba(var(--accent-rgb), 0.16); color: var(--cyan-bright); }
+  .rfmenu .rfstation { font-size: 9.5px; color: var(--faint); }
+  .rfmenu .rfscu { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--gold); }
+  .rfmenu .rfnone { padding: 9px; font-size: 10.5px; line-height: 1.4; color: var(--cyan-dim); }
   .lrow { display: flex; align-items: center; gap: 5px; padding: 4px 12px 6px; }
   .lrow input { font-family: var(--sans); font-size: 11.5px; color: var(--cyan-bright);
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 5px;
@@ -180,6 +194,7 @@
     <div id="loot">
       <div class="lhead">
         <span class="lbl">What you're splitting</span>
+        <button id="lootRefinery" class="hbtn sm" type="button" title="Add a finished refinery job as a line to divide">⛏ Refinery</button>
         <button id="lootAdd" class="hbtn sm" type="button" title="Add ore, salvage or cargo to divide">＋ Item</button>
       </div>
       <div id="lootRows"></div>
@@ -550,6 +565,85 @@
     loot.push({ id: newId(), name: "", qty: 0, unit: "SCU", pricePerUnit: null });
     renderLoot(); renderRows();
   });
+
+  // ---- pull a finished refine straight into the split ----------------------
+  // A crew divides ore they will not SELL until a later session, so the split is written up long
+  // after the refine finishes — and the numbers being divided are sitting in the Mining Scanner's
+  // refinery timers already. Retyping the material and the SCU by hand is the only reason those
+  // two halves were separate.
+  //
+  // 🔑 A finished job is only kept for DONE_KEEP_MS (6h) before the tracker clears it, so this
+  // imports what is still on screen rather than pretending to be a history. That is the right way
+  // round: the SPLIT is the durable record (saved sessions survive restarts by design), the job
+  // list is not. Import when you collect, settle up whenever.
+  //
+  // Reads /api/mining directly rather than being handed data by the canvas, because a widget page
+  // must survive being opened on its own — standalone, in OBS, or from the phone URL.
+  {
+    const btn = $("lootRefinery");
+    const wrap = $("loot");
+    let menu = null;
+    const closeMenu = () => {
+      menu?.remove();
+      menu = null;
+      wrap.classList.remove("rfopen");   // hand the stacking order back to #list
+    };
+    const addJob = (job) => {
+      loot.push({
+        id: newId(),
+        // A multi-material work order can read with no material at all (the tracker keys jobs by
+        // SLOT for exactly that reason). Import it anyway under a name the user can edit — silently
+        // dropping a finished job would be worse than an imperfect label.
+        name: job.material || "Refined ore",
+        qty: job.yieldScu || 0,
+        unit: "SCU",
+        // Deliberately blank: refined ore is sold at a price that moves per terminal and per day,
+        // so guessing one here would put a number in front of a crew that nobody verified.
+        pricePerUnit: null,
+      });
+      closeMenu();
+      renderLoot(); renderRows(); scheduleSave();
+    };
+    btn.addEventListener("click", async () => {
+      if (menu) { closeMenu(); return; }
+      let jobs = [];
+      try {
+        const v = await (await fetch("/api/mining")).json();
+        jobs = (v?.jobs || []).filter((j) => j.done);
+      } catch { /* sidecar down — say so below rather than opening an empty menu */ }
+      menu = document.createElement("div");
+      menu.className = "rfmenu";
+      if (!jobs.length) {
+        // Naming the 6h window matters: "nothing here" otherwise reads as broken to someone who
+        // definitely refined something last night.
+        menu.innerHTML = '<div class="rfnone">No finished refinery jobs right now. Jobs show here once they complete, and clear about 6 hours later.</div>';
+      } else {
+        for (const j of jobs) {
+          const row = document.createElement("div");
+          row.className = "rfitem";
+          const name = document.createElement("span");
+          name.textContent = j.material || "Refined ore";
+          const station = document.createElement("span");
+          station.className = "rfstation";
+          station.textContent = j.station || "";
+          const scu = document.createElement("span");
+          scu.className = "rfscu";
+          scu.textContent = (j.yieldScu != null ? j.yieldScu : "?") + " SCU";
+          row.append(name, station, scu);
+          row.addEventListener("click", () => addJob(j));
+          menu.appendChild(row);
+        }
+      }
+      wrap.classList.add("rfopen");
+      wrap.appendChild(menu);
+    });
+    // Clicking anywhere else closes it. Guarded on the button so its own click doesn't immediately
+    // undo the open.
+    document.addEventListener("click", (e) => {
+      if (!menu || btn.contains(e.target) || menu.contains(e.target)) return;
+      closeMenu();
+    });
+  }
 
   $("saveBtn").addEventListener("click", saveSession);
   $("listBtn").addEventListener("click", () => { showSaved = !showSaved; renderSaved(); });

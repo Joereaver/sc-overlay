@@ -10,9 +10,6 @@
   { const q = new URLSearchParams(location.search); const r = document.documentElement;
     const t = q.get("theme"); if (t) r.setAttribute("data-theme", t);
     const tw = q.get("twist"); if (tw !== null) r.style.setProperty("--twist", tw + "deg"); }</script>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/widget-theme.css" />
 <!-- Relative on purpose — see the header of trinkets.css. -->
 <link rel="stylesheet" href="trinkets.css" />
@@ -370,6 +367,10 @@
   .scan-now .rock { font-size: 18px; font-weight: 700; color: var(--gold); letter-spacing: .01em;
     text-shadow: 0 0 12px rgba(255, 210, 122, 0.3); }
   .scan-now .meta { margin-top: 3px; font-size: 11px; color: var(--cyan-dim); }
+  /* Planet-side, the 2,000-step wording has no second line to offer any more (see
+     debrisStepWording) — so the line collapses instead of leaving a gap where "or N debris
+     panels" used to sit. Sub on this readout: no extra words that didn't need to be there. */
+  .scan-now .meta:empty { display: none; }
   .scan-now .sig { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 4px; }
   .scan-now.hit { animation: flashhit 1.1s ease-out; border-color: var(--gold); }
   @keyframes flashhit { 0% { background: rgba(255, 210, 122, 0.55); } 100% { background: rgba(var(--accent-rgb), 0.05); } }
@@ -952,7 +953,21 @@
     if (hiddenMode) { if (canPop(sc)) maybeAutoShow(); return; }
     const el = $("scanNow");
     const flash = () => { el.classList.remove("hit"); void el.offsetWidth; el.classList.add("hit"); };
-    if (v === "debris") { maybeAutoShow(); flash(); speakClips(["n_debris"], "Debris"); return; }
+    // 🔑 The WORD follows where you are. A 2,000-step contact is debris in space and a plant
+    // planet-side, and calling it debris down there was wrong out loud (Sub, 2026-08-11: "it
+    // definitely shouldn't say debris when they're playing planetside — I don't know that I've
+    // ever seen debris on a planet"). The place is the server's call, not this widget's — the
+    // panel text already reads off view.wording for exactly that reason, so the spoken line uses
+    // the same source rather than becoming a second copy of the rule.
+    // ⚠️ There is no HAL clip for "harvestables" yet, so that line falls back to Windows TTS
+    // (speakClips does this whenever any clip is missing). Worth generating n_harvestables.ogg
+    // next time the piper box is up — the recipe is in the skill.
+    if (v === "debris") {
+      maybeAutoShow(); flash();
+      if ((view.place || {}).kind === "planet") speakClips(["n_harvestables"], "Harvestables");
+      else speakClips(["n_debris"], "Debris");
+      return;
+    }
     maybeAutoShow();                 // a REAL ore signature => the player is genuinely scanning
     if (isTarget) { flash(); chime(); }
     // Lead with the hunted rock when a value matches more than one (19,200 is Savrilium ×6 AND
