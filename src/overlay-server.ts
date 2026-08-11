@@ -1566,6 +1566,34 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Commodity economy: ?item=<uuid|name> for one commodity's refine map + material props +
   // per-terminal buy/sell prices; no query returns the whole commodity map.
   if (url === "/api/commodities" && req.method === "GET") {
+    // `?names=1` — just the names, for the Loot Split autocomplete. The full map is ~600KB of
+    // per-terminal prices, which is a silly thing to hand a small always-on-top widget that only
+    // wants to spell "Hephaestanite". 🔑 Autocompleting from THIS list (rather than the 26 mining
+    // rocks) is what makes the ¤ sell-price lookup beside it always resolve: same source, so a
+    // name the widget offered can never be a name the lookup then rejects.
+    if (new URL(req.url ?? "", "http://x").searchParams.get("names")) {
+      // 🔑 The raw map is not a list a human should be offered. Measured 2026-08-11: 734 entries
+      // holding "Aphorite" three times over, plus internal rock identifiers that leak straight out
+      // of the game data — `MineableRock_SurfaceLegendary_Quantainium`, and even CIG's own typo
+      // `MineableRock_test_Hephasestanite`. Offering those as spellings, in a control whose whole
+      // job is spelling the hard names correctly, would be worse than offering nothing.
+      // Underscores mark the internal keys; display names never carry one. "(Raw)" and "(R)"
+      // variants DO stay — raw versus refined is a real distinction a crew splits on.
+      const seen = new Set<string>();
+      const names: string[] = [];
+      for (const c of Object.values(economy.commodities())) {
+        const n = (c.name || "").trim();
+        if (!n || n.includes("_")) continue;
+        const dedupe = n.toLowerCase();
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        names.push(n);
+      }
+      names.sort((a, b) => a.localeCompare(b));
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ names }));
+      return;
+    }
     const key = new URL(req.url ?? "", "http://x").searchParams.get("item")?.trim();
     const body = key ? economy.commodity(key) : { commodities: economy.commodities() };
     res.writeHead(key && !body ? 404 : 200, { "Content-Type": "application/json" });
