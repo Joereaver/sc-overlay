@@ -98,6 +98,14 @@
   .lprice .pc:hover { border-color: var(--cyan); color: var(--cyan-bright); }
   .lprice .pn { font-size: 9.5px; color: var(--faint); padding: 2px 0; }
   .sec2 { flex: none; border-top: 1px solid var(--divider); position: relative; z-index: 4; }
+  /* One line PER ITEM, not every item joined onto one. Two ores already wrapped into a wall of
+     text; a real haul is unreadable (Sub, 2026-08-11: "that's going to kind of get out of hand").
+     The whole breakdown collapses from the loot header for crews splitting a lot of things. */
+  .row .lootcut .lcline { display: flex; gap: 6px; padding: 1px 0; }
+  .row .lootcut .lcq { flex: none; font-weight: 600; color: var(--cyan-text); }
+  .row .lootcut .lcn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .lootcut .lcv { margin-left: auto; flex: none; color: var(--gold); }
+  body.nobreakdown .row .lootcut { display: none; }
   .row .lootcut { flex-basis: 100%; font-family: var(--mono); font-size: 10px; color: var(--cyan-dim);
     padding: 2px 0 0 2px; }
   .row .lootcut:empty { display: none; }
@@ -112,6 +120,25 @@
   .pot .sel { outline: 1px solid rgba(var(--accent-rgb), 0.5); outline-offset: -1px; }
   .pot > div { cursor: pointer; }
   .pot > div:hover { background: rgba(var(--accent-rgb), 0.07); }
+  /* 🔑 These two tiles read as "—" for most players and nothing on screen said why (Sub,
+     2026-08-11: "I have no idea what that's for"). They are the aUEC PAYOUT pot, and the game only
+     logs a payout for FIXED-reward contracts — a bounty or any calculated-reward mission logs
+     nothing at all, so the tiles are legitimately empty most of the time. Shown only while both
+     are empty, so it explains itself once and then gets out of the way. */
+  .pothint { flex: none; display: none; font-size: 10.5px; line-height: 1.5; color: var(--faint);
+    padding: 7px 12px; border-bottom: 1px solid var(--divider); position: relative; z-index: 4; }
+  .pothint.show { display: block; }
+
+  /* Name the run. A crew does several runs in a day, and "Split · Aug 11" three times over is not
+     a name (Sub, 2026-08-11). Free text, remembered locally, and it becomes the saved split's
+     label so the saved list is readable a week later. */
+  .namebar { flex: none; display: flex; align-items: center; gap: 7px; padding: 7px 12px;
+    border-bottom: 1px solid var(--divider); position: relative; z-index: 4; }
+  .namebar input { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px; font-weight: 600;
+    color: var(--cyan-bright); background: transparent; border: 0; border-bottom: 1px dashed var(--divider);
+    padding: 2px 0; }
+  .namebar input:focus { outline: none; border-bottom-color: var(--cyan); }
+  .namebar input::placeholder { color: var(--faint); font-weight: 500; }
 
   /* Detected-party nudge — the one thing the log genuinely knows. */
   .nudge { flex: none; font-size: 10.5px; line-height: 1.5; color: var(--cyan-dim);
@@ -190,10 +217,16 @@
       <div id="potMission" title="Split the last completed mission's payout"><div class="k">Last mission</div><div class="v" id="potMissionV">—</div></div>
       <div id="potSession" title="Split everything earned this session"><div class="k">Session</div><div class="v" id="potSessionV">—</div></div>
     </div>
+    <div class="pothint" id="potHint">These split a mission <b>payout</b> in aUEC. Star Citizen only logs one for fixed-reward contracts — bounties and most calculated-reward missions log nothing, so this usually stays empty. Split the goods below instead.</div>
+
+    <div class="namebar">
+      <input id="runName" type="text" maxlength="48" spellcheck="false" placeholder="Name this run — e.g. Aaron Halo, second trip" />
+    </div>
 
     <div id="loot">
       <div class="lhead">
         <span class="lbl">What you're splitting</span>
+        <button id="breakBtn" class="hbtn sm" type="button" title="Show or hide each person's share of every item">▾ Breakdown</button>
         <button id="lootRefinery" class="hbtn sm" type="button" title="Add a finished refinery job as a line to divide">⛏ Refinery</button>
         <button id="lootAdd" class="hbtn sm" type="button" title="Add ore, salvage or cargo to divide">＋ Item</button>
       </div>
@@ -224,6 +257,7 @@
       <div id="slist"></div>
     </div>
   </div>
+  <datalist id="oreNames"></datalist>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -359,12 +393,28 @@
       const lc = document.querySelector('.lootcut[data-loot-for="' + m.id + '"]');
       if (!lc) continue;
       const share = (Number(m.share) || 0) / 100;
-      const parts = loot.filter((l) => l.name && l.qty > 0).map((l) => {
+      // 🔑 One ROW per item. This used to join every line with a separator, which wrapped into an
+      // unreadable block the moment a crew split more than a couple of things — and splitting
+      // several things is the normal case for the mining runs this widget exists for.
+      lc.textContent = "";
+      for (const l of loot.filter((x) => x.name && x.qty > 0)) {
         const q = Math.round(l.qty * share * 100) / 100;
-        const v = l.pricePerUnit != null ? "  (" + fmtAUEC(q * l.pricePerUnit) + ")" : "";
-        return q + " " + l.unit + " " + l.name + v;
-      });
-      lc.textContent = parts.join("   ·   ");
+        const line = document.createElement("div");
+        line.className = "lcline";
+        const qty = document.createElement("span");
+        qty.className = "lcq"; qty.textContent = q + " " + l.unit;
+        const nm2 = document.createElement("span");
+        nm2.className = "lcn"; nm2.textContent = l.name;
+        line.append(qty, nm2);
+        // Cash value only when a unit price is set — a blank price means "goods only, nobody has
+        // priced this yet", and inventing a number there is what the ¤ lookup is for.
+        if (l.pricePerUnit != null) {
+          const val = document.createElement("span");
+          val.className = "lcv"; val.textContent = fmtAUEC(q * l.pricePerUnit);
+          line.append(val);
+        }
+        lc.appendChild(line);
+      }
     }
   }
   function renderTotal() {
@@ -381,6 +431,9 @@
     $("potSessionV").classList.toggle("dim", pot.session == null);
     $("potMission").classList.toggle("sel", basis === "mission");
     $("potSession").classList.toggle("sel", basis === "session");
+    // Explain the empty tiles, and only while they ARE empty. Once a fixed-reward mission puts a
+    // number up there the tiles speak for themselves and the paragraph is just clutter.
+    $("potHint").classList.toggle("show", pot.mission == null && pot.session == null);
 
     // The detected-vs-named nudge — the log knows the COUNT, never the names.
     const n = $("nudge");
@@ -461,8 +514,14 @@
   }
   async function saveSession() {
     if (!members.length) return;
-    const label = (potValue() != null ? (basis === "session" ? "Session total" : "Last mission") : "Split") +
-      " \u00b7 " + new Date().toLocaleDateString([], { month: "short", day: "numeric" });
+    // \ud83d\udd11 The player's own name for the run wins outright. A crew does several runs in a day, and
+    // three saves all called "Split \u00b7 Aug 11" are indistinguishable a week later when they finally
+    // settle up \u2014 which is exactly the delay saved splits exist for (Sub, 2026-08-11). The old
+    // auto-label stays as the fallback for anyone who doesn't name it, date included, because an
+    // unnamed split still has to be findable.
+    const named = $("runName").value.trim();
+    const label = named || ((potValue() != null ? (basis === "session" ? "Session total" : "Last mission") : "Split") +
+      " \u00b7 " + new Date().toLocaleDateString([], { month: "short", day: "numeric" }));
     try {
       const r = await fetch("/api/party/sessions", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -506,8 +565,14 @@
         i.addEventListener("input", () => { on(i.value); renderCuts(); scheduleSave(); });
         return i;
       };
+      const nameInput = mk("ln", l.name, "Aluminum", (v) => { l.name = v; });
+      // 🔑 Autocomplete off the SAME list the ¤ sell-price lookup resolves against, so a name the
+      // widget offered can never be one the lookup then rejects. Sub, 2026-08-11: "it's pretty
+      // hard to spell some of these ore names... some of this shit's just made up" — Hephaestanite
+      // and Aphorite are not words anybody types correctly at 2am after a mining run.
+      nameInput.setAttribute("list", "oreNames");
       row.append(
-        mk("ln", l.name, "Aluminum", (v) => { l.name = v; }),
+        nameInput,
         mk("lq", l.qty, "0", (v) => { l.qty = Math.max(0, Number(v) || 0); }, "number"),
         mk("lu", l.unit, "SCU", (v) => { l.unit = v; }),
         mk("lp", l.pricePerUnit, "aUEC/ea", (v) => { l.pricePerUnit = v === "" ? null : Math.max(0, Number(v) || 0); }, "number"),
@@ -653,6 +718,33 @@
   $("potMission").addEventListener("click", () => { basis = "mission"; renderChrome(); });
   $("potSession").addEventListener("click", () => { basis = "session"; renderChrome(); });
 
+  // ---- naming the run, and folding the per-person breakdown away -------------
+  // Both are local-only preferences. They are deliberately NOT part of the server's Persisted
+  // shape (members + suggestions): that file is the roster, and a half-typed run name has no
+  // business in it. localStorage keeps them across a widget reload, which is all they need.
+  const RUN_KEY = "sco.party.runName";
+  const BREAK_KEY = "sco.party.breakdown";
+  function restoreRunName() {
+    try { $("runName").value = localStorage.getItem(RUN_KEY) || ""; } catch { /* private mode */ }
+  }
+  $("runName").addEventListener("input", () => {
+    try { localStorage.setItem(RUN_KEY, $("runName").value); } catch { /* not fatal */ }
+  });
+  function applyBreakdown(on) {
+    document.body.classList.toggle("nobreakdown", !on);
+    $("breakBtn").textContent = (on ? "▾" : "▸") + " Breakdown";
+  }
+  function restoreBreakdown() {
+    let on = true;   // default ON — it is the whole point of the widget, just foldable
+    try { on = localStorage.getItem(BREAK_KEY) !== "0"; } catch { /* default */ }
+    applyBreakdown(on);
+  }
+  $("breakBtn").addEventListener("click", () => {
+    const on = document.body.classList.contains("nobreakdown");   // currently hidden -> turn on
+    applyBreakdown(on);
+    try { localStorage.setItem(BREAK_KEY, on ? "1" : "0"); } catch { /* not fatal */ }
+  });
+
   // Typing mode — the shell grabs keyboard focus + suspends the interact key so the roster can be
   // edited over a focused game (shared with the Notepad widget; see main.cjs).
   let typing = false;
@@ -675,11 +767,30 @@
   // Any interaction summons the parent's global cog (settings/arrange reachable), matching mining.
   document.addEventListener("pointerdown", () => { try { host()?.summonCog?.(); } catch { /* not embedded */ } });
 
+  // Commodity names for the item autocomplete. Names ONLY (`?names=1`) — the full economy map is
+  // ~600KB of per-terminal prices and this widget wants none of it. Best-effort: a failed fetch
+  // just means typing without suggestions, which is exactly today's behaviour.
+  async function loadOreNames() {
+    try {
+      const d = await (await fetch("/api/commodities?names=1", { cache: "no-store" })).json();
+      const dl = $("oreNames");
+      dl.textContent = "";
+      for (const n of d.names || []) {
+        const o = document.createElement("option");
+        o.value = n;
+        dl.appendChild(o);
+      }
+    } catch { /* no suggestions, still fully typeable */ }
+  }
+
   (async () => {
     await pollParty();
+    restoreRunName();
+    restoreBreakdown();
     renderLoot();
     renderRows();
     await pollPot();
+    void loadOreNames();
   })();
   setInterval(pollParty, POLL_MS);
   setInterval(pollPot, POLL_MS * 2);
