@@ -2485,6 +2485,104 @@ const CHATLINKS = `(async () => {
   }
   ok("the menu stays inside the widget from every corner", ctxEscaped === null, ctxEscaped);
 
+  // ── party listings: create form, board rows, applicants ──────────────────
+  // The opt-in must not be offered when we have nothing to offer.
+  view.shard = null; view.regionLabel = null;
+  $("cpParty").checked = true;
+  syncPartyFields();
+  ok("ticking Looking for people reveals the listing fields", $("cpPartyFields").hidden === false);
+  ok("...but NOT the use-my-location opt-in, with no shard known", $("cpHereRow").hidden === true);
+  view.shard = "pub_use1b_12326004_040"; view.regionLabel = "US East 1B";
+  syncPartyFields();
+  ok("...which appears once the log has told us where we are", $("cpHereRow").hidden === false);
+  ok("...and is OFF by default — publishing your shard is opt-in", $("cpHere").checked === false);
+  $("cpParty").checked = false;
+  syncPartyFields();
+  ok("unticking hides them again", $("cpPartyFields").hidden === true);
+
+  // The board row has to say enough to be worth choosing.
+  view.directory = [
+    { ch: "custom:halo-run", label: "Halo Run", category: "mining", count: 2,
+      party: true, location: "Aaron Halo", sizeMax: 4, joinMode: "apply", voice: "required" },
+    { ch: "custom:just-chat", label: "Just Chat", category: "social", count: 5 },
+  ];
+  collapsed.delete("browse");
+  renderChannels();
+  const pfRow = [...document.querySelectorAll("#chanList .crow")]
+    .find((r) => r.querySelector(".nm")?.textContent === "Halo Run");
+  ok("a listing appears on the board", !!pfRow);
+  ok("...flagged ASK when the owner approves people",
+     pfRow.querySelector(".pflag")?.textContent === "ASK", pfRow.querySelector(".pflag")?.textContent);
+  ok("...showing where and the voice expectation",
+     /Aaron Halo/.test(pfRow.querySelector(".pmeta")?.textContent ?? "")
+       && /voice req/.test(pfRow.querySelector(".pmeta")?.textContent ?? ""),
+     pfRow.querySelector(".pmeta")?.textContent);
+  // 🔑 The live number is PRESENCE; sizeMax is only what the leader wants.
+  ok("...with the live count against the wanted size",
+     pfRow.querySelector(".ct")?.textContent === "2/4", pfRow.querySelector(".ct")?.textContent);
+  const pfPlain = [...document.querySelectorAll("#chanList .crow")]
+    .find((r) => r.querySelector(".nm")?.textContent === "Just Chat");
+  ok("an ordinary room is not dressed up as a listing",
+     !pfPlain.querySelector(".pflag") && pfPlain.querySelector(".ct").textContent === "5");
+
+  // Applicants: owner only, and visible without opening anything.
+  const pfMine = { ch: "custom:halo-run", kind: "custom", label: "Halo Run", count: 2, members: [], msgs: [],
+                   privacy: "public", owner: myHandle.toLowerCase(), party: true, joinMode: "apply",
+                   applications: [{ handle: "seeker", note: "have a Prospector", at: Date.now() },
+                                  { handle: "zed", note: null, at: Date.now() }] };
+  view.channels.push(pfMine);
+  activeCh = "custom:halo-run";
+  setChanSettings(true);
+  ok("the owner sees who wants in", $("csAppsRow").hidden === false
+     && /2 people want in/.test($("csAppsLbl").textContent), $("csAppsLbl").textContent);
+  ok("...each with accept and decline",
+     document.querySelectorAll("#csApps .ap").length === 2
+       && document.querySelectorAll("#csApps .ap .hbtn").length === 4);
+  ok("...and their note, which is how you decide",
+     /have a Prospector/.test($("csApps").textContent), $("csApps").textContent.slice(0, 60));
+  renderTabs();
+  const pfTab = [...document.querySelectorAll("#tabs .tab")].find((t) => /Halo Run/.test(t.textContent));
+  ok("the TAB carries the count, so it is seen without opening the cog",
+     pfTab?.querySelector(".apps")?.textContent === "2", pfTab?.querySelector(".apps")?.textContent);
+
+  pfMine.owner = "someoneelse";
+  renderChanSettings(); renderTabs();
+  ok("a non-owner is shown no applicant list", $("csAppsRow").hidden === true);
+  const pfTab2 = [...document.querySelectorAll("#tabs .tab")].find((t) => /Halo Run/.test(t.textContent));
+  ok("...and no tab marker either", !pfTab2?.querySelector(".apps"));
+  setChanSettings(false);
+  view.channels.pop();
+  view.directory = [];
+  activeCh = gCh.ch;
+
+  // ── the bundled colour emoji font ────────────────────────────────────────
+  // 🔑 Assert the font actually LOADS, not merely that the CSS mentions it. A 404 on the file
+  // fails silently back to the OS font, which is the exact bug being fixed — and on the
+  // machine of whoever runs this suite the OS font probably has the glyph, so it would look
+  // fine while being broken for the user who reported boxes.
+  const fontRes = await fetch("/fonts/NotoColorEmoji.ttf", { method: "HEAD" });
+  ok("the bundled emoji font is served", fontRes.ok, "HTTP " + fontRes.status);
+  // 🔑 The face carries a unicode-range, so it is only fetched for characters INSIDE that range.
+  // load() must therefore be given the text — asking for the family alone loads nothing and
+  // check() then answers false for a font that is perfectly fine.
+  const o7 = String.fromCodePoint(0x1FAE1);
+  await document.fonts.load('16px "SCO Emoji"', o7);
+  // o7 is the whole reason this exists: U+1FAE1, Unicode 14, missing from older Segoe UI Emoji.
+  ok("...and covers o7 (U+1FAE1), the one that was a box", document.fonts.check('16px "SCO Emoji"', o7));
+  // Order matters: behind Segoe UI Emoji it would never be consulted on the Windows machines
+  // that have the problem. Measured off a REAL message node, not off the stylesheet text.
+  const fontProbe = document.createElement("div");
+  fontProbe.className = "msg";
+  const fontProbeTx = document.createElement("span");
+  fontProbeTx.className = "tx";
+  fontProbe.appendChild(fontProbeTx);
+  document.getElementById("log").appendChild(fontProbe);
+  const fam = getComputedStyle(fontProbeTx).fontFamily;
+  ok("the bundled font is in the message stack", /SCO Emoji/.test(fam), fam);
+  ok("...ahead of the OS emoji fonts, or it would never be reached",
+     fam.indexOf("SCO Emoji") < fam.indexOf("Segoe UI Emoji"), fam);
+  fontProbe.remove();
+
   // Conversations the server knows about but that aren't open tabs.
   view.dmThreads = [{ other: "zed", lastAt: new Date().toISOString() }];
   renderChannels();

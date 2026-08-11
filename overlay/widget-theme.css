@@ -7,6 +7,66 @@
    NOTE: missions.html / mining.html / notepad.html still carry their own inline copy of these
    tokens (they predate this file). If they're ever touched, folding them onto this stylesheet
    would remove the duplication. */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url("/fonts/SpaceGrotesk-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  src: url("/fonts/SpaceGrotesk-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* 🔑 BUNDLED Inter, not fetched from Google Fonts.
+   Every widget page used to <link> fonts.googleapis.com at load. Three problems, one fix:
+   it is a network dependency on someone else's CDN on EVERY widget load (this app runs over a
+   game, often on a connection already busy); Google rotates the file URLs, so a cached
+   stylesheet can point at a 404 — which is exactly what the widget suite caught, users silently
+   falling back to system-ui; and it made our own test suite depend on the public internet.
+   130KB for both subsets, versus 13 external requests. Subsets and unicode-ranges are Google's
+   own, so coverage is unchanged.
+   Inter, SIL Open Font License 1.1 — see overlay/fonts/OFL-Inter.txt. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/Inter-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/Inter-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* 🔑 BUNDLED colour emoji, because the OS font cannot be relied on.
+   Two real failures, one fix: `o7` is 🫡 U+1FAE1, added in Unicode 14 (2021) and absent from an
+   un-updated Segoe UI Emoji — it is the FIRST emoji in the picker and the one SC players
+   actually use, so it rendered as a box; and the Linux port may have no colour emoji font at
+   all. Shipping the font makes emoji identical everywhere instead of a function of the user's
+   OS patch level.
+   @font-face is LAZY — the 4.8MB file is only fetched by a page that actually renders emoji, so
+   declaring it in the shared sheet costs the other widgets nothing.
+   Noto Color Emoji (COLRv1), SIL Open Font License 1.1 — see overlay/fonts/OFL-NotoColorEmoji.txt. */
+@font-face {
+  font-family: "SCO Emoji";
+  src: url("/fonts/NotoColorEmoji.ttf") format("truetype");
+  font-display: swap;
+  /* Only the emoji planes, so this font can never win for ordinary Latin text. */
+  unicode-range: U+203C-3299, U+1F000-1FAFF, U+FE0F, U+200D, U+E0020-E007F;
+}
+
   :root {
     --cyan: #45D0E0; --cyan-bright: #7fe3ef; --cyan-text: #c4dbe6; --cyan-dim: #7fa7bb; --faint: #5d7e90;
     --gold: #FFD27A; --amber: #F5A623; --green: #2ee6a0; --red: #ff8478;

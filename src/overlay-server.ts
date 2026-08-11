@@ -19,7 +19,7 @@ import { FabClaims } from "./fab-claim.js";
 import { SCENARIOS, replayLines, replayMissionId } from "./dev-replay.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
-import { loadCatalog, ocrImage, hasScanHud, classifyScreen, bestSignatureLine, glyphSearchBox, type CatalogEntry, type OcrResult, type ScanRegion } from "./screen-read.js";
+import { loadCatalog, ocrImage, ocrSelfTest, hasScanHud, classifyScreen, bestSignatureLine, glyphSearchBox, type CatalogEntry, type OcrHealth, type OcrResult, type ScanRegion } from "./screen-read.js";
 import { maybeShareLog } from "./log-share.js";
 
 const overlayDir = assetDir(import.meta.url, "overlay");
@@ -1189,6 +1189,10 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".webp": "image/webp",
   ".jpg": "image/jpeg",
+  // The bundled colour emoji font. Chromium content-sniffs fonts so octet-stream also works,
+  // but a correct type is what keeps it working if that ever tightens.
+  ".ttf": "font/ttf",
+  ".woff2": "font/woff2",
 };
 
 function readBody(req: import("node:http").IncomingMessage): Promise<any> {
@@ -1412,6 +1416,32 @@ async function twitchSend(text: string): Promise<{ ok: boolean; message?: string
   }
 }
 
+// ── OCR health ────────────────────────────────────────────────────────────────
+// 🔑 Diagnostics used to report screen reading as PREFERENCES only — fabCapture on, missionOcr
+// on — which says nothing about whether the engine works on that machine. A user whose OCR was
+// being blocked outright produced a diagnostics report identical to someone whose OCR was fine,
+// which is exactly how "his OCR just isn't working" became unanswerable (2026-08-11).
+//
+// 🔑 Gated on a screen-reading feature actually being ON. Every OCR opt-in is off by default and
+// nothing may start a PowerShell worker on the machine of someone who never asked for screen
+// reading — self-testing a feature nobody enabled would be the app doing the very thing it
+// promises not to.
+let ocrHealth: OcrHealth | null = null;
+let ocrHealthAt = 0;
+function screenReadingOn(): boolean {
+  return config.fabCapture === true || config.missionOcr === true
+    || config.miningAssistant === true || config.fabClaim === true;
+}
+/** Cached, because the first call pays the worker's ~570ms startup. Re-tested on a stale cache so
+ *  someone who allow-lists the app mid-session gets a fresh answer without restarting. */
+async function getOcrHealth(maxAgeMs = 60_000): Promise<OcrHealth | null> {
+  if (!screenReadingOn()) return null;
+  if (ocrHealth && Date.now() - ocrHealthAt < maxAgeMs) return ocrHealth;
+  ocrHealth = await ocrSelfTest();
+  ocrHealthAt = Date.now();
+  return ocrHealth;
+}
+
 const server = createServer((req, res) => {
   // One route throwing must not take the whole sidecar down with it. This handler is async, so
   // an unhandled rejection here IS a process exit — and the app can't tell the difference between
@@ -1443,7 +1473,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // Everything else — widget pages, their read-only data and event streams — stays public so
   // OBS keeps working.
   const SENSITIVE_GET = new Set([
-    "/api/config", "/api/diagnostics", "/api/setup", "/api/mining/tone", "/api/scfeed/tone",
+    // /api/ocr/health names security software running on this PC and how it is failing — a
+    // profile of the machine, useless to the owner's OBS and no business of anything on the LAN.
+    "/api/config", "/api/diagnostics", "/api/setup", "/api/ocr/health", "/api/mining/tone", "/api/scfeed/tone",
     "/api/can-embed", "/api/dev/note",
   ]);
   const mutating = req.method !== "GET" && req.method !== "HEAD";
@@ -2438,6 +2470,17 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // missing game.log from an expired token. The Settings button copies this to the clipboard.
   // 🔑 It must NEVER carry a secret: the sync token is reduced to a yes/no plus a live check,
   // and the log PATH is included but never its contents.
+  // What the canvas polls to decide whether to warn the user. Separate from /api/diagnostics so
+  // asking "is OCR alive" doesn't drag the whole health report (and its live token check) with it.
+  if (url === "/api/ocr/health" && req.method === "GET") {
+    const health = await getOcrHealth();
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    // `enabled:false` is why the canvas can tell "OCR is off" from "OCR is broken" — it must
+    // never warn someone who deliberately has screen reading switched off.
+    res.end(JSON.stringify({ enabled: screenReadingOn(), health }));
+    return;
+  }
+
   if (url === "/api/diagnostics" && req.method === "GET") {
     const logPath = config.logPath || "";
     let logStat: { exists: boolean; sizeMB?: number; modifiedMinutesAgo?: number } = { exists: false };
@@ -2490,6 +2533,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
         fabClaim: config.fabClaim === true,
         miningAssistant: config.miningAssistant === true,
         shareLogs: config.shareLogs === true,
+        // Whether the engine actually WORKS here, not just whether it was asked for. Null when no
+        // screen-reading feature is on, which is not a failure — there is nothing to test.
+        ocr: await getOcrHealth(),
       },
       display: { hwAccel: config.hwAccel === true, amdCompat: config.amdCompat === true, theme: config.theme || "mobiglas" },
       twitch: { chatChannel: config.twitchChannel || "(none)", signedInAs: config.twitchUserLogin || "(not signed in)" },
@@ -2853,4 +2899,9 @@ server.listen(PORT, async () => {
   // Arm chat AFTER the seed pass so the current shard (read from the log) rides the first
   // connection's loc frame instead of arriving as a later correction.
   chatConfigure();
+  // Settle the OCR question at boot so the verdict is in sidecar.log whether or not anyone
+  // thinks to ask for it — the log is what a user sends when they report "it isn't working",
+  // and it was previously silent on the one thing that mattered. Fire-and-forget: it spawns a
+  // PowerShell worker and nothing here should wait on it (no-op unless screen reading is on).
+  void getOcrHealth().catch(() => { /* the self-test reports its own failures */ });
 });

@@ -9,9 +9,6 @@
   /* Apply ?theme= before first paint (no flash). The parent canvas keeps this in sync live (same-origin). */
   { const q = new URLSearchParams(location.search); const r = document.documentElement;
     const t = q.get("theme"); if (t) r.setAttribute("data-theme", t); }</script>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/widget-theme.css" />
 <style>
   /* Three panes, EVE's structure in OUR skin (Sub's spec, 2026-08-09):
@@ -128,6 +125,19 @@
     border-radius: 6px; padding: 4px 6px; outline: none; }
   #chanSettings input:focus { border-color: var(--cyan); }
   #csDelete { width: 100%; text-align: center; }
+  #csApps { display: flex; flex-direction: column; gap: 5px; max-height: 132px; overflow-y: auto; }
+  #csApps .ap { display: flex; align-items: center; gap: 5px; }
+  #csApps .ap .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 11px; color: var(--cyan-text); }
+  #csApps .ap .note { font-size: 9.5px; color: var(--faint); padding: 0 0 2px 1px; }
+  #csApps .ap .hbtn { padding: 2px 6px; font-size: 10px; }
+  /* 🔑 A pending application needs to be visible WITHOUT opening the cog. An application that
+     arrives mid-mission is invisible inside a popover, and the person is left waiting on someone
+     who never knew. Same affordance as an unread mention, in gold so it reads as "you owe
+     someone an answer" rather than "there is new chat". */
+  .tab .apps { position: absolute; top: -5px; left: -5px; min-width: 13px; height: 13px;
+    padding: 0 3px; border-radius: 7px; background: var(--gold); color: #10151a;
+    font-size: 8.5px; font-weight: 800; line-height: 13px; text-align: center; }
   .tab { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em;
     color: var(--cyan-dim); background: rgba(var(--accent-rgb), 0.07);
     border: 1px solid var(--divider); border-bottom: none; border-radius: 6px 6px 0 0;
@@ -290,9 +300,9 @@
 
   #sendbar { flex: none; display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--divider); position: relative; }
 
-  /* Emoji: rendered by the OS font (Segoe UI Emoji on Windows), so there is nothing to
-     download and nothing to host. This picker exists because Windows' own Win+. panel is
-     unreliable over a fullscreen game — and typing :shortcodes: beats hunting a grid anyway. */
+  /* Emoji come from the BUNDLED font first (see widget-theme.css for why), then the OS font as
+     a fallback. This picker exists because Windows' own Win+. panel is unreliable over a
+     fullscreen game — and typing :shortcodes: beats hunting a grid anyway. */
   #emojiPop { position: absolute; bottom: calc(100% + 6px); right: 10px; width: 244px; max-height: 210px;
     overflow-y: auto; display: none; z-index: 6; padding: 6px;
     border: 1px solid var(--border); border-radius: 9px;
@@ -304,10 +314,10 @@
   #emojiPop .erow { display: flex; flex-wrap: wrap; gap: 1px; }
   #emojiPop button { font-size: 17px; line-height: 1; background: none; border: 0; border-radius: 5px;
     padding: 4px; cursor: pointer;
-    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+    font-family: "SCO Emoji", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
   #emojiPop button:hover { background: rgba(var(--accent-rgb), 0.22); }
   /* Emoji in a message want a touch more size than the surrounding text to read at all. */
-  .msg .tx { font-family: var(--sans), "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"; }
+  .msg .tx { font-family: var(--sans), "SCO Emoji", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"; }
   #sendInput { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12px; color: var(--cyan-bright);
     background: rgba(0, 0, 0, 0.25); border: 1px solid var(--divider); border-radius: 6px;
     padding: 6px 8px; outline: none; }
@@ -546,6 +556,13 @@
                 <input id="csInvite" type="text" placeholder="RSI handle…" maxlength="30" spellcheck="false" autocomplete="off" />
                 <button id="csInviteGo" class="hbtn sm" type="button" title="Let this handle in">Invite</button>
               </div>
+            </div>
+
+            <!-- Owner only. The server omits `applications` entirely for everyone else, so
+                 this section simply never has anything to render for them. -->
+            <div class="cs-sec" id="csAppsRow" hidden>
+              <div class="cs-lbl" id="csAppsLbl"></div>
+              <div id="csApps"></div>
             </div>
 
             <div class="cs-sec" id="csDangerRow" hidden>
@@ -1048,6 +1065,15 @@
         u.className = "unread";
         b.appendChild(u);
       }
+      // Pending applications, on the TAB — the one place you see without opening anything.
+      const me = (view?.you?.handle ?? "").toLowerCase();
+      const pending = (c.owner && c.owner === me && Array.isArray(c.applications)) ? c.applications.length : 0;
+      if (pending) {
+        const ap = document.createElement("span");
+        ap.className = "apps"; ap.textContent = String(pending);
+        ap.title = pending === 1 ? "1 person is waiting to join" : pending + " people are waiting to join";
+        b.appendChild(ap);
+      }
       b.addEventListener("click", () => select(c.ch));
       tabs.appendChild(b);
     }
@@ -1320,6 +1346,42 @@
     if (pin) {
       $("csPinText").textContent = pin.handle + ": " + pin.text;
       $("csPinRemove").hidden = !canPin(activeCh);
+    }
+
+    // Applications only ever reach the owner, so an empty list here means "none pending",
+    // never "not allowed to see".
+    const apps = (mine && Array.isArray(c?.applications)) ? c.applications : [];
+    $("csAppsRow").hidden = apps.length === 0;
+    if (apps.length) {
+      $("csAppsLbl").textContent = apps.length === 1 ? "1 person wants in" : apps.length + " people want in";
+      const box = $("csApps");
+      box.textContent = "";
+      for (const a of apps) {
+        const wrap = document.createElement("div");
+        const row = document.createElement("div");
+        row.className = "ap";
+        const nm = document.createElement("span");
+        nm.className = "nm"; nm.textContent = a.handle;
+        row.appendChild(nm);
+        const yes = document.createElement("button");
+        yes.type = "button"; yes.className = "hbtn sm"; yes.textContent = "Accept";
+        yes.addEventListener("click", () => void post("/api/chat/application", { ch: activeCh, handle: a.handle, accept: true }));
+        row.appendChild(yes);
+        const no = document.createElement("button");
+        no.type = "button"; no.className = "hbtn sm danger"; no.textContent = "No";
+        no.title = "Decline";
+        no.addEventListener("click", () => void post("/api/chat/application", { ch: activeCh, handle: a.handle, accept: false }));
+        row.appendChild(no);
+        wrap.appendChild(row);
+        // Their note is why the owner can decide at all — show it, but never let it push the
+        // buttons off the row.
+        if (a.note) {
+          const note = document.createElement("div");
+          note.className = "note"; note.textContent = a.note;
+          wrap.appendChild(note);
+        }
+        box.appendChild(wrap);
+      }
     }
 
     $("csCodeRow").hidden = !secret;
