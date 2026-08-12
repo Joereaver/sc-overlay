@@ -64,10 +64,13 @@ const ocr: OcrResult = {
 check("63k -> 63000, rounded", JSON.stringify(parseAmount("63k")) === JSON.stringify({ amount: 63000, kind: "payout", rounded: true }));
 check("Fee:13500 is a FEE, exact", JSON.stringify(parseAmount("Fee:13500")) === JSON.stringify({ amount: 13500, kind: "fee", rounded: false }));
 check("1.5k -> 1500", parseAmount("1.5k")?.amount === 1500);
-// Written before the 20:05 captures taught me that lowercase m is MINUTES. Kept as a
-// negative assertion rather than deleted — this exact line is what the bug looked like.
-check("lowercase 2m is NOT 2 million", parseAmount("2m") === null);
-check("uppercase 2M IS 2 million", parseAmount("2M")?.amount === 2_000_000);
+// 🔑 CASE IS NOT THE DISCRIMINATOR (Sub: "the capitalization shouldn't matter... it still
+// reads the same thing"). It briefly was, which was fragile: the game sets its menus in
+// capitals and OCR's idea of case at this size is unreliable. A duration is told apart by
+// STRUCTURE — it carries an s or a second component — so both cases mean millions.
+check("2M is 2 million", parseAmount("2M")?.amount === 2_000_000);
+check("2m is also 2 million", parseAmount("2m")?.amount === 2_000_000);
+check("63K is 63 thousand", parseAmount("63K")?.amount === 63_000);
 check("plain 13500 is exact", JSON.stringify(parseAmount("13500")) === JSON.stringify({ amount: 13500, kind: "payout", rounded: false }));
 check("comma grouping", parseAmount("134,500")?.amount === 134500);
 // The row-count badges beside a category ("24") sit in the same column as the amounts.
@@ -196,7 +199,11 @@ check("colon in the title survives", jorrit?.title === "JORRIT DOSSIER: LAB SAMP
 check("1M is a million-aUEC payout", parseAmount("1M")?.amount === 1_000_000, JSON.stringify(parseAmount("1M")));
 check("1M is flagged rounded", parseAmount("1M")?.rounded === true);
 // 🔴 The trap, stated three ways.
-check("lowercase 5m is NOT 5 million", parseAmount("5m") === null);
+// ⚠️ The one residual, stated rather than hidden: a WHOLE-MINUTE countdown with no
+// seconds part would read as millions. Never seen in any real capture — every countdown
+// carried its seconds — and the alternative was keeping case as the discriminator, which
+// is worse for the reasons above.
+check("a bare 5m reads as millions (known, accepted)", parseAmount("5m")?.amount === 5_000_000);
 check("'5m 17s' is not money", parseAmount("5m 17s") === null);
 check("'24m 52s' is not money", parseAmount("24m 52s") === null);
 check("'59m SSS' is not money", parseAmount("59m SSS") === null);

@@ -75,29 +75,35 @@ export function parseAmount(raw: string): { amount: number; kind: AmountKind; ro
   // this wrong turns a 24-minute countdown into a 24,000,000 aUEC contract, which would
   // poison the median for that mission permanently.
   //
-  // So money is matched STRICTLY and time is rejected outright rather than being relied
-  // on to simply not match. Note the case: `M` is millions, lowercase `m` is minutes and
-  // is never money. OCR mangles these badly at 13px — real reads include "59m SSS" for
-  // "59m 55s" and "Sm 17s" for "5m 17s" — so anything containing a space or an s/S is
-  // treated as a duration whatever else it looks like.
-  if (/[sS]/.test(t) && !/^fee/i.test(t)) return null;
+  // 🔑 CASE IS NOT THE DISCRIMINATOR. It briefly was — "1M" is a million, "5m 17s" is
+  // five minutes — but Sub is right that leaning on it is fragile: the game's menus are
+  // set in capitals, OCR's idea of case at this size is unreliable, and nothing about the
+  // MEANING of a number depends on the shape of its letters. What actually separates a
+  // countdown from money is STRUCTURE: a duration carries an `s` or a second component,
+  // money never does. So both are matched case-insensitively and time is rejected on its
+  // shape alone.
+  //
+  // ⚠️ Residual, stated rather than hidden: a bare "5m" with no seconds part would read
+  // as five million. Not once in the real captures — every countdown seen carried its
+  // seconds ("27m 29s", "52m 8s", and the mangled "59m SSS") — but if the UI ever shows a
+  // whole-minute countdown, this is the line that will be wrong.
+  if (/s/i.test(t) && !/^fee/i.test(t)) return null;
   if (/\s/.test(t) && !/^fee/i.test(t)) return null;
-  if (/\dm\b/.test(t)) return null;
 
   // A fee is labelled outright, and the label is the ONLY thing distinguishing a cost
   // from a reward — the number itself looks identical.
-  const fee = /^fee\s*[:.]?\s*([\d,.]+)\s*([kKM])?$/i.exec(t);
-  const plain = /^([\d,.]+)\s*([kKM])?$/.exec(t);
+  const fee = /^fee\s*[:.]?\s*([\d,.]+)\s*([km])?$/i.exec(t);
+  const plain = /^([\d,.]+)\s*([km])?$/i.exec(t);
   const m = fee ?? plain;
   if (!m) return null;
   const digits = m[1].replace(/,/g, "");
   if (!/^\d+(\.\d+)?$/.test(digits)) return null;
   let n = Number(digits);
   if (!Number.isFinite(n)) return null;
-  const suffix = m[2] ?? "";
+  const suffix = (m[2] ?? "").toLowerCase();
   const rounded = suffix !== "";
-  if (suffix === "k" || suffix === "K") n *= 1_000;
-  if (suffix === "M") n *= 1_000_000;
+  if (suffix === "k") n *= 1_000;
+  if (suffix === "m") n *= 1_000_000;
   n = Math.round(n);
   // A bare 1- or 2-digit number is a category's row count or a rank badge, not money.
   // The smallest real fee in the datacore is 250.
@@ -200,7 +206,7 @@ export function stripTrailingDuration(text: string): string {
  *  than dropping a row. A row with a title and no amount is still useful (it proves the
  *  contract is on the board); a row with an amount and no title is not, and is discarded. */
 export function parseContractList(ocr: OcrResult, region?: PanelRect, vocab?: ContractVocab): ContractRow[] {
-  if (vocab) return parseWithVocab(ocr, region, vocab);
+  if (vocab) return parseWithVocab(ocr, region, vocab, lastVocabCategory);
   const giverMaxH = GIVER_MAX_H * ocr.h;
   const titleMaxH = TITLE_MAX_H * ocr.h;
 
@@ -317,7 +323,7 @@ export function parseContractList(ocr: OcrResult, region?: PanelRect, vocab?: Co
 }
 
 /** The vocabulary-driven parse. See parseContractList's header for why this exists. */
-function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: ContractVocab): ContractRow[] {
+function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: ContractVocab, carried?: string | null): ContractRow[] {
   const inRegion = region
     ? ocr.lines.filter(
         (l) =>
@@ -354,7 +360,11 @@ function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: Co
   };
 
   const rows: ContractRow[] = [];
-  let category: string | null = null;
+  // 🔑 Seeded from the PREVIOUS capture. Scrolling a long category takes its HEADER off
+  // the top of the panel long before its contracts run out, so within one capture the
+  // rows below have no header above them — and the category is still true until a
+  // different one appears.
+  let category: string | null = carried ?? null;
   let titles: string[] = [];
   let giver: string | null = null;
   let money: ReturnType<typeof parseAmount> = null;
@@ -428,16 +438,34 @@ function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: Co
       if (split.money) money = split.money;
       continue;
     }
-    // 🔑 Nothing before the first category header is a contract. The panel's own chrome
-    // decodes as garbage at this size ("1:USERLOG ATFU OIBM") and would otherwise become
-    // a row of its own, and later a spurious "unknown title" report.
-    if (!category) continue;
+    // 🔴 DO NOT DROP ROWS FOR HAVING NO CATEGORY. This used to be `if (!category) continue`,
+    // to keep the panel's chrome ("1:USERLOG ATFU OIBM") out — and it silently broke the
+    // moment Sub scrolled: the MERCENARY header leaves the top of the panel, every row
+    // below it has no header above it in that capture, and the whole rest of the list was
+    // discarded. It presented as "after the first eight or so missions it just stops
+    // reading". The chrome is excluded further down instead, by requiring a row to have a
+    // giver or a price — which the chrome has neither of.
     if (!titles.length) top = l.y;
     titles.push(head);
     bottom = l.y + l.h;
     if (split.money) money = split.money;
   }
   flush();
-  // A row with no title is not a contract, whatever else was read off it.
-  return rows.filter((r) => r.title.length > 3);
+  // A contract row always has a KNOWN giver or a price. The panel's chrome has neither,
+  // which is what keeps it out now that a missing category header no longer does.
+  lastVocabCategory = category;
+  return rows.filter((r) => r.title.length > 3 && (r.giver !== null || r.amount !== null));
+}
+
+/** The category the last vocabulary parse ended on.
+ *
+ *  🔑 Scrolling a long category takes its HEADER off the top of the panel long before its
+ *  contracts run out — Sub, scrolling 25 Mercenary contracts: "Mercenary goes away and it
+ *  seems like the app can then no longer determine where the mission belongs." So the
+ *  header is remembered between captures and only replaced when a different one appears.
+ *  Exported rather than held inside the parser so a caller reading two different panels
+ *  could keep them apart if that ever becomes a thing. */
+export let lastVocabCategory: string | null = null;
+export function resetVocabCategory(): void {
+  lastVocabCategory = null;
 }
