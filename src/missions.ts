@@ -157,6 +157,10 @@ export interface DatasetMission {
    *  + story missions). The game only offers it once you've reached that rank, so
    *  accepting it proves you're at least there — that's how we infer standing. */
   rank?: number | null;
+  /** Criminal work: the game hands you a CrimeStat for taking it. 100% populated in the
+   *  dataset (704 of 4,075 contracts are illegal), and the one mission fact a player most
+   *  wants BEFORE they accept rather than after. */
+  illegal?: boolean | null;
 }
 export interface Dataset {
   schema: string;
@@ -286,6 +290,13 @@ export interface TrackedView {
    *  DIFFERENT regions with different pools, so an ambiguous mission's list would mix
    *  places that lead to different rewards. `view()` omits it while ambiguous. */
   whereToGet: string[];
+  /** Criminal work — a CrimeStat comes with it. False when the dataset says so AND when we
+   *  have no record of the mission at all, so treat it as "we are telling you it is illegal",
+   *  never as "we are promising it is legal". */
+  illegal: boolean;
+  /** The reputation rank the GIVER requires before offering this (0,1,2…), or null when the
+   *  dataset carries no gate. 🔑 Distinct from `inferredRank`, which is YOUR standing. */
+  rankRequired: number | null;
   /** Reputation gained (+) / lost (−) on completion, biggest first (may be empty). */
   reputationGained: RepEntry[];
   reputationLost: RepEntry[];
@@ -2566,6 +2577,8 @@ export class MissionTracker extends EventEmitter {
       // regions that draw from DIFFERENT pools, so listing all their places would point
       // the player at somewhere that cannot drop what the panel is showing.
       whereToGet: ambiguous ? [] : mission?.where ?? [],
+      illegal: mission?.illegal === true,
+      rankRequired: mission?.rank ?? null,
       reputationGained: mission?.reputationGained ?? [],
       reputationLost: mission?.reputationLost ?? [],
       eventTrack,

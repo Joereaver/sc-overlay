@@ -1449,6 +1449,11 @@
   .mi-row .mi-v { flex: 1; font-size: 13px; color: var(--cyan-text); text-align: right; }
   .mi-row .mi-v.pos { color: var(--gold); }
   .mi-row .mi-v.neg { color: var(--red); }
+  /* CrimeStat flag on the mission type. Red, small, and never a whole row of its own — it
+     qualifies the job rather than being a separate fact about it. */
+  .mi-crime { font-family: var(--sans); font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em;
+    color: #ffd7d7; background: rgba(255, 90, 90, 0.26); border: 1px solid rgba(255, 120, 120, 0.5);
+    border-radius: 3px; padding: 1px 4px; vertical-align: 1px; }
   /* "inferred" qualifier on the rank readout — it's a lower bound, not exact rep. */
   .mi-row .mi-hint { font-size: 8.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--cyan-dim); }
@@ -2239,6 +2244,64 @@
       '<div class="rb' + (empty ? " floor" : "") + '"><div class="rb-track"><div class="rb-fill" style="width:' +
       pct.toFixed(1) + '%"></div></div><div class="rb-cap">' + cap + "</div></div>";
   }
+  // ── Community data: what everyone else found out about this contract ──────────────────────
+  // Two things the shipped dataset cannot know — what the contract actually PAID (calculated at
+  // accept time, absent from the game files) and what players said about it afterwards. The
+  // sidecar fetches both; see the note beside communityFor().
+  //
+  // 🔑 EVERY ROW STATES HOW MANY REPORTS IT RESTS ON. A single sample rendered as a bare number
+  // is indistinguishable from a settled fact, and this is exactly the data most likely to be
+  // thin — 108 contracts have any payout at all, most of them from one player. A wrong number
+  // presented confidently is worse than no number, which is the same rule the site follows.
+  const money = (n) => Number(n || 0).toLocaleString();
+  const reports = (n) => n + (n === 1 ? " report" : " reports");
+  function communityPayRows(v) {
+    const p = v.community && v.community.payout;
+    if (!p || !p.samples) return [];
+    const unit = p.currency === "UEC" ? " aUEC" : " " + (p.currency || "");
+    // A spread only means something with more than one observation, and identical readings of
+    // the same fixed contract would otherwise render a pointless "48,000 – 48,000".
+    const spread = p.samples > 1 && p.max > p.min ? money(p.min) + " – " + money(p.max) : null;
+    const note = p.singleContributor && p.samples === 1
+      ? "1 report" : reports(p.samples) + (p.singleContributor ? ", one player" : "");
+    return ['<div class="mi-row" title="Read off the contract board by players running this. The game works most payouts out when you accept, so this is the only place the number exists.">'
+      + '<span class="mi-k">Typically pays</span><span class="mi-v pos">' + money(p.median) + unit
+      + ' <span class="mi-hint">' + escapeHtml(note) + "</span></span></div>"
+      + (spread ? '<div class="mi-row"><span class="mi-k">Range</span><span class="mi-v">' + spread + unit + "</span></div>" : "")];
+  }
+  const COMBAT_WORDS = { none: "little or none", fps: "on foot", ship: "in the ship", both: "on foot and in the ship" };
+  function communityFactRows(v) {
+    const f = v.community && v.community.facts;
+    if (!f || !f.samples) return [];
+    const out = [];
+    if (f.difficulty != null && f.difficultyAnswers) {
+      out.push('<div class="mi-row" title="Average of what players rated it, 1 (easy) to 5 (hard)."><span class="mi-k">Difficulty</span><span class="mi-v">'
+        + f.difficulty + '<span class="mi-hint"> / 5 · ' + escapeHtml(reports(f.difficultyAnswers)) + "</span></span></div>");
+    }
+    if (f.soloRate != null && f.soloAnswers) {
+      // Rendered as a plain verdict rather than a percentage when it is unanimous — "100% solo"
+      // off two reports reads like a statistic, and it is really just "both people soloed it".
+      const pct = Math.round(f.soloRate * 100);
+      const word = pct >= 100 ? "yes" : pct <= 0 ? "no — everyone grouped" : pct + "% ran it solo";
+      out.push('<div class="mi-row" title="Whether the players who reported it ran it alone."><span class="mi-k">Soloable</span><span class="mi-v">'
+        + escapeHtml(word) + '<span class="mi-hint"> · ' + escapeHtml(reports(f.soloAnswers)) + "</span></span></div>");
+    }
+    // Only a real majority, never a plurality — the site takes the same line, and a 3-2-2 split
+    // is not a fact about the mission.
+    if (f.combatTop && COMBAT_WORDS[f.combatTop]) {
+      out.push('<div class="mi-row"><span class="mi-k">Fighting</span><span class="mi-v">' + COMBAT_WORDS[f.combatTop] + "</span></div>");
+    }
+    // Read from the log rather than asked, so there is no "declined to answer" — but an absent
+    // ship is NOT "on foot", it is just a ship we never saw. Only report what was seen.
+    const ship = (f.ships || [])[0];
+    if (ship && ship.ship) {
+      out.push('<div class="mi-row" title="The ship most often flown on this contract, taken from what players were in — not a recommendation."><span class="mi-k">Usually flown</span><span class="mi-v">'
+        + escapeHtml(ship.ship) + "</span></div>");
+    }
+    if (out.length) out.unshift('<div class="mi-sec">From players who ran it</div>');
+    return out;
+  }
+
   function missionInfoHtml(v, forceOpen) {
     const giver = v.giver, type = v.missionType;
     const rg = v.reputationGained || [], rl = v.reputationLost || [];
@@ -2252,11 +2315,24 @@
     if (open) {
       const rows = [];
       // Order (Sub's layout): Type → Reward → Faction → Reputation gained/lost → Standing bar.
-      if (type) rows.push('<div class="mi-row"><span class="mi-k">Type</span><span class="mi-v">' + escapeHtml(type) + "</span></div>");
+      if (type) {
+        // The type row carries the CRIMESTAT flag, because "Delivery" and "Delivery that gets you
+        // a CrimeStat" are not the same job and the distinction is worth more than a row of its
+        // own. 704 of 4,075 contracts are illegal and the dataset knows for all of them.
+        // 🔑 Absence is not innocence: an unknown mission also reads false, so this only ever
+        // asserts "this IS illegal", never "this is safe".
+        rows.push('<div class="mi-row"><span class="mi-k">Type</span><span class="mi-v">' + escapeHtml(type)
+          + (v.illegal ? ' <span class="mi-crime" title="Criminal work — expect a CrimeStat for taking this.">ILLEGAL</span>' : "")
+          + "</span></div>");
+      }
       // aUEC reward when the dataset carries it (a fixed payout). Most PU missions are
       // runtime-calculated, so this is null for them until the dataset is regenerated to
       // pull FixedReward — then it appears here automatically.
       if (payTxt) rows.push('<div class="mi-row"><span class="mi-k">Reward</span><span class="mi-v pos">' + escapeHtml(payTxt) + "</span></div>");
+      // What it actually PAID, from players who read it off the contract board. Most PU contracts
+      // have their reward calculated at accept time and it exists nowhere in the game files, so
+      // for the ~56% with no fixed `payout` this is the only answer there is.
+      rows.push(...communityPayRows(v));
       if (giver) rows.push('<div class="mi-row"><span class="mi-k">Faction</span><span class="mi-v">' + escapeHtml(giver) + "</span></div>");
       // 🔑 "Pick up at" is only shown once the VARIANT is resolved. Same-title variants are
       // offered in different regions drawing from DIFFERENT pools, so before the tracker
@@ -2287,8 +2363,18 @@
           rows.push('<div class="mi-sec">' + label + "</div>" + repRows(list, neg));
         }
       };
+      // Rank the GIVER wants before they will offer it. Distinct from "Your rank" further down,
+      // which is your own inferred standing — showing both is how you see the gap.
+      // 🔑 null means the dataset carries no gate, NOT rank 0: 69% of contracts have the field and
+      // givers use 0 and null side by side, so an absent one must not render as "Rank 0".
+      if (v.rankRequired != null) {
+        rows.push('<div class="mi-row" title="The giver only offers this contract at this standing or above."><span class="mi-k">Rank needed</span><span class="mi-v">'
+          + v.rankRequired + "</span></div>");
+      }
       repSection(rg, false, "Reputation gained");
       repSection(rl, true, "Reputation lost");
+      // What players who ran it reported afterwards.
+      rows.push(...communityFactRows(v));
       // Standing (rep progress bar toward the next rank) sits at the BOTTOM. The bar when we
       // have the giver's ladder, else the bare inferred-rank number. Both are lower bounds.
       if (v.repBar) {

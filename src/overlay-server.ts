@@ -835,9 +835,67 @@ function shipInfo() {
  *  app restarts, which is the point (a prompt missed today is worth re-offering tomorrow). */
 const fabClaims = new FabClaims();
 
+// ── What everyone else found out about this contract ────────────────────────────────────────
+// Two things subliminal.gg now knows that the shipped dataset cannot: what the contract actually
+// PAID (the game calculates most payouts at accept time — the number exists nowhere in the game
+// files, which is what the board scanner exists to collect), and what players said about it
+// afterwards (difficulty, whether they soloed it, what the fighting was like).
+//
+// 🔑 Fetched HERE, not in the widget. Both read endpoints answer without CORS headers, so a page
+// on localhost cannot read them — and the sidecar already talks to the site.
+// 🔑 Unauthenticated, deliberately: neither GET wants a token, so these numbers appear for
+// everyone rather than only for people who have connected an account.
+// ⚠️ It is an outbound request naming the contract you are running. No token, no identity, and
+// only when a mission is actually tracked — but it IS a request that did not happen before. Gate
+// it on `config.syncEnabled` if that ever needs to be tighter.
+type CommunityPayout = { samples: number; contributors: number; min: number; max: number; median: number; currency: string; singleContributor: boolean };
+type CommunityFacts = { samples: number; combatTop: string | null; difficulty: number | null; difficultyAnswers: number; soloRate: number | null; soloAnswers: number; ships: { ship: string; count: number }[] };
+type Community = { payout: CommunityPayout | null; facts: CommunityFacts | null };
+const communityCache = new Map<string, { at: number; data: Community | null }>();
+const COMMUNITY_TTL_MS = 10 * 60_000;
+let communityInFlight = "";
+
+function communityFor(key: string | null): Community | null {
+  if (!key) return null;
+  const hit = communityCache.get(key);
+  // Serve a stale entry while the refresh runs. Blinking the numbers away and back is worse
+  // than showing ten-minute-old medians for a second.
+  if (!hit || Date.now() - hit.at >= COMMUNITY_TTL_MS) void fetchCommunity(key);
+  return hit ? hit.data : null;
+}
+
+async function fetchCommunity(key: string): Promise<void> {
+  if (communityInFlight === key) return;
+  communityInFlight = key;
+  const base = (process.env.SC_SYNC_BASE || "https://subliminal.gg").replace(/\/+$/, "");
+  const q = `?keys=${encodeURIComponent(key)}`;
+  try {
+    const grab = async (path: string, field: string) => {
+      const res = await fetch(`${base}/api/sc/${path}${q}`);
+      if (!res.ok) return null;
+      const body = await res.json() as Record<string, Record<string, unknown>>;
+      return (body?.[field]?.[key] ?? null) as never;
+    };
+    const [payout, facts] = await Promise.all([
+      grab("mission-payout", "payouts"),
+      grab("mission-feedback", "missions"),
+    ]);
+    communityCache.set(key, { at: Date.now(), data: { payout, facts } });
+    broadcastMissions();
+  } catch {
+    // Offline, or the site is down. Cache the miss so a dead network cannot turn into a request
+    // per SSE tick — it simply retries after the TTL.
+    communityCache.set(key, { at: Date.now(), data: null });
+  } finally {
+    communityInFlight = "";
+  }
+}
+
 function missionsPayload(): string {
+  const v = tracker.view();
   return JSON.stringify({
-    ...tracker.view(),
+    ...v,
+    community: communityFor(v.contractKey),
     appVersion: APP_VERSION,
     // The live claim prompt (or null). Rides the missions SSE because that is what the
     // Unlock Alerts widget already listens to — no new channel, and it self-clears when

@@ -1968,6 +1968,59 @@ const IDLEPAINT = `(async () => {
   return out;
 })()`;
 
+// ── Suite: the mission-info rows built from community data ─────────────────────
+// 🔑 Every one of these is about NOT overstating thin evidence. 108 contracts have any payout
+// observation at all and most come from a single player, so the failure mode is not a missing
+// row — it is a lone reading rendered as though it were a settled fact. The site takes the same
+// line, and the two must not disagree about what counts as known.
+const MISSIONINFO = `(async () => {
+  ${PRELUDE}
+  const strip = (h) => h.replace(/<[^>]+>/g, " ").replace(/\\s+/g, " ").trim();
+  const pay = (payout) => communityPayRows({ community: { payout } }).map(strip).join(" ");
+  const facts = (f) => communityFactRows({ community: { facts: f } }).map(strip).join(" ");
+
+  // ── payouts ──────────────────────────────────────────────────────────────
+  ok("no observations renders NOTHING, not a zero", pay(null) === "" && pay({ samples: 0 }) === "");
+  const lone = pay({ samples: 1, contributors: 1, min: 48000, max: 48000, median: 48000, currency: "UEC", singleContributor: true });
+  ok("a lone reading says so", lone.indexOf("1 report") >= 0, lone);
+  ok("...and invents no range from one sample", lone.indexOf("Range") < 0, lone);
+  const oneGuy = pay({ samples: 4, contributors: 1, min: 48000, max: 52000, median: 50000, currency: "UEC", singleContributor: true });
+  ok("several readings from ONE player disclose that", oneGuy.indexOf("one player") >= 0, oneGuy);
+  const many = pay({ samples: 12, contributors: 5, min: 31500, max: 64000, median: 47250, currency: "UEC", singleContributor: false });
+  ok("a real spread shows the range", many.indexOf("31,500") >= 0 && many.indexOf("64,000") >= 0, many);
+  ok("...and does not cry lone-source when it is not", many.indexOf("one player") < 0, many);
+  const flat = pay({ samples: 6, contributors: 3, min: 20000, max: 20000, median: 20000, currency: "UEC", singleContributor: false });
+  ok("identical readings show no pointless range", flat.indexOf("Range") < 0, flat);
+  const merits = pay({ samples: 2, contributors: 2, min: 900, max: 1100, median: 1000, currency: "Merits", singleContributor: false });
+  ok("merits are not printed as aUEC", merits.indexOf("Merits") >= 0 && merits.indexOf("aUEC") < 0, merits);
+
+  // ── crowdsourced facts ───────────────────────────────────────────────────
+  ok("no answers renders nothing", facts(null) === "" && facts({ samples: 0 }) === "");
+  const d = facts({ samples: 3, difficulty: 2.7, difficultyAnswers: 3, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
+  ok("difficulty carries its sample count", d.indexOf("2.7") >= 0 && d.indexOf("3 reports") >= 0, d);
+  ok("...and a question nobody answered is absent, not blank", d.indexOf("Soloable") < 0, d);
+  const solo = facts({ samples: 2, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 2, combatTop: null, ships: [] });
+  ok("a unanimous solo rate reads as a verdict, not a statistic", solo.indexOf("yes") >= 0 && solo.indexOf("100%") < 0, solo);
+  const split = facts({ samples: 5, difficulty: null, difficultyAnswers: 0, soloRate: 0.6, soloAnswers: 5, combatTop: null, ships: [] });
+  ok("a split one gives the number", split.indexOf("60%") >= 0, split);
+  // combatTop is null whenever the site could not find a real majority; a plurality is not a fact.
+  const nomaj = facts({ samples: 7, difficulty: null, difficultyAnswers: 0, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
+  ok("no majority on combat means no Fighting row", nomaj.indexOf("Fighting") < 0, nomaj || "(empty)");
+  const ship = facts({ samples: 1, difficulty: null, difficultyAnswers: 0, soloRate: null, soloAnswers: 0, combatTop: "fps", ships: [{ ship: "Mirai Guardian", count: 1 }] });
+  ok("a majority combat profile is worded, not coded", ship.indexOf("on foot") >= 0, ship);
+  ok("the most-flown ship is reported", ship.indexOf("Mirai Guardian") >= 0, ship);
+
+  // ── the local dataset fields ─────────────────────────────────────────────
+  const info = (v) => strip(missionInfoHtml(Object.assign({ giver: "Headhunters", missionType: "Bounty Hunter", reputationGained: [], reputationLost: [], whereToGet: [] }, v), true));
+  ok("an illegal contract is flagged on the type", info({ illegal: true }).indexOf("ILLEGAL") >= 0);
+  ok("...and a legal one is not", info({ illegal: false }).indexOf("ILLEGAL") < 0);
+  ok("a rank gate is shown", info({ rankRequired: 2 }).indexOf("Rank needed") >= 0);
+  // 🔑 null is "the dataset carries no gate", NOT rank 0 — givers use 0 and null side by side.
+  ok("...but an absent gate is not rendered as rank 0", info({ rankRequired: null }).indexOf("Rank needed") < 0);
+  ok("rank 0 IS a real gate and shows", info({ rankRequired: 0 }).indexOf("Rank needed") >= 0);
+  return out;
+})()`;
+
 // A widget's settings popover closes itself after 15s of not being used (Sub, 2026-08-03). Not just
 // tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box over the game, and it
 // masks the Web Page widget's native view for as long as it is up.
@@ -3413,6 +3466,7 @@ app.whenReady().then(async () => {
     fails += await run("per-widget angle", ANGLE, null);
     fails += await run("split fade: panel vs text", SPLITFADE, null);
     fails += await run("nothing animates at rest", IDLEPAINT, null);
+    fails += await run("mission info from community data", MISSIONINFO, null);
     fails += await run("cog auto-hide on game focus", COGHIDE,
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");

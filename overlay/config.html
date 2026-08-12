@@ -678,7 +678,7 @@
         <span>Contract payouts</span>
         <div class="hint" style="margin:0">Around a thousand contracts are paid an amount the game works out when you accept them, and it exists nowhere in the game files — the board is the only place to read it. Runs until you stop it, and never starts on its own.</div>
         <div class="add" style="margin-top:0">
-          <button type="button" id="payoutScanBtn" onclick="onPayoutScanToggle()">Start reading the board</button>
+          <button type="button" id="payoutScanBtn" onclick="onPayoutScanToggle()">Start reading the contracts</button>
         </div>
         <div class="hint" id="payoutScanStatus" style="margin:0"></div>
       </div>
@@ -1051,7 +1051,7 @@
     try { d = await (await fetch("/api/payout-scan", { cache: "no-store" })).json(); } catch { /* sidecar down */ }
     if (!d) { status.textContent = ""; return; }
     payoutScanOn = !!d.on;
-    btn.textContent = payoutScanOn ? "Stop reading the board" : "Start reading the board";
+    btn.textContent = payoutScanOn ? "Stop reading the contracts" : "Start reading the contracts";
     btn.classList.toggle("danger", payoutScanOn);
     const missing = [];
     if (!d.syncReady) missing.push("a sync token (set one at the top)");
