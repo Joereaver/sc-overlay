@@ -996,6 +996,143 @@ const SETUPNUDGE = `(async () => {
   return out;
 })()`;
 
+// ── Suite: the contract payout scan session's dashboard ───────────────────────
+// It is chrome tied to a MODE, and every way it can break is invisible from a screenshot of a
+// working app: the panel can render perfectly and refuse every click (not in RSEL), it can keep
+// polling after it is dismissed (src left set), it can drift out of step with the scanner (the ✕
+// hiding the panel instead of ending the session), or it can strand itself off-monitor. Each of
+// those gets an assertion here, because a green sweep of the other suites proves none of them.
+//
+// 🔑 Driven through PREFS + applyPrefs(), which is the REAL path — the mode arrives from the
+// sidecar's prefs broadcast and nothing else is allowed to show or hide the panel. Poking
+// syncPayoutPanel() directly would test a function nobody calls that way.
+// (No backticks and no backslash escapes anywhere in a suite body — this is a template literal.)
+const PAYOUTPANEL = `(async () => {
+  ${PRELUDE}
+  const panel = document.getElementById("payoutPanel");
+  const frame = document.getElementById("ppFrame");
+  ok("the panel exists", !!panel);
+  ok("...and hosts the dashboard in an iframe", !!frame && frame.tagName === "IFRAME");
+
+  // OFF is the state every launch starts in, so it is the one that has to be right by default.
+  PREFS.payoutScan = false; applyPrefs();
+  await sleep(80);
+  ok("with the mode off it is not on screen", getComputedStyle(panel).display === "none");
+  ok("...and it is not polling", !frame.getAttribute("src"), String(frame.getAttribute("src")));
+  // Region membership is measured off the rects the page actually SENDS the shell (captured by
+  // the stub preload), never off the RSEL string. RSEL is block-scoped inside the page's
+  // "if window.overlayApi" guard, so a typeof check on it is false here and a guarded read
+  // returns the truthy fallback TEXT — an assertion in that shape passes with the selector
+  // deleted, which was confirmed by deleting it.
+  const regionHas = (el) => {
+    const b = el.getBoundingClientRect();
+    return (window.__regions || []).some((r) =>
+      Math.abs(r.x - b.left) <= 1 && Math.abs(r.y - b.top) <= 1 &&
+      Math.abs(r.w - b.width) <= 1 && Math.abs(r.h - b.height) <= 1);
+  };
+  await sleep(180);   // the region report is on a 100ms interval and only fires on a real change
+  ok("...and it claims no clickable region, so it cannot swallow game clicks while gone",
+     !regionHas(panel), JSON.stringify(window.__regions || []).slice(0, 120));
+
+  PREFS.payoutScan = true; applyPrefs();
+  await sleep(120);
+  ok("arming the mode puts it on screen", getComputedStyle(panel).display === "flex");
+  ok("...and it loads the dashboard page", frame.getAttribute("src") === "/payout-scan.html",
+     String(frame.getAttribute("src")));
+  // Anything outside a widget's own rect is unclickable unless the page REPORTS it, so an
+  // unlisted panel renders perfectly and refuses every click — including the Stop button it
+  // exists to offer, which would leave the scanner armed with no way to reach the control that
+  // stops it.
+  await sleep(180);
+  ok("...and the shell is told to make the window interactive over it", regionHas(panel),
+     JSON.stringify(window.__regions || []).slice(0, 160));
+
+  // On the PRIMARY monitor, in full. The canvas spans the whole virtual desktop, so a panel sized
+  // or placed against the window rather than --prim-* can land on a monitor that is not there, or
+  // hang off both edges of the one it is centred on.
+  const ci = canvasInfo || { px: 0, py: 0, pw: innerWidth, ph: innerHeight };
+  const r = panel.getBoundingClientRect();
+  ok("it sits wholly inside the primary display",
+     r.left >= ci.px - 1 && r.top >= ci.py - 1 &&
+     r.right <= ci.px + ci.pw + 1 && r.bottom <= ci.py + ci.ph + 1,
+     Math.round(r.left) + "," + Math.round(r.top) + " " +
+     Math.round(r.width) + "x" + Math.round(r.height) + " in " +
+     ci.pw + "x" + ci.ph + " at " + ci.px + "," + ci.py);
+  ok("...at a size the dashboard is readable at", r.width >= 320 && r.height >= 260,
+     Math.round(r.width) + "x" + Math.round(r.height));
+
+  // Dragging the header moves it, and the gesture runs under the shield — without that, the first
+  // pointermove over the iframe would go to the dashboard's document and the drag would freeze.
+  //
+  // 🔑 Placed in the MIDDLE of the primary display before the drag, deliberately. The default
+  // position is hard against the right edge (the board renders on mobiGlas's left, so the panel
+  // sits opposite it), and the first version of this suite dragged right FROM there: the clamp
+  // stopped it at +28 of a +50 drag and the assertion failed on working code. A drag test has to
+  // start somewhere the drag can actually complete.
+  const head = document.getElementById("ppHead");
+  ppGeom = ppClamp({ x: ci.px + Math.round(ci.pw / 2) - 230, y: ci.py + 60, w: 460, h: 620 });
+  ppApplyGeom();
+  await sleep(40);
+  const d0 = panel.getBoundingClientRect();
+  head.dispatchEvent(new PointerEvent("pointerdown", { clientX: d0.left + 40, clientY: d0.top + 8, bubbles: true }));
+  const shield = document.getElementById("dragShield");
+  ok("dragging raises the shield, so the iframe cannot swallow the gesture",
+     !!shield && shield.classList.contains("on"));
+  ok("...without advertising a drop into a group, which cannot happen",
+     !document.body.classList.contains("dragging"));
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: d0.left + 90, clientY: d0.top + 38, bubbles: true }));
+  await sleep(60);
+  const d1 = panel.getBoundingClientRect();
+  ok("the header drags it", Math.round(d1.left - d0.left) === 50 && Math.round(d1.top - d0.top) === 30,
+     "moved " + Math.round(d1.left - d0.left) + "," + Math.round(d1.top - d0.top));
+  // The clamp is what makes this thing recoverable — a panel dragged off the monitor takes its own
+  // header, ✕ and Stop button with it, and the only way back would be clearing localStorage. It is
+  // asserted here because it already caught this suite out once, so it is demonstrably not obvious.
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: d0.left + 9000, clientY: d0.top + 9000, bubbles: true }));
+  await sleep(60);
+  const dFar = panel.getBoundingClientRect();
+  ok("...and it cannot be dragged off the monitor, controls and all",
+     dFar.right <= ci.px + ci.pw + 1 && dFar.bottom <= ci.py + ci.ph + 1 &&
+     dFar.left >= ci.px - 1 && dFar.top >= ci.py - 1,
+     Math.round(dFar.left) + "," + Math.round(dFar.top) + " " +
+     Math.round(dFar.width) + "x" + Math.round(dFar.height));
+  window.dispatchEvent(new PointerEvent("pointerup", { clientX: d0.left + 90, clientY: d0.top + 38, bubbles: true }));
+  await sleep(60);
+  ok("...and the shield comes back down", !shield.classList.contains("on"));
+
+  // 🔴 THE ONE THAT MATTERS. The ✕ must END THE SESSION, not hide the panel: a dashboard you can
+  // dismiss while the scanner stays armed leaves screen-reading running with nothing on screen
+  // explaining it, which is the exact blindness this page was built to end. So the click has to
+  // reach the sidecar as on:false, and it must NOT hide the panel by itself — the panel may only
+  // go away when the mode change comes back round on the prefs broadcast.
+  let posted = null;
+  const realFetch = window.fetch;
+  window.fetch = (u, o) => {
+    if (String(u).indexOf("/api/payout-scan") >= 0 && o && o.method === "POST") {
+      posted = JSON.parse(o.body);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }
+    return realFetch(u, o);
+  };
+  document.getElementById("ppClose").click();
+  await sleep(80);
+  ok("the close button ends the scan session", posted && posted.on === false, JSON.stringify(posted));
+  ok("...and does NOT hide the panel on its own — only the mode may do that",
+     getComputedStyle(panel).display === "flex");
+  window.fetch = realFetch;
+
+  // The broadcast arriving is what takes it down, and it must stop the poll on the way out.
+  PREFS.payoutScan = false; applyPrefs();
+  await sleep(80);
+  ok("the mode going off takes the panel with it", getComputedStyle(panel).display === "none");
+  ok("...and clears the iframe so it stops polling unseen", !frame.getAttribute("src"),
+     String(frame.getAttribute("src")));
+  await sleep(180);
+  ok("...and gives the region back, so the rest of the session clicks through to the game",
+     !regionHas(panel), JSON.stringify(window.__regions || []).slice(0, 160));
+  return out;
+})()`;
+
 // ── Suite: the "scan read area" outline ───────────────────────────────────────
 // The Mining Scanner cog can draw a box showing where the app reads for a signature. A
 // diagnostic that lies is worse than none, so the drawn rect is asserted against the SAME
@@ -3162,6 +3299,11 @@ app.whenReady().then(async () => {
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");
     fails += await run("scan read area", SCANBOX, null);
+    // Stub preload, and not optional: the whole region-reporting block is behind
+    // `if (window.overlayApi)`, so without a shell the panel renders and reports NOTHING — the
+    // clickability assertions would be measuring an empty list against an empty list.
+    fails += await run("payout scan session panel", PAYOUTPANEL,
+      path.join(__dirname, "widget-dom-stub-preload.cjs"));
     fails += await run("widget settings close when idle", WCFGIDLE, null, "wcfgidle=250");
     // ?arrange: the calibration panel lives INSIDE the arrange scrim, so a suite that doesn't open
     // arrange mode measures a display:none control — every size assertion then passes on 0 == 0.

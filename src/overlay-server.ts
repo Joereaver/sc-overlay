@@ -412,18 +412,32 @@ const DEFAULTS: Config = {
   setupNudgeDismissed: false,
 };
 
+// Set when the config on disk was left ARMED (a crash, or a build from before the forced-off
+// rule). Read once at startup to rewrite the file immediately — see the note in loadConfig.
+let payoutScanWasArmedOnDisk = false;
+
 function loadConfig(): Config {
   // Prefer the user's saved config; fall back to the bundled default on first run.
   //
-  // 🔑 `payoutScan` is forced OFF here regardless of what any file says. Stripping it on
-  // SAVE is not enough on its own: a config written before that rule existed still carries
-  // `true`, and would silently arm screen-reading on the next launch — which is precisely
-  // the outcome a temporary mode exists to prevent. Belt and braces, because the failure
-  // is invisible.
+  // 🔑 `payoutScan` is forced OFF here regardless of what any file says. This is the ONLY thing
+  // keeping the scan session temporary, and it is enough: whatever the file claims, the running
+  // app starts disarmed and the file is rewritten to agree (see the startup save below).
+  //
+  // 🔴 DO NOT go back to stripping it on SAVE. That looked stronger and silently broke the
+  // scanner for a whole release: `electron/capture.cjs` learns the mode by READING config.json
+  // off disk every tick (`readConfig`), so a field that is never written is a field it can never
+  // see — `payout` was permanently false, the contract-region crop at capture.cjs:713 never ran,
+  // and the dashboard sat on "no board on screen" forever while every server-side surface
+  // correctly reported the mode as ON. Nothing failed loudly; `c8c2aca` introduced it as a
+  // tightening and no board was swept afterwards to notice. Forcing it off on LOAD gives the
+  // same guarantee — the mode cannot survive a launch — without lying to the process that has
+  // to act on it.
   for (const p of [configPath, seedConfigPath]) {
     try {
       if (existsSync(p)) {
-        return { ...DEFAULTS, ...JSON.parse(readFileSync(p, "utf8")), payoutScan: false };
+        const raw = JSON.parse(readFileSync(p, "utf8"));
+        if (raw && raw.payoutScan === true) payoutScanWasArmedOnDisk = true;
+        return { ...DEFAULTS, ...raw, payoutScan: false };
       }
     } catch {
       /* corrupt — try the next source */
@@ -575,13 +589,12 @@ let overlayGeometry: Record<string, unknown> | null = null;
 const saveConfig = async (): Promise<void> => {
   try {
     mkdirSync(userDir, { recursive: true });
-    // 🔑 `payoutScan` is stripped on the way out — it is a MODE you enter for a sweep, not
-    // a preference you tick once. Written here rather than at every call site so no future
-    // route can persist it by accident; a screen-reading feature that survives a restart
-    // nobody remembers arming is the exact outcome this avoids. Its calibrated region IS
-    // kept: that is a measurement, not consent.
-    const { payoutScan: _omit, ...persisted } = config;
-    await writeFile(configPath, JSON.stringify(persisted, null, 2));
+    // 🔑 `payoutScan` IS written, deliberately — see the long note in loadConfig(). It is the
+    // only way `electron/capture.cjs` can learn the mode (it re-reads this file every tick), and
+    // stripping it here is what silently disabled the whole scanner in `c8c2aca`. The mode stays
+    // temporary because loadConfig() forces it off on every launch and rewrites the file, which
+    // is a guarantee about what RUNS rather than about what is on disk.
+    await writeFile(configPath, JSON.stringify(config, null, 2));
     lastSaveOk = new Date().toISOString();
     lastSaveError = null;
   } catch (e) {
@@ -589,6 +602,17 @@ const saveConfig = async (): Promise<void> => {
     console.error("[config] save failed:", String(e));
   }
 };
+
+// 🔑 A config left ARMED — the app was killed mid-sweep, or it predates the forced-off rule — is
+// rewritten disarmed RIGHT NOW, not whenever the next save happens to occur. loadConfig() already
+// guarantees the running app starts disarmed, but `electron/capture.cjs` reads the FILE, so until
+// this lands the file is what would arm it. The shell only spawns that loop after waitForServer(),
+// so this write is ahead of its first tick. Conditional purely to avoid rewriting a file on every
+// launch for the 99% of launches that were left off.
+if (payoutScanWasArmedOnDisk) {
+  console.log("[payout] config was left armed — disarming on disk");
+  void saveConfig();
+}
 
 // ── Notepad (local-only scratch notes) ───────────────────────────────────────
 // A flat list of notes stored beside config.json in the per-user dir (NEVER next to
@@ -839,6 +863,13 @@ function missionsPayload(): string {
       unfocusedOpacity: config.unfocusedOpacity,
       premium: entitled(),   // subscriber: skins unlocked + logos/flair shown
       demo: !!demoTheme,     // a trial preview is live → overlay shows the trial watermark
+      // The contract-board scan session. Rides prefs so the CANVAS can put its dashboard on
+      // screen the moment the mode is armed from anywhere — the settings window, the panel's
+      // own Stop button, or a restart forcing it off. It is the only signal the panel obeys,
+      // which is what keeps "panel up" and "screen-reading armed" from ever disagreeing.
+      // 🔑 Read from `config` and never persisted (saveConfig strips it), so a broadcast on
+      // launch always carries `false` — the mode cannot come back without someone arming it.
+      payoutScan: config.payoutScan,
     },
   });
 }
@@ -2242,6 +2273,16 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
         config.payoutScan = body.on;
         saveConfig();
         console.log(`[payout] scanning ${body.on ? "ON" : "OFF"}`);
+        // 🔑 Tell the overlay, because the dashboard lives ON the canvas now and this route is
+        // the ONE place the mode changes — the settings window, the panel's Stop button and
+        // the panel's ✕ all arrive here. Broadcasting from here rather than from each caller
+        // is what makes "the panel is up" and "the screen is being read" the same fact; a
+        // caller that forgot to push would leave an armed scanner with nothing on screen
+        // saying so, which is the exact blindness the dashboard was built to end.
+        // Deliberately NOT routed through /api/config: that endpoint is reachable from the
+        // LAN (widget pages serve to OBS on another PC) and this one is loopback-only on
+        // purpose — arming a screen-reader must stay a decision made at this machine.
+        broadcastMissions();
         // Flush immediately on the way out so a sweep's tail isn't stranded for 30s.
         if (!body.on) void flushPayouts();
       }

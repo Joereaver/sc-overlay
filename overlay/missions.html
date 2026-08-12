@@ -750,6 +750,51 @@
   /* A read the app threw away, told apart without adding a word about it. */
   #scanBox.refused .sb-read-val { color: var(--cyan-dim); text-decoration: line-through; }
 
+  /* ── The contract-board scan session's dashboard ──────────────────────────────────────────
+     Widget-LIKE, deliberately not a widget (Sub, 2026-08-12): "I don't want it to be an actual
+     new widget. I want it to be something that just pops up if they go into the settings and
+     activate this mode." So it has no registry key, no hub toggle and no saved layout — it is
+     chrome that exists exactly as long as the mode does. Making it a real widget would put a
+     permanent entry in everyone's hub for a mode that force-disarms on every launch.
+
+     It hosts overlay/payout-scan.html in an IFRAME rather than reimplementing the dashboard.
+     That page is served by our own sidecar, so the frame is SAME-ORIGIN and needs none of the
+     Web Page widget's native-view machinery — no WebContentsView, so it stacks by z-index like
+     everything else and canvas chrome can never open behind it.
+
+     🔑 The game must stay FOCUSED for the contract board to render, which is the whole reason
+     this lives on the overlay instead of in a browser window: a normal window would take focus
+     and the board it is trying to read would stop being drawn. */
+  #payoutPanel { display: none; position: fixed; z-index: 56; flex-direction: column;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background: rgba(8, 14, 18, 0.92);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55); }
+  body.payoutscan #payoutPanel { display: flex; }
+  /* Hidden while ARRANGING. It is a large opaque rectangle and arrange mode is for placing
+     widgets underneath it — and since it is not a widget, arrange offers no way to move it,
+     so leaving it up reads as a widget that refuses to be arranged. Its own header drag is
+     how it moves; it comes straight back when arrange ends. */
+  body.arranging #payoutPanel { display: none; }
+  #payoutPanel .pp-head { flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 10px; cursor: move; user-select: none;
+    background: rgba(var(--accent-rgb), 0.14); border-bottom: 1px solid var(--border); }
+  #payoutPanel .pp-title { flex: 1; font-family: var(--sans); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan-text); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  /* ✕ ENDS THE SESSION, it does not merely hide the panel — see the close handler for why. */
+  #payoutPanel .pp-x { flex: none; font-family: var(--sans); font-size: 12px; font-weight: 700;
+    line-height: 1; color: var(--cyan-dim); cursor: pointer; padding: 3px 7px;
+    border: 1px solid var(--border); border-radius: 5px; background: rgba(8, 17, 26, 0.85); }
+  #payoutPanel .pp-x:hover { color: var(--cyan-bright); border-color: var(--cyan); }
+  #payoutPanel iframe { flex: 1; width: 100%; border: 0; display: block; background: #0d0e0f; }
+  /* Same corner-grip idiom as the scan box, and INSIDE the panel's own rect for the same
+     reason: the shell hit-tests the rects this page reports, so a control hanging outside one
+     is visible and permanently unclickable. */
+  #payoutPanel .pp-grip { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+    cursor: nwse-resize; z-index: 2;
+    border-right: 2px solid rgba(var(--accent-rgb), 0.8);
+    border-bottom: 2px solid rgba(var(--accent-rgb), 0.8); border-bottom-right-radius: 10px; }
+
   /* 🔑 Drag shield. A widget's neighbours are IFRAMES, and pointer events over an iframe go to
      ITS document — window.pointermove in this one simply stops firing, so a drag froze the
      moment the cursor crossed another widget and then snapped when it came back out. A shield
@@ -1564,6 +1609,19 @@
     <span class="sb-grip" title="Drag to resize"></span>
   </div>
 
+  <!-- The contract-board scan session's live dashboard. Up only while the mode is armed; the
+       mode is the single source of truth for both, so the panel and the screen-reading can
+       never disagree about whether a sweep is running. The iframe's src is set on show and
+       cleared on hide, so a dismissed panel stops polling instead of ticking unseen. -->
+  <div id="payoutPanel">
+    <div class="pp-head" id="ppHead">
+      <span class="pp-title">Contract payout scan · drag to move</span>
+      <span class="pp-x" id="ppClose" title="End the scan session. Screen reading stops too — the panel and the scanner are the same switch.">✕</span>
+    </div>
+    <iframe id="ppFrame" title="Contract payout scanner"></iframe>
+    <span class="pp-grip" id="ppGrip" title="Drag to resize"></span>
+  </div>
+
   <!-- Global overlay-app chrome (canvas shell only): screen-anchored cog + in-overlay hub. -->
   <div id="globalCog" title="Overlay settings">⚙</div>
   <div id="hub">
@@ -1805,6 +1863,10 @@
     if (!q2.has("premium")) root.classList.toggle("premium", !!PREFS.premium);
     if (!q2.has("demo")) root.classList.toggle("demo", !!PREFS.demo);
     updateBrandTab();
+    // The contract-board scan session's dashboard. Declared later in the file, so this is guarded
+    // the same way applyAllFades is above — applyPrefs() also runs from the OBS browser-source
+    // path, where the canvas chrome does not exist at all.
+    if (typeof syncPayoutPanel === "function") syncPayoutPanel();
     root.style.setProperty("--twist", (Number(PREFS.overlayTwist) || 0) + "deg");
     const scale = Math.max(50, Math.min(200, Number(PREFS.overlayScale) || 100));
     if (CANVAS) {
@@ -2759,7 +2821,10 @@
     const shield = $("dragShield");
     if (shield) shield.classList.toggle("resizing", resizing);
     shield?.classList.add("on");
-    if (!resizing) document.body.classList.add("dragging"); // every bar comes out as a drop target
+    // `bare` skips the drop-target reveal: that exists so a dragged WIDGET can be dropped into a
+    // group, and nothing else can be. Showing every bar while dragging canvas chrome (which no
+    // group will ever accept) advertises a drop that cannot happen.
+    if (!resizing && !(opts && opts.bare)) document.body.classList.add("dragging"); // every bar comes out as a drop target
     const move = (ev) => onMove(ev);
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -3650,6 +3715,134 @@
   fetch("/api/config", { cache: "no-store" }).then((r) => r.json()).then((c) => {
     if (c && c.scanRegion) { scanRegion = c.scanRegion; drawScanBox(); }
   }).catch(() => { /* default band it is */ });
+
+  // ── The contract-board scan session's dashboard ────────────────────────────────────────────
+  // Chrome tied to a MODE, in the same family as the scan box above: one rule decides whether it
+  // is on screen, and that rule is the mode itself. Nothing here may hide or show the panel
+  // directly, or "the panel is up" and "the app is reading your screen" start to drift apart —
+  // which is precisely the blindness this dashboard was built to end.
+  const PP_MIN_W = 320, PP_MIN_H = 260;
+  // Wide enough that the page's own narrow layout (<=560px) engages, tall enough for the stat
+  // grid plus a screenful of rows without scrolling.
+  const PP_DEF_W = 460, PP_DEF_H = 620;
+  let ppGeom = null;   // {x,y,w,h} in canvas px, or null until first read/placement
+
+  const ppDisplay = () => canvasInfo || { px: 0, py: 0, pw: window.innerWidth, ph: window.innerHeight };
+
+  /** Clamp a geometry so the panel is always reachable on the PRIMARY monitor.
+   *  🔑 Sized and placed against --prim-* / canvasInfo, never `vh`. The canvas spans the whole
+   *  virtual desktop, so on Sub's rig (a portrait 1080x1920 beside a 3440x1440) `vh` is 1928 —
+   *  the unit that hung the patch-notes card off both edges of the monitor it was centred on. */
+  function ppClamp(g) {
+    const ci = ppDisplay();
+    const w = Math.max(PP_MIN_W, Math.min(g.w, ci.pw - 24));
+    const h = Math.max(PP_MIN_H, Math.min(g.h, ci.ph - 24));
+    return {
+      w, h,
+      x: Math.max(ci.px + 12, Math.min(ci.px + ci.pw - w - 12, g.x)),
+      y: Math.max(ci.py + 12, Math.min(ci.py + ci.ph - h - 12, g.y)),
+    };
+  }
+  function ppDefaultGeom() {
+    const ci = ppDisplay();
+    // Right-hand side of the primary display: mobiGlas draws the contract board on the LEFT, and
+    // the panel exists to be read beside the board rather than on top of it.
+    return ppClamp({
+      w: PP_DEF_W, h: PP_DEF_H,
+      x: ci.px + ci.pw - PP_DEF_W - 40,
+      y: ci.py + Math.round((ci.ph - PP_DEF_H) / 2),
+    });
+  }
+  function ppLoadGeom() {
+    try {
+      const raw = JSON.parse(localStorage.getItem("payoutPanelGeom") || "null");
+      if (raw && ["x", "y", "w", "h"].every((k) => Number.isFinite(raw[k]))) return ppClamp(raw);
+    } catch { /* no storage, or it was hand-edited to nonsense */ }
+    return ppDefaultGeom();
+  }
+  // Local, not server-side — unlike the mining scan REGION, which the classifier itself reads and
+  // therefore has to live in config. This is only where a window sits.
+  function ppSaveGeom() {
+    try { localStorage.setItem("payoutPanelGeom", JSON.stringify(ppGeom)); } catch { /* no storage */ }
+  }
+  function ppApplyGeom() {
+    const el = document.getElementById("payoutPanel");
+    if (!el || !ppGeom) return;
+    el.style.left = Math.round(ppGeom.x) + "px";
+    el.style.top = Math.round(ppGeom.y) + "px";
+    el.style.width = Math.round(ppGeom.w) + "px";
+    el.style.height = Math.round(ppGeom.h) + "px";
+  }
+
+  /** THE one rule: the panel is up exactly while the scan session is armed.
+   *  Driven from applyPrefs(), so every route into the mode — the settings window, the
+   *  dashboard's own Stop button, a relaunch forcing it off — arrives here through the same
+   *  prefs broadcast and cannot disagree with the others. */
+  let ppShown = false;
+  function syncPayoutPanel() {
+    const on = !!PREFS.payoutScan;
+    if (on === ppShown) return;   // this runs on every mission tick; only act on a real change
+    ppShown = on;
+    document.body.classList.toggle("payoutscan", on);
+    const frame = document.getElementById("ppFrame");
+    if (on) {
+      ppGeom = ppLoadGeom();
+      ppApplyGeom();
+      // src is set on SHOW and cleared on hide, so a dismissed panel stops its 1s poll instead of
+      // ticking unseen forever. Assigning it here (rather than in the markup) is also what gives
+      // each session a clean page, which is what you want from something you just switched on.
+      if (frame && !frame.getAttribute("src")) frame.setAttribute("src", "/payout-scan.html");
+    } else if (frame) {
+      frame.removeAttribute("src");
+    }
+  }
+
+  /** Ending the session, from the ✕. It POSTs the MODE off and lets the broadcast take the panel
+   *  down — it never touches the panel directly.
+   *  🔑 ✕ stops SCANNING, it does not merely dismiss the dashboard. A panel you can close while
+   *  screen-reading stays armed leaves a mode running with nothing on screen to explain it, and
+   *  puts the user back to reading a counter that cannot tell "working" from "merely running" —
+   *  the exact problem this page exists to solve. Same switch, one meaning. */
+  function ppEndSession() {
+    fetch("/api/payout-scan", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: false }),
+    }).catch(() => { /* the next prefs broadcast still carries the truth */ });
+  }
+
+  (() => {
+    const el = document.getElementById("payoutPanel");
+    if (!el) return;
+    document.getElementById("ppClose")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      ppEndSession();
+    });
+    // Drag by the header, resize by the corner. Both run under the canvas-wide drag shield: this
+    // panel CONTAINS an iframe, so without it every pointermove from the moment the cursor
+    // crossed into the dashboard would go to that document instead of this one and the gesture
+    // would freeze mid-drag.
+    const startDrag = (e, mode) => {
+      if (!ppGeom) return;
+      const sx = e.clientX, sy = e.clientY, start = { ...ppGeom };
+      e.preventDefault(); e.stopPropagation();
+      dragPointer(
+        (ev) => {
+          const dx = ev.clientX - sx, dy = ev.clientY - sy;
+          ppGeom = ppClamp(mode === "resize"
+            ? { ...start, w: start.w + dx, h: start.h + dy }
+            : { ...start, x: start.x + dx, y: start.y + dy });
+          ppApplyGeom();
+        },
+        ppSaveGeom,                                   // one write per gesture, not per frame
+        { resize: mode === "resize", bare: true },
+      );
+    };
+    document.getElementById("ppHead")?.addEventListener("pointerdown", (e) => {
+      if (e.target && e.target.id === "ppClose") return;   // handled above
+      startDrag(e, "move");
+    });
+    document.getElementById("ppGrip")?.addEventListener("pointerdown", (e) => startDrag(e, "resize"));
+  })();
 
   // ── The Web Page widget's native view ───────────────────────────────────────────────────
   // Its content isn't in the DOM at all: the shell paints a WebContentsView over the canvas,
@@ -4700,7 +4893,13 @@
       // twice for no gain.
       // 🔑 `#setupNudge.show`, not `#setupNudge` — a hidden banner must never claim a region, or
     // it would swallow game clicks along a blank strip above the taskbar for the whole session.
-    const RSEL = "body.scanbox #scanBox, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #ocrWarn.show, #arrangeScrim .ab, #arrangeScrim .nudge, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
+      // 🔑 `body.payoutscan #payoutPanel`, for the same reason as the scan box above: it is a
+      // MODE's chrome, and a panel this size must not sit in the cursor hit-test — swallowing
+      // game clicks over a 460x620 rectangle — for the rest of the session once it is gone.
+      // It also has to be here at all: anything outside a widget's own rect is unclickable
+      // unless the page reports it, so an unlisted panel would render perfectly and refuse
+      // every click, including its own Stop button.
+    const RSEL = "body.scanbox #scanBox, body.payoutscan #payoutPanel, #panel, #globalCog, #hub, #cogMenu, #whatsnew, #setupNudge.show, #svcDown.show, #ocrWarn.show, #arrangeScrim .ab, #arrangeScrim .nudge, .widget:not(.notifier), .widget.notifier.live, .widget.notifier.moving, .widget.notifier.cfgopen, .widget:hover .whead, .widget.touched .whead, .widget.grouped .whead, #panel:hover .whead, #panel.touched .whead, #panel.grouped .whead";
       // Only cross the process boundary when the answer actually changed. The rects are stable for
       // minutes at a time (they move on drag/resize/show/hide/hover), so this was ten identical
       // IPC messages a second, forever.

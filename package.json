@@ -37,7 +37,7 @@
     "dev:fresh": "node tools/dev-fresh.mjs",
     "test:location": "tsx src/location.test.ts",
     "check:dataset": "node tools/check-dataset-fresh.mjs --strict",
-    "test:contracts": "tsx src/contract-list.test.ts && tsx src/contract-match.test.ts && tsx src/payout-scan.test.ts"
+    "test:contracts": "tsx src/contract-list.test.ts && tsx src/contract-match.test.ts && tsx src/payout-scan.test.ts && tsx src/payout-mode.test.ts"
   },
   "dependencies": {
     "@gutenye/ocr-node": "^1.4.8",

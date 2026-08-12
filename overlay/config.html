@@ -392,6 +392,22 @@
     </div>
   </div>
 
+  <!-- 🔑 Its OWN card, not a row in "Screen reading (OCR)" above, for two reasons that both
+       matter. That card's blurb says "Uses Windows' built-in text recognition" — this one uses
+       RapidOCR, because Windows OCR could not read the board's 12px giver line at all. And every
+       other opt-in there is a standing preference you tick once, while this is a SESSION: it
+       force-disarms on every launch, so filing it beside them would misrepresent what ticking it
+       does. -->
+  <div class="card">
+    <div class="label">Contract payouts</div>
+    <div class="hint" style="margin-top:0">A scan session, not a setting — it always starts off when the app launches.</div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="payoutScan" onchange="onPayoutScanToggle()" /> Read contract payouts off the mobiGlas board</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">About a thousand contracts are paid an amount the game calculates when you accept them — it exists nowhere in the game files, so the contract board is the only place to read it. Turn this on and a panel opens on the overlay; open mobiGlas &rarr; Contracts and expand a category, and it records what each one pays and contributes it to subliminal.gg so the mission pages can show a typical payout. It reads the board and nothing else. Needs a sync token.</span></span>
+    </div>
+    <div class="hint" id="payoutScanStatus"></div>
+  </div>
+
   <div class="card">
     <div class="label">Widgets &amp; interaction</div>
     <div class="setrow">
@@ -883,6 +899,9 @@
     tokenEl.value = cfg.hasSyncToken ? cfg.syncTokenPreview : "";
     document.getElementById("syncStatus").textContent = cfg.hasSyncToken ? "" : "No token yet — paste one to connect.";
     refreshAdmin();
+    // Read from /api/payout-scan, not from `cfg`: the mode is never written to config.json, so
+    // the config response can only ever say "off" whatever is actually running.
+    refreshPayoutScan();
   }
 
   // Elevation state: show "running as admin" or the opt-in "Restart as administrator" button.
@@ -997,6 +1016,50 @@
   async function onResetLayout() {
     if (window.overlayConfig && window.overlayConfig.resetLayout) await window.overlayConfig.resetLayout();
   }
+
+  // ── Contract payout scan session ─────────────────────────────────────────
+  // Deliberately NOT part of save(). Two reasons, and the second is the load-bearing one:
+  //  · The flag is never persisted (the sidecar strips it on save and forces it off on load),
+  //    so round-tripping it through the config form would write a value nothing reads back.
+  //  · /api/payout-scan is LOOPBACK-ONLY on purpose, while /api/config answers the LAN so OBS
+  //    on another PC can load widget pages. Arming a screen-reader has to stay a decision made
+  //    at this machine, so the toggle talks to the route that enforces that.
+  // The sidecar broadcasts the change on the missions SSE, which is what puts the dashboard on
+  // the overlay — this function never opens a window itself.
+  async function onPayoutScanToggle() {
+    const on = document.getElementById("payoutScan").checked;
+    try {
+      await fetch("/api/payout-scan", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on }),
+      });
+    } catch { /* refreshPayoutScan() below re-reads the real state either way */ }
+    refreshPayoutScan();
+  }
+  // Reads the live mode, and says WHY a sweep would record nothing — the question anyone asks
+  // first, and the one a bare checkbox cannot answer. Same three preconditions the dashboard
+  // reports, so the two surfaces cannot disagree about whether the thing is ready.
+  async function refreshPayoutScan() {
+    const box = document.getElementById("payoutScan");
+    const status = document.getElementById("payoutScanStatus");
+    if (!box || !status) return;
+    let d = null;
+    try { d = await (await fetch("/api/payout-scan", { cache: "no-store" })).json(); } catch { /* sidecar down */ }
+    if (!d) { status.textContent = ""; return; }
+    box.checked = !!d.on;
+    const missing = [];
+    if (!d.syncReady) missing.push("a sync token (set one above)");
+    if (!d.calibrated) missing.push("a calibrated board area");
+    status.textContent = missing.length
+      ? "Needs " + missing.join(" and ") + " before it can record anything."
+      : d.on
+        ? "Scanning. The panel on the overlay shows every row it reads."
+        : "";
+  }
+  // This checkbox is the one control here whose value can change while the window sits open —
+  // the overlay panel's own Stop button and ✕ both end the session. Re-read on focus so coming
+  // back to this window never shows a tick for a sweep that has already finished.
+  window.addEventListener("focus", refreshPayoutScan);
 
   // ── canvas calibration (mixed-DPI) ───────────────────────────────────────
   // The shell owns this, not the form: it re-fits the overlay window and persists through the
