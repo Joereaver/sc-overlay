@@ -123,7 +123,10 @@ export function cleanCategory(raw: string): string | null {
 /** Uppercase, collapse whitespace, drop the punctuation the game and our dataset disagree
  *  about. Used on both sides of a title comparison so the match isn't defeated by an
  *  apostrophe ("YANG'S" vs "Yang’s" — a straight quote against a curly one). */
-export function normalizeTitle(s: string): string {
+export function normalizeTitle(s: string | null | undefined): string {
+  // The dataset carries a null title on a handful of contracts, and this is called across
+  // all 2,763 of them to build the matcher — one null took the whole index down.
+  if (!s) return "";
   return s
     .toUpperCase()
     .replace(/[‘’']/g, "")
