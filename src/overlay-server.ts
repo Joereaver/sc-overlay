@@ -1142,9 +1142,22 @@ const LOC_CHECK_MS = 60 * 1000;
 function dropStaleLocation(): void {
   if (!chat.hasLocation()) return;          // nothing to clear — don't stat for no reason
   const p = config.logPath;
-  if (!p) return;
+  // 🔴 BOTH OF THESE USED TO `return`, AND THAT BROKE THE RULE THIS FUNCTION IS NAMED AFTER.
+  // No log path, or a log we cannot stat, is precisely "a location we cannot refresh" — so it
+  // is precisely the case that must not stay published. Instead the location was pinned
+  // forever, and re-asserted on every reconnect, because `sendLoc()` runs on welcome.
+  // Sub, 2026-08-12, about a tester frozen in US East 1B: "he is not online, he is not in the
+  // game… he's not there." That is what this was: a client with no readable log holding a shard
+  // it saw once. It also makes the new in-game marker lie, which is worse than a stale room.
+  if (!p) { console.log("[chat] no log path — dropping location"); chat.applyShard(null, null); return; }
   let mtime = 0;
-  try { mtime = statSync(p).mtimeMs; } catch { return; }   // log gone: leave it to the watcher
+  try {
+    mtime = statSync(p).mtimeMs;
+  } catch {
+    console.log(`[chat] cannot read ${p} — dropping location`);
+    chat.applyShard(null, null);
+    return;
+  }
   if (Date.now() - mtime < LOC_STALE_MS) return;
   console.log(`[chat] game.log untouched for ${Math.round((Date.now() - mtime) / 60000)}m — dropping location`);
   chat.applyShard(null, null);

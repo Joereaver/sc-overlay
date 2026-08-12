@@ -916,6 +916,48 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(acMember(acB, "ActorOne"), "inGame"), false,
     "the key is omitted rather than set false");
 
+  // ── evicting a stuck location, without banning anybody ────────────────────
+  // 🔴 The case: a client whose own idea of where it is has gone stale sits in a region room
+  // forever, re-asserting the same shard on every reconnect. Banning was the only eviction this
+  // server had, and Sub's requirement was explicitly "removed, preferably without banning him
+  // from the whole app."
+  const gh = client();
+  await gh.open();
+  gh.send({ t: "hello", handle: "GhostTest" });
+  await gh.next((f) => f.t === "joined" && f.ch === "global", "GhostTest joins global");
+  gh.send({ t: "loc", region: "use1b", shard: "pub_use1b_99999999_040", dgs: "ff11223344" });
+  await gh.next((f) => f.t === "joined" && f.ch === "region:use1b", "...and lands in the region room");
+
+  const conns0 = await (await fetch(`http://127.0.0.1:${PORT}/admin/conns`)).json();
+  const ghRow = conns0.find((c) => c.handle === "GhostTest");
+  assert(ghRow, "the connection list names them");
+  assert.equal(ghRow.inPu, true, "...and says they are asserting a location");
+
+  const ghEvict = await (await fetch(`http://127.0.0.1:${PORT}/admin/clear-location`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ handle: "GhostTest" }),
+  })).json();
+  assert(ghEvict.cleared >= 1, "the eviction reports what it removed");
+  await gh.next((f) => f.t === "left" && f.ch === "region:use1b", "they are out of the region room");
+  const conns1 = await (await fetch(`http://127.0.0.1:${PORT}/admin/conns`)).json();
+  assert.equal(conns1.find((c) => c.handle === "GhostTest").inPu, false, "...and no longer read as in the PU");
+  // 🔑 Still connected, still in global. This is not a ban and not a disconnect.
+  assert(conns1.find((c) => c.handle === "GhostTest").rooms.includes("global"),
+    "they keep their account and every other room");
+
+  // 🔴 And it STICKS against the same stale value walking straight back in — which is exactly
+  // what a stuck client does on its next reconnect.
+  gh.send({ t: "loc", region: "use1b", shard: "pub_use1b_99999999_040", dgs: "ff11223344" });
+  await wait(250);
+  const conns2 = await (await fetch(`http://127.0.0.1:${PORT}/admin/conns`)).json();
+  assert.equal(conns2.find((c) => c.handle === "GhostTest").inPu, false,
+    "re-asserting the SAME location does not undo the eviction");
+
+  // 🔑 But a genuinely NEW location is believed again: that is a client that has actually moved,
+  // and the override was about one stale value, not about the person.
+  gh.send({ t: "loc", region: "euw1b", shard: "pub_euw1b_12121212_010", dgs: "aa99887766" });
+  await gh.next((f) => f.t === "joined" && f.ch === "region:euw1b", "a real move is believed again");
+
   console.log("chat-server tests passed");
 } finally {
   server.kill();

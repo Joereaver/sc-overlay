@@ -722,6 +722,49 @@ const server = createServer(async (req, res) => {
   // Ban admin is loopback-only — same rule as the sidecar's /api/twitch/*: an endpoint
   // that ACTS with authority IS the authority, so it must not answer the LAN.
   if (url.startsWith("/admin/") && !loopback(req)) { res.writeHead(403); res.end(); return; }
+  // Who is actually connected, and what each connection is asserting about itself. There was no
+  // way to answer "why is this person showing as in-game when they are not" — /admin/health
+  // gives counts, and counts cannot name anybody.
+  if (url === "/admin/conns" && req.method === "GET") {
+    const now = Date.now();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify([...conns].filter((c) => c.handle).map((c) => ({
+      handle: c.handle,
+      org: c.orgSid, orgStars: c.orgStars,
+      rooms: [...c.channels],
+      inPu: inPu(c),
+      // 🔑 The three ages that actually explain a ghost: how long the socket has been up, when
+      // they last said anything at all, and when they last asserted a LOCATION. A location far
+      // older than the session is a client that set it once and never corrected it.
+      connectedMin: Math.round((now - (c.connectedAt ?? now)) / 60000),
+      lastFrameMin: c.lastFrameAt ? Math.round((now - c.lastFrameAt) / 60000) : null,
+      lastLocMin: c.lastLocAt ? Math.round((now - c.lastLocAt) / 60000) : null,
+    }))));
+    return;
+  }
+  // Drop a handle's LOCATION rooms without touching their account. Sub, 2026-08-12, about a
+  // tester stuck in US East 1B: "I just want him removed. Preferably without banning him from
+  // the whole app." Banning was the only eviction this server had, and a ban is the wrong tool
+  // for a client that is simply wrong about where it is.
+  // 🔑 It sticks for as long as the socket lives, because a client only re-asserts `loc` on
+  // welcome (reconnect) or a real shard change — so this is not a game of whack-a-mole unless
+  // their app restarts.
+  if (url === "/admin/clear-location" && req.method === "POST") {
+    const handle = String((await readBody(req)).handle ?? "").toLowerCase();
+    if (!HANDLE_RE.test(handle)) { res.writeHead(400); res.end(); return; }
+    let cleared = 0;
+    for (const c of conns) {
+      if (c.handleLower !== handle) continue;
+      for (const ch of [...c.channels]) {
+        if (ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dgs:")) { leaveRoom(c, ch); cleared++; }
+      }
+      c.locBlocked = true;   // and don't let the same stale value walk straight back in
+      for (const ch of c.channels) presence(ch);
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, handle, cleared }));
+    return;
+  }
   if (url === "/admin/bans" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify([...bans]));
@@ -804,6 +847,11 @@ wss.on("connection", (ws) => {
     activity: null,
     channels: new Set(),
     orgSid: null, orgRank: null, orgStars: 0, token: null, // org membership + the token used to re-check it
+    connectedAt: Date.now(), lastFrameAt: 0, lastLocAt: 0,
+    // Set by /admin/clear-location: this connection's own idea of where it is has been
+    // overruled, and re-asserting the SAME value must not undo that. A genuinely new location
+    // clears the block, because that is a client that has actually moved.
+    locBlocked: false, lastLocKey: null,
     stamps: [], // send timestamps for the message rate limit
     acts: [],   // and for access attempts (join / dm / invite / delete)
     alive: true,
@@ -816,6 +864,7 @@ wss.on("connection", (ws) => {
     let f;
     try { f = JSON.parse(String(raw)); } catch { return; }
     if (!f || typeof f !== "object") return;
+    conn.lastFrameAt = Date.now();
 
     if (f.t === "hello" && !conn.handle) {
       const id = await verifyIdentity(f);
@@ -879,6 +928,16 @@ wss.on("connection", (ws) => {
     if (f.t === "loc") {
       const wasInPu = inPu(conn);
       const want = new Set(locChannels(f));
+      conn.lastLocAt = Date.now();
+      // 🔑 An overruled location stays overruled until the client says something DIFFERENT.
+      // A stuck client re-asserts the same shard on every reconnect; a real player who moves
+      // sends a new one, and that is the signal that it is worth listening to them again.
+      const key = [...want].sort().join(",");
+      if (conn.locBlocked) {
+        if (key === conn.lastLocKey) return;
+        conn.locBlocked = false;
+      }
+      conn.lastLocKey = key;
       // Only the AUTO location channels churn with the log — global/org/custom stay put.
       for (const ch of [...conn.channels])
         if ((ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dgs:")) && !want.has(ch)) leaveRoom(conn, ch);

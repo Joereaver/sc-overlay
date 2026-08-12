@@ -42,8 +42,13 @@
   #body { flex: 1; min-height: 0; display: flex; position: relative; z-index: 4; }
   .rail { flex: none; display: flex; flex-direction: column; min-height: 0;
     background: rgba(0, 0, 0, 0.16); }
-  #left { width: 190px; border-right: 1px solid var(--divider); }
-  #right { width: 168px; border-left: 1px solid var(--divider); }
+  /* 🔑 The rails SCALE with the widget instead of being fixed. An RSI handle can be 30
+     characters and the rail was a fixed 168px, so on a wide widget the names were clipped while
+     there was room going spare — the "shortened player names" ask is really this. `clamp` gives
+     the rail a floor, a share of the width, and a ceiling past which more room should go to the
+     conversation, not to the name list. */
+  #left { width: clamp(150px, 22%, 260px); border-right: 1px solid var(--divider); }
+  #right { width: clamp(132px, 19%, 230px); border-left: 1px solid var(--divider); }
   #panel.no-left #left, #panel.no-right #right { display: none; }
   #center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
@@ -355,6 +360,12 @@
      which reads as a status light — Sub saw a red one and reasonably asked what it meant. It
      meant nothing. The NAME carries the colour instead, where a colour is obviously identity. */
   .mrow { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; }
+  /* 🔴 ELLIPSIS IN THE RAIL ONLY — Sub's call, 2026-08-12. There is no shorter REAL name to
+     show: RSI's moniker is the same string as the handle, and a handle's prefix is not the
+     org's SID, so anything "derived" would be a guess at somebody's name. The rail is the only
+     place that is actually short of room, so the rail is the only place that truncates, the
+     full name is always one hover (or right-click) away, and the message LOG never clips a name
+     at all. */
   .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mrow .vf { flex: none; font-size: 8px; font-weight: 800; color: var(--green, #38d980); }
   /* The status marker. Hollow = connected to chat; filled + lit = in the PU. Deliberately the
@@ -1650,6 +1661,9 @@
     row.appendChild(dot);
     const nm = document.createElement("span");
     nm.className = "nm"; nm.textContent = handle;
+    // The truncated name always has the whole thing on hover — that is what makes clipping it
+    // here acceptable rather than a way of losing information.
+    nm.title = handle;
     // Same colour the name carries in the log, so a member list and its messages agree.
     if (!you) nm.style.color = nameColor(handle);
     row.appendChild(nm);
