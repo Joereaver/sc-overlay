@@ -80,7 +80,14 @@ check("a title we never extracted reads as unknown", gaslight.status === "unknow
 
 // Garbage must never match.
 check("nonsense is unknown", matcher.match(row("ZZZ QQQ WWW", "BIT ZEROS", "MERCENARY"), null).status === "unknown");
-check("unknown giver is unknown", matcher.match(row("EASY PICKINGS", "NOBODY AT ALL", "MERCENARY"), null).status === "unknown");
+// A real title with an unreadable giver stays a candidate rather than being thrown out.
+// The giver narrows, it does not gate — deliberately, because the live run showed the
+// giver is the field OCR mangles most. Nothing is recorded either way; ambiguous simply
+// keeps the row honest instead of pretending we never saw a contract we clearly did.
+check(
+  "a real title with a junk giver is ambiguous, not unknown",
+  matcher.match(row("EASY PICKINGS", "NOBODY AT ALL", "MERCENARY"), null).status === "ambiguous",
+);
 
 // ── coverage, measured over the whole dataset ──────────────────────────────
 // Round-trip every pool contract through its own displayed title. A dataset title with a
@@ -120,6 +127,42 @@ console.log(
 check("almost nothing round-trips to unknown", unknown <= 10, `${unknown} unknown`);
 check("a fifth resolve uniquely per contract", matched / total > 0.2, `${((matched / total) * 100).toFixed(1)}%`);
 check("nothing is silently dropped", matched + ambiguous + unknown > total * 0.99);
+
+// ── The exact rows the first LIVE run threw away ───────────────────────────
+// Both had a perfect title and a perfect price and were discarded on one mangled
+// character in the giver, because candidates were bucketed by an EXACT giver key and a
+// hash lookup has no way to be nearly right. Read off Sub's real board, 2026-08-11.
+check("OCR 'UNG FAMILY HAULING' still finds Ling Family Hauling", sameName("UNG FAMILY HAULING", "Ling Family Hauling"));
+check("OCR 'ROUGH B READY' still finds Rough & Ready", sameName("ROUGH B READY", "Rough & Ready"));
+const live = matcher.match(row("ICC SPECIAL DELIVERY", "UNG FAMILY HAULING", "DELIVERY"), null);
+check("the live ICC row now resolves", live.status === "matched", live.status);
+
+// ...but tolerance must not become "anything goes".
+check("a genuinely different giver is still rejected", !sameName("Bit Zeros", "Rough & Ready"));
+check("two wrong characters is too many", !sameName("XXNG FAMILY HAULINX", "Ling Family Hauling"));
+
+// 🔑 THE REAL GUARD, measured rather than reasoned about: does the slack ever conflate two
+// givers that actually exist? Across all 65 in the dataset it produces exactly one pair,
+// and that pair is the SAME giver spelled with different capitalisation in our own data
+// ("Citizens for Prosperity" / "Citizens For Prosperity") — a duplicate, not a collision.
+// A tightened threshold that broke the live rows would have passed a hand-written test;
+// only this one says whether the tolerance is actually safe.
+const allGivers = [...new Set(Object.values(ds.missions).map((m) => m.giver).filter(Boolean))];
+const conflated: string[] = [];
+for (let i = 0; i < allGivers.length; i++) {
+  for (let j = i + 1; j < allGivers.length; j++) {
+    if (sameName(allGivers[i], allGivers[j])) conflated.push(`${allGivers[i]} == ${allGivers[j]}`);
+  }
+}
+const realCollisions = conflated.filter((c) => {
+  const [a, b] = c.split(" == ");
+  return a.toLowerCase() !== b.toLowerCase();
+});
+check(
+  "the tolerance conflates no two genuinely different givers",
+  realCollisions.length === 0,
+  realCollisions.join(" | ") || `${allGivers.length} givers, ${conflated.length} case-only dupes`,
+);
 
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

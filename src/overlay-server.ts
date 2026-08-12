@@ -853,6 +853,8 @@ const mining = new MiningTracker({ dataDir, stateDir: userDir });
 // hottest path and a parallel capture would double its cost for a feature most players
 // will never turn on.
 let payoutScanner: PayoutScanner | null = null;
+let lastPanelLines: string[] = [];
+let lastFrame = "";
 let payoutMatcher: ContractMatcher | null = null;
 let payoutMatcherFor = "";
 
@@ -1922,6 +1924,21 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
               text: { x: onScreen.x, y: onScreen.y, w: onScreen.w, h: onScreen.h } };
           })()
         : { kind: "none" };
+    } else if (body.contractCrop === true && Array.isArray(body.lines)) {
+      // RapidOCR re-read of the calibrated offers panel. The crop IS the panel, so every
+      // line is in-region by construction and the parser gets the crop's own bounds.
+      const ocr: OcrResult = { w: Number(body.w) || 0, h: Number(body.h) || 0, lines: body.lines };
+      if (config.payoutScan) {
+        try {
+          const sc = ensurePayoutScanner();
+          if (sc) sc.ingest(parseContractList(ocr, { x: 0, y: 0, w: ocr.w, h: ocr.h }), currentSystem());
+        } catch (e) {
+          console.log(`[payout] scan error: ${(e as Error).message}`);
+        }
+      }
+      lastPanelLines = ocr.lines.map((l) => `${Math.round(l.x)},${Math.round(l.y)} ${Math.round(l.w)}x${Math.round(l.h)} ${l.text}`);
+      lastFrame = `panel ${ocr.w}x${ocr.h} (RapidOCR)`;
+      result = { kind: "none" };
     } else if (Array.isArray(body.lines)) {
       // Pre-computed OCR from the main process (RapidOCR reads the fabricator name off a right-
       // panel crop). Classify directly — skip the WinRT OCR entirely for this call.
@@ -1932,22 +1949,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       const ocr = await ocrImage(body.path);
       result = classifyScreen(ocr, screenCatalog, { scanRegion: config.scanRegion });
       scanHud = hasScanHud(ocr);
-      // Piggyback: the same frame, already OCR'd, read as a contract board. Requires a
-      // calibrated panel — without one the parser cannot tell the title column from the
-      // amount column, and it must not guess (that produced rows with no price at all).
-      if (config.payoutScan && config.contractRegion) {
-        try {
-          const sc = ensurePayoutScanner();
-          if (sc) {
-            const r = config.contractRegion;
-            const rect = { x: r.x * ocr.w, y: r.y * ocr.h, w: r.w * ocr.w, h: r.h * ocr.h };
-            sc.ingest(parseContractList(ocr, rect), currentSystem());
-          }
-        } catch (e) {
-          // Never let a scanning bug break the fabricator/mission read this route exists for.
-          console.log(`[payout] scan error: ${(e as Error).message}`);
-        }
-      }
+      // 🔑 Contract parsing does NOT happen on this branch. This is Windows OCR, which
+      // mangles the panel's ~12px giver line badly enough to lose otherwise-perfect rows
+      // ("UNG FAMILY HAULING" for Ling Family Hauling, "ROUGH B READY" for Rough & Ready,
+      // and a "1M" payout dropped entirely). capture.cjs re-reads the calibrated panel with
+      // RapidOCR and posts it back as `contractCrop`, handled above.
     }
     // Routing applies to BOTH sources. Mining reads feed its tracker (same process); the
     // mission/fabricator reads are routed by capture.cjs off the returned result.
@@ -2175,6 +2181,8 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       patch: tracker.view().patch ?? null,
       system: currentSystem(),
       tally: sc ? sc.tally : null,
+      frame: lastFrame,
+      panelLines: lastPanelLines,
     }));
     return;
   }

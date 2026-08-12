@@ -488,6 +488,7 @@ function startFabCapture({ port, configDir, onStatus, devTools = false }) {
   let tmpShotIdx = 0;
   const tmpPanel = path.join(os.tmpdir(), "sc-fab-panel.png"); // upper-right crop fed to RapidOCR
   const tmpMiningCrop = path.join(os.tmpdir(), "sc-mining-crop.png"); // scan-region crop fed to RapidOCR
+  const tmpContractCrop = path.join(os.tmpdir(), "sc-contract-crop.png"); // offers-panel crop fed to RapidOCR
   let busy = false;
   let busyAt = 0;             // when the current tick set busy (watchdog against a wedged loop)
   const TICK_WATCHDOG_MS = 15000; // if a tick has "held" busy this long, it hung — force re-arm
@@ -696,6 +697,61 @@ function startFabCapture({ port, configDir, onStatus, devTools = false }) {
       } else {
         stage.skippedFullFrame = true;
       }
+      // ── Contract board: RapidOCR the offers panel ────────────────────────
+      // 🔴 WINDOWS OCR IS NOT GOOD ENOUGH FOR THIS PANEL (Sub, 2026-08-11: "Windows OCR is
+      // boo-boo"). The first live run proved it on rows that were otherwise perfect: it
+      // returned "UNG FAMILY HAULING" for Ling Family Hauling, "ROUGH B READY" for
+      // Rough & Ready, "59m SSS" for a 59m 55s timer, and silently dropped a "1M" payout
+      // glyph altogether. The giver line is only ~12px tall, which is exactly where that
+      // engine falls apart — the same finding the mining scanner already documents (0%
+      // correct signatures on Windows OCR, every one right on the RapidOCR crop).
+      //
+      // So the board gets the dual-engine treatment the fabricator already uses: crop to
+      // the calibrated panel, magnify, and re-read with PP-OCR. 2x, not 4x — RapidOCR's
+      // cost scales with AREA, and the mining work measured a 4x crop at 6MP costing
+      // ~2.9s a tick, which is more than the whole budget for a background scan.
+      if (payout && cfg.contractRegion) {
+        try {
+          const cr = cfg.contractRegion;
+          const size = shot.getSize();
+          const region = {
+            x: Math.round(cr.x * size.width),
+            y: Math.round(cr.y * size.height),
+            width: Math.round(cr.w * size.width),
+            height: Math.round(cr.h * size.height),
+          };
+          if (region.width > 40 && region.height > 40) {
+            const CONTRACT_OCR_SCALE = 2;
+            const panelCrop = shot.crop(region);
+            const bigPanel = panelCrop.resize({
+              width: region.width * CONTRACT_OCR_SCALE,
+              height: region.height * CONTRACT_OCR_SCALE,
+              quality: "best",
+            });
+            fs.writeFileSync(tmpContractCrop, bigPanel.toPNG());
+            const t5 = Date.now();
+            // Back to the CROP's own pixel space before anything downstream sees them —
+            // the sidecar treats the crop as the whole panel, so no frame offset applies.
+            const lines = (await ocrRapidLines(tmpContractCrop)).map((l) => ({
+              text: l.text,
+              x: l.x / CONTRACT_OCR_SCALE, y: l.y / CONTRACT_OCR_SCALE,
+              w: l.w / CONTRACT_OCR_SCALE, h: l.h / CONTRACT_OCR_SCALE,
+            }));
+            stage.contractOcr = Date.now() - t5;
+            await fetch(`http://localhost:${port}/api/screen-read`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ lines, w: region.width, h: region.height, contractCrop: true }),
+              signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            });
+          }
+        } catch (e) {
+          // Its OWN try, like the glance: a scanning failure must never take down the
+          // fabricator/mission read this tick also serves.
+          stage.contractError = String((e && e.message) || e).slice(0, 200);
+        }
+      }
+
       let renderSrc = shot; // where the item render is cropped FROM (full frame, or the panel below)
       // Pass 2 — dual-engine: once pass 1 says we're at a kiosk, re-read the item NAME with RapidOCR
       // on the upper-right crop. It's far better at the stylized name tokens Windows OCR mangles

@@ -42,6 +42,11 @@ export interface ScanTally {
   queued: number;
   flushed: number;
   lastFlushError: string | null;
+  /** 🔑 The last few rows exactly as parsed, served over HTTP. Added the moment the first
+   *  live run reported "6 rows seen, 0 with a price": the tally says WHAT happened and is
+   *  useless for WHY, sidecar.log is not readable from every environment that needs to
+   *  debug this, and a diagnostic nobody can retrieve is the same as no diagnostic. */
+  lastRows: { category: string | null; title: string; giver: string | null; amount: number | null; kind: string | null }[];
 }
 
 const MAX_UNKNOWN = 200;
@@ -51,7 +56,7 @@ const MAX_BATCH = 200;
 export class PayoutScanner {
   readonly tally: ScanTally = {
     seen: 0, recorded: 0, duplicate: 0, ambiguous: 0, unknown: 0,
-    feeOnly: 0, noPrice: 0, unknownTitles: [], queued: 0, flushed: 0, lastFlushError: null,
+    feeOnly: 0, noPrice: 0, unknownTitles: [], queued: 0, flushed: 0, lastFlushError: null, lastRows: [],
   };
   /** contractKey -> the prices already recorded for it this session. */
   private seenPrices = new Map<string, Set<number>>();
@@ -66,6 +71,11 @@ export class PayoutScanner {
   /** Feed one capture's rows. Returns the observations newly queued. */
   ingest(rows: ContractRow[], system: string | null): PayoutObservation[] {
     const fresh: PayoutObservation[] = [];
+    if (rows.length) {
+      this.tally.lastRows = rows.slice(-8).map((r) => ({
+        category: r.category, title: r.title, giver: r.giver, amount: r.amount, kind: r.kind,
+      }));
+    }
     for (const row of rows) {
       this.tally.seen++;
 

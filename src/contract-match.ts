@@ -60,38 +60,77 @@ export function titlePattern(datasetTitle: string): RegExp | null {
 /** Loose equality for names the OCR may have mangled — "ROUGH & READY" comes back as
  *  "ROUGH e READY", so the ampersand and any stray single letter around it are dropped
  *  from both sides before comparing. */
+function squash(s: string): string {
+  return normalizeTitle(s)
+    .replace(/\b[A-Z]\b/g, "")
+    .replace(/\s+/g, "");
+}
+
+/** Levenshtein with an early bail. Only ever called on short names. */
+function editDistance(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** Loose equality for names the OCR may have mangled.
+ *
+ *  🔴 EXACT COMPARISON IS NOT ENOUGH, AND THE FIRST LIVE RUN PROVED IT. Reading Sub's real
+ *  board returned "UNG FAMILY HAULING" for Ling Family Hauling (LI read as U) and
+ *  "ROUGH B READY" for Rough & Ready. Both rows had a perfect title AND a perfect price
+ *  and were thrown away over one character, because candidates were bucketed by an exact
+ *  giver key — and a hash lookup has no way to be nearly right. The giver is the SECOND
+ *  key here; it only has to be close enough to rule the others out. */
 export function sameName(a: string, b: string): boolean {
-  const squash = (s: string) =>
-    normalizeTitle(s)
-      .replace(/\b[A-Z]\b/g, "")
-      .replace(/\s+/g, "");
-  return squash(a) === squash(b);
+  const x = squash(a);
+  const y = squash(b);
+  if (x === y) return true;
+  if (!x || !y) return false;
+  // Up to two characters on a long name, none on a short one — on something the length of
+  // "Wikelo" a two-character slip is a different word, not a misread.
+  const cap = Math.min(2, Math.floor(Math.max(x.length, y.length) / 6));
+  return cap > 0 && editDistance(x, y, cap) <= cap;
 }
 
 export class ContractMatcher {
-  /** Bucketed by giver so a board row only ever tests the patterns that could apply. */
-  private byGiver = new Map<string, { re: RegExp; c: MatchCandidate }[]>();
+  /** 🔑 Indexed by TITLE, not bucketed by giver. The giver WAS the bucket key until the
+   *  first live run discarded two perfectly-read rows over one mis-OCR'd character in the
+   *  name. The title is the strongest signal; the giver is now a tolerant filter applied
+   *  after it. Testing every pattern per row is a few thousand short regex executions —
+   *  immaterial next to the OCR that produced the row. */
+  private all: { re: RegExp; c: MatchCandidate }[] = [];
 
   constructor(candidates: MatchCandidate[]) {
     for (const c of candidates) {
       const re = titlePattern(c.title);
-      if (!re) continue;
-      const key = normalizeTitle(c.giver).replace(/\b[A-Z]\b/g, "").replace(/\s+/g, "");
-      const list = this.byGiver.get(key);
-      if (list) list.push({ re, c });
-      else this.byGiver.set(key, [{ re, c }]);
+      if (re) this.all.push({ re, c });
     }
   }
 
   /** @param system the star system the player is currently in, when known. */
   match(row: ContractRow, system?: string | null): MatchOutcome {
-    if (!row.giver) return { status: "unknown" };
-    const key = normalizeTitle(row.giver).replace(/\b[A-Z]\b/g, "").replace(/\s+/g, "");
-    const bucket = this.byGiver.get(key);
-    if (!bucket?.length) return { status: "unknown" };
-
     const title = normalizeTitle(row.title);
-    let hits = bucket.filter((b) => b.re.test(title));
+    if (!title) return { status: "unknown" };
+    let hits = this.all.filter((b) => b.re.test(title));
+    if (!hits.length) return { status: "unknown" };
+
+    // The giver NARROWS; it does not gate. If nothing survives the filter the title
+    // matches stand on their own — better an ambiguous row than a good read discarded
+    // over a mangled name.
+    if (row.giver && hits.length > 1) {
+      const byGiver = hits.filter((b) => sameName(b.c.giver, row.giver!));
+      if (byGiver.length) hits = byGiver;
+    }
     // The category is a filter, not a requirement: it is only applied when it actually
     // narrows things, so a category header the OCR mangled can't wipe out a good match.
     if (row.category && hits.length > 1) {
