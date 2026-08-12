@@ -1481,13 +1481,18 @@
   .mi-seg i.on { background: var(--cyan); box-shadow: 0 0 5px rgba(var(--accent-rgb), 0.5); }
   .mi-meter .num { font-family: var(--mono); font-size: 10.5px; color: var(--cyan-text);
     font-variant-numeric: tabular-nums; }
-  /* The "why should you trust this" affordance. An INLINE SVG, never an emoji: this page carries
-     no bundled emoji face, so a glyph here would be at the mercy of the OS font — the same thing
-     that rendered o7 as a box. Sized in em so it rides the text it annotates. */
-  .mi-eye { display: inline-flex; align-items: center; margin-left: 1px; color: var(--cyan-dim);
-    cursor: help; vertical-align: -1px; }
-  .mi-eye:hover { color: var(--cyan-bright); }
-  .mi-eye svg { width: 1.05em; height: 1.05em; }
+  /* The "there is more to know here" affordance — the conventional circled lowercase i, which is
+     what people already reach for (Sub, 2026-08-12; an eye glyph read as something else entirely).
+     Deliberately a LETTER in a CSS circle, not an icon font or an emoji: "i" is plain ASCII, and
+     this page bundles no emoji face, so anything fancier would be at the mercy of the OS font —
+     the same thing that rendered o7 as a box. Sized in em so it rides the text it annotates. */
+  .mi-info { display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: 1.15em; height: 1.15em; margin-left: 3px; border-radius: 50%;
+    border: 1px solid rgba(var(--accent-rgb), 0.45); color: var(--cyan-dim);
+    font-family: var(--sans); font-size: 0.82em; font-weight: 700; font-style: italic;
+    line-height: 1; cursor: help; vertical-align: 1px; user-select: none; }
+  .mi-info:hover, .mi-info:focus { color: var(--cyan-bright); border-color: var(--cyan-bright);
+    background: rgba(var(--accent-rgb), 0.16); outline: none; }
   /* Through to the mission's page on the site, where the full write-up lives. */
   .mi-link { display: inline-block; margin-top: 8px; font-family: var(--sans); font-size: 10px;
     font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan);
@@ -2294,7 +2299,7 @@
       ? "Star Citizen never reports your reputation in any form the app can read, so standing is worked out from the missions in your own logs. None have been counted for " + rb.faction + " yet — run Verify from logs to read your history."
       : "Star Citizen never reports your exact reputation in any form the app can read, so this is worked out from the missions in your own logs since the 4.8 wipe. It is a lower bound: anything earned before you installed the app, or since deleted, cannot be counted.";
     return '<div class="mi-row"><span class="mi-k">Standing</span><span class="mi-v">' + standing +
-      (rb.noData ? ' <span class="mi-hint">no data</span>' : "") + eye(why) + '</span></div>' +
+      (rb.noData ? ' <span class="mi-hint">no data</span>' : "") + info(why) + '</span></div>' +
       '<div class="rb' + (empty ? " floor" : "") + '"><div class="rb-track"><div class="rb-fill" style="width:' +
       pct.toFixed(1) + '%"></div></div><div class="rb-cap">' + cap + "</div></div>";
   }
@@ -2309,6 +2314,9 @@
   // presented confidently is worse than no number, which is the same rule the site follows.
   const money = (n) => Number(n || 0).toLocaleString();
   const reports = (n) => n + (n === 1 ? " report" : " reports");
+  // "A, B and C" — this goes inside a sentence in a tooltip, where a bare "A · B · C" reads as a
+  // fragment rather than as prose.
+  const listWords = (a) => (a.length <= 1 ? (a[0] || "") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1]);
 
   // ── Where to pick it up: ONE useful name, or nothing ──────────────────────────────────────
   // Measured over the real dataset (4,075 contracts, 1,659 with a list, 51 distinct names):
@@ -2336,7 +2344,10 @@
     if (!list.length || list.length > PICKUP_MAX) return null;
     // Prefer a station: "Checkmate" is somewhere you dock, "Pyro I" is a whole planet.
     const name = list.find(isStation) || list[0];
-    return { name, more: list.length - 1, all: list.join(" · ") };
+    // The OTHER places, in order, for the info tooltip. "+3" on its own means nothing to anyone
+    // who did not write it (Sub, 2026-08-12) — the count is only useful next to the names.
+    const rest = list.filter((p) => p !== name);
+    return { name, more: rest.length, all: list.join(" · "), rest };
   }
   // The headline number, given size instead of a label. A fixed payout from the game files is
   // certain and needs no qualifier; a crowdsourced one always states what it rests on.
@@ -2355,14 +2366,11 @@
       + '<span class="amt">' + money(p.median) + '</span><span class="cur">' + escapeHtml(cur) + "</span>"
       + '<span class="mi-hint">' + escapeHtml(note + (spread ? " · " + spread : "")) + "</span></div>";
   }
-  // 🔑 An inline SVG, never an emoji glyph. This page bundles no emoji face, so a character here
-  // would render at the mercy of the OS font — the same thing that turned o7 into a box.
-  const EYE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
-    + ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-    + '<path d="M1.6 12S5.7 4.8 12 4.8 22.4 12 22.4 12 18.3 19.2 12 19.2 1.6 12 1.6 12z"/>'
-    + '<circle cx="12" cy="12" r="3.1"/></svg>';
-  const eye = (title) => '<span class="mi-eye" tabindex="0" role="img" aria-label="'
-    + escapeAttr(title) + '" title="' + escapeAttr(title) + '">' + EYE_SVG + "</span>";
+  // The conventional circled "i". A plain ASCII letter styled by CSS — this page bundles no emoji
+  // face, so a ⓘ character would render at the mercy of the OS font, the same trap that turned o7
+  // into a box. `title` carries the explanation; it is what the rest of this page already uses.
+  const info = (title) => '<span class="mi-info" tabindex="0" role="img" aria-label="'
+    + escapeAttr(title) + '" title="' + escapeAttr(title) + '">i</span>';
   // A 1–5 meter matching the site's mission pages. The rating is a MEAN, so the bar rounds while
   // the number beside it keeps the precision — a bar alone would turn 2.4 and 2.6 into the same
   // picture, and the whole point of the number is telling those apart.
@@ -2374,7 +2382,7 @@
     return '<div class="mi-meter"><span class="k">Difficulty</span>'
       + '<span class="mi-seg" role="img" aria-label="' + f.difficulty + ' out of 5">' + segs + "</span>"
       + '<span class="num">' + f.difficulty + "</span>"
-      + eye("Averaged from " + reports(f.difficultyAnswers) + " by players who ran this contract. 1 is easy, 5 is hard.")
+      + info("Averaged from " + reports(f.difficultyAnswers) + " by players who ran this contract. 1 is easy, 5 is hard.")
       + "</div>";
   }
   function chip(text, cls, title) {
@@ -2452,8 +2460,14 @@
       // naming places would send you somewhere that cannot drop what this panel lists —
       // view() returns an empty list while ambiguous for exactly that reason.
       if (pickup) {
+        // The count keeps the "there are others" signal compact; the info icon is what makes it
+        // mean something, by naming them.
         gRow("Pick up", escapeHtml(pickup.name)
-          + (pickup.more ? ' <span class="mi-more" title="' + escapeAttr(pickup.all) + '">+' + pickup.more + "</span>" : ""));
+          + (pickup.more
+            ? ' <span class="mi-more">+' + pickup.more + "</span>"
+              + info("This contract is also offered at " + listWords(pickup.rest)
+                + ". It is the same contract wherever you take it from.")
+            : ""));
       }
       const ship = flownShip(v);
       if (ship) gRow("Usually flown", escapeHtml(ship));

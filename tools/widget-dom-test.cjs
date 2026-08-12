@@ -2014,11 +2014,15 @@ const MISSIONINFO = `(async () => {
   // 🔑 The bar rounds, so the number has to survive alongside it — otherwise 2.4 and 2.6 become
   // the same picture and the precision is gone.
   ok("...while the exact mean is still printed", m3.indexOf("2.7") >= 0);
-  ok("the eye carries the report count", m3.indexOf("9 reports") >= 0);
+  ok("the info icon carries the report count", m3.indexOf("9 reports") >= 0);
   ok("a 1 does not fill zero segments", (met({ difficulty: 1, difficultyAnswers: 1 }).match(/class="on"/g) || []).length === 1);
   ok("a 5 fills them all", (met({ difficulty: 5, difficultyAnswers: 4 }).match(/class="on"/g) || []).length === 5);
-  // The eye must be drawn, never typed: this page bundles no emoji face.
-  ok("the eye is an inline SVG, not an emoji glyph", m3.indexOf("<svg") >= 0 && !/[\u{1F300}-\u{1FAFF}]/u.test(m3));
+  // 🔑 The conventional circled "i", and it must be a plain ASCII LETTER in a CSS circle — this
+  // page bundles no emoji face, so a real ⓘ character would be at the mercy of the OS font. That
+  // is the o7-as-a-box trap. An eye glyph was tried first and read as something else entirely.
+  ok("the affordance is an info icon", m3.indexOf("mi-info") >= 0, m3);
+  ok("...drawn from an ASCII letter, not a glyph the OS might not have",
+     m3.indexOf(">i<") >= 0 && !/[\u{1F300}-\u{1FAFF}ⓘℹ]/u.test(m3));
   const solo = facts({ samples: 2, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 2, combatTop: null, ships: [] });
   ok("a unanimous solo rate reads as a verdict, not a statistic", solo.indexOf("Soloable") >= 0 && solo.indexOf("100%") < 0, solo);
   const split = facts({ samples: 5, difficulty: null, difficultyAnswers: 0, soloRate: 0.6, soloAnswers: 5, combatTop: null, ships: [] });
@@ -2083,8 +2087,18 @@ const MISSIONINFO = `(async () => {
   ok("standing sits in its own group behind a rule", full.indexOf("mi-standing") >= 0);
   ok("the facts that explain themselves are chips, not rows", full.indexOf("mi-chips") >= 0);
   ok("the reputation value does not repeat its own label", strip(full).indexOf("+50 rep") < 0, strip(full));
-  ok("standing explains itself through the eye, not the word est.", strip(full).indexOf("est.") < 0);
-  ok("...and the eye says WHY it is an estimate", full.indexOf("never reports your reputation") >= 0);
+  ok("standing explains itself through the info icon, not the word est.", strip(full).indexOf("est.") < 0);
+  ok("...and it says WHY the number is an estimate", full.indexOf("never reports your reputation") >= 0);
+
+  // 🔑 "+3" means nothing on its own — the count is only useful next to the names (Sub).
+  const puFull = missionInfoHtml(Object.assign({}, V, {
+    whereToGet: ["Rat's Nest", "Starlight Service Station", "Orbituary", "Bloom"] }), true);
+  ok("a truncated pickup list carries an info icon", puFull.indexOf("mi-more") >= 0 && puFull.indexOf("mi-info") >= 0);
+  ok("...naming the places the count stands for",
+     puFull.indexOf("Starlight Service Station, Orbituary and Bloom") >= 0, puFull.slice(puFull.indexOf("Pick up"), puFull.indexOf("Pick up") + 320));
+  // One place needs no explanation, so it gets no icon to explain.
+  const puOne = missionInfoHtml(Object.assign({}, V, { whereToGet: ["Rat's Nest"] }), true);
+  ok("a single place gets no count and no icon", puOne.indexOf("mi-more") < 0);
 
   // ── the link out to the site ─────────────────────────────────────────────
   ok("a resolved contract links to its page", full.indexOf("subliminal.gg/missions/HH_Test_Contract") >= 0);
