@@ -69,25 +69,55 @@ export interface PanelRect { x: number; y: number; w: number; h: number }
  *  isn't a money value, which is most of the HUD. */
 export function parseAmount(raw: string): { amount: number; kind: AmountKind; rounded: boolean } | null {
   const t = raw.trim();
+
+  // 🔴 THE EXPIRY TIMER LIVES IN THE SAME COLUMN AS THE MONEY, and the two are one
+  // character apart: "1M" is a one-million payout, "5m 17s" is five minutes. Getting
+  // this wrong turns a 24-minute countdown into a 24,000,000 aUEC contract, which would
+  // poison the median for that mission permanently.
+  //
+  // So money is matched STRICTLY and time is rejected outright rather than being relied
+  // on to simply not match. Note the case: `M` is millions, lowercase `m` is minutes and
+  // is never money. OCR mangles these badly at 13px — real reads include "59m SSS" for
+  // "59m 55s" and "Sm 17s" for "5m 17s" — so anything containing a space or an s/S is
+  // treated as a duration whatever else it looks like.
+  if (/[sS]/.test(t) && !/^fee/i.test(t)) return null;
+  if (/\s/.test(t) && !/^fee/i.test(t)) return null;
+  if (/\dm\b/.test(t)) return null;
+
   // A fee is labelled outright, and the label is the ONLY thing distinguishing a cost
   // from a reward — the number itself looks identical.
-  const fee = /^fee\s*[:.]?\s*([\d,.]+)\s*([km])?$/i.exec(t);
-  const plain = /^([\d,.]+)\s*([km])?$/i.exec(t);
+  const fee = /^fee\s*[:.]?\s*([\d,.]+)\s*([kKM])?$/i.exec(t);
+  const plain = /^([\d,.]+)\s*([kKM])?$/.exec(t);
   const m = fee ?? plain;
   if (!m) return null;
   const digits = m[1].replace(/,/g, "");
   if (!/^\d+(\.\d+)?$/.test(digits)) return null;
   let n = Number(digits);
   if (!Number.isFinite(n)) return null;
-  const suffix = (m[2] ?? "").toLowerCase();
-  const rounded = suffix === "k" || suffix === "m";
-  if (suffix === "k") n *= 1_000;
-  if (suffix === "m") n *= 1_000_000;
+  const suffix = m[2] ?? "";
+  const rounded = suffix !== "";
+  if (suffix === "k" || suffix === "K") n *= 1_000;
+  if (suffix === "M") n *= 1_000_000;
   n = Math.round(n);
-  // A bare 1- or 2-digit number is a row count or a rank badge, not money. The smallest
-  // real fee in the datacore is 250.
+  // A bare 1- or 2-digit number is a category's row count or a rank badge, not money.
+  // The smallest real fee in the datacore is 250.
   if (n < 100) return null;
   return { amount: n, kind: fee ? "fee" : "payout", rounded };
+}
+
+/** Category headers come back with the row's ICON glyph OCR'd as a stray character —
+ *  real reads include "e SERVICE BEACONS", "5 HAND MINING", "15 SALVAGE" and
+ *  "b, MERCENARY". The icon also inflates the line's height (up to 38px against a
+ *  normal 21), which is harmless here but is why the height bands have headroom. */
+export function cleanCategory(raw: string): string | null {
+  const stripped = raw
+    .trim()
+    .replace(/^[^A-Za-z]*[A-Za-z]?[^A-Za-z]+/, "") // leading icon-glyph noise
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+  // "e," and "u" are pure icon noise on their own line; a real category is a word.
+  return /[A-Z]{3}/.test(stripped) ? stripped : null;
 }
 
 /** Uppercase, collapse whitespace, drop the punctuation the game and our dataset disagree
@@ -156,12 +186,17 @@ export function parseContractList(ocr: OcrResult, region?: PanelRect): ContractR
     // The amount belongs to whichever row's vertical span contains its centre. Matching
     // by span rather than by nearest-line is what keeps a two-line title from stealing
     // the neighbour's number.
-    const amountLine = sorted.find((l) => {
-      if (l.x < amountX) return false;
+    // 🔑 The first right-column line in the band is NOT necessarily the money: a row can
+    // carry an amount AND an expiry timer stacked under it, and some rows carry ONLY a
+    // timer. So take the first that actually parses as money and let the rest fall away.
+    let parsed: ReturnType<typeof parseAmount> = null;
+    for (const l of sorted) {
+      if (l.x <= amountX) continue;
       const c = l.y + l.h / 2;
-      return c >= top - l.h && c <= yEnd + l.h;
-    });
-    const parsed = amountLine ? parseAmount(amountLine.text) : null;
+      if (c < top - l.h || c > yEnd + l.h) continue;
+      const p = parseAmount(l.text);
+      if (p) { parsed = p; break; }
+    }
     rows.push({
       category,
       title: titles.map((t) => t.text.trim()).join(" ").replace(/\s+/g, " "),
@@ -180,9 +215,14 @@ export function parseContractList(ocr: OcrResult, region?: PanelRect): ContractR
     if (!text) continue;
 
     if (l.h > titleMaxH) {
-      // Category header — closes whatever row was open and renames the group.
-      flush();
-      category = text.toUpperCase();
+      // Category header — closes whatever row was open and renames the group. A line
+      // that cleans to nothing was pure icon noise ("e,", "u") and must not become a
+      // category, or every row after it is filed under a symbol.
+      const name = cleanCategory(text);
+      if (name) {
+        flush();
+        category = name;
+      }
       continue;
     }
     if (l.h <= giverMaxH) {
@@ -194,7 +234,17 @@ export function parseContractList(ocr: OcrResult, region?: PanelRect): ContractR
       continue;
     }
     // Title line. Two lines can belong to one title and the game never uses three, so a
-    // third consecutive title line must be the next contract rather than a continuation.
+    // third consecutive title line must be the next contract.
+    //
+    // 🔑 The GAP decides, not just the count. A row whose giver line the OCR missed
+    // entirely (real case: "VERY HUNGRY" / WIKELO, where WIKELO never came back) has
+    // nothing to close it, and without this the next contract's title would be glued on
+    // as a second line. Wrapped lines sit ~22px apart; the next contract is ~75-100px
+    // down, so 2.2x the line height separates them cleanly.
+    if (pending && pending.titles.length) {
+      const prev = pending.titles[pending.titles.length - 1];
+      if (l.y - prev.y > prev.h * 2.2) flush();
+    }
     if (pending && pending.titles.length >= 2) flush();
     if (!pending) pending = { titles: [], giver: null };
     pending.titles.push(l);

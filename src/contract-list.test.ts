@@ -8,7 +8,7 @@
 //
 //   npx tsx src/contract-list.test.ts
 
-import { parseAmount, parseContractList, normalizeTitle } from "./contract-list.js";
+import { cleanCategory, parseAmount, parseContractList, normalizeTitle } from "./contract-list.js";
 import type { OcrResult } from "./screen-read.js";
 
 let failures = 0;
@@ -64,7 +64,10 @@ const ocr: OcrResult = {
 check("63k -> 63000, rounded", JSON.stringify(parseAmount("63k")) === JSON.stringify({ amount: 63000, kind: "payout", rounded: true }));
 check("Fee:13500 is a FEE, exact", JSON.stringify(parseAmount("Fee:13500")) === JSON.stringify({ amount: 13500, kind: "fee", rounded: false }));
 check("1.5k -> 1500", parseAmount("1.5k")?.amount === 1500);
-check("2m -> 2000000", parseAmount("2m")?.amount === 2_000_000);
+// Written before the 20:05 captures taught me that lowercase m is MINUTES. Kept as a
+// negative assertion rather than deleted — this exact line is what the bug looked like.
+check("lowercase 2m is NOT 2 million", parseAmount("2m") === null);
+check("uppercase 2M IS 2 million", parseAmount("2M")?.amount === 2_000_000);
 check("plain 13500 is exact", JSON.stringify(parseAmount("13500")) === JSON.stringify({ amount: 13500, kind: "payout", rounded: false }));
 check("comma grouping", parseAmount("134,500")?.amount === 134500);
 // The row-count badges beside a category ("24") sit in the same column as the amounts.
@@ -119,5 +122,104 @@ check("collapsed categories produce no rows", !rows.some((r) => /^(COLLECTION|DE
 check("every row has a title", rows.every((r) => r.title.length > 3));
 check("every row got an amount", rows.every((r) => r.amount != null), rows.map((r) => `${r.title.slice(0, 18)}=${r.amount}`).join(", "));
 
-console.log(failures ? `\n${failures} FAILED` : `\nall ${25} checks passed`);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Three more real captures (2026-08-11 20:05-20:06), taken specifically to break
+// the parser. They did. Everything below is a case the first screenshot could not
+// have shown, and every one of them is verbatim ocr-probe output.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const mk = (rows: [number, number, number, number, string][]): OcrResult => ({
+  w: 3440,
+  h: 1440,
+  lines: rows.map(([x, y, w, h, text]) => ({ x, y, w, h, text })),
+});
+
+// ── cm1: COLLECTION expanded. An EXPIRY TIMER under the payout, a row with a timer
+//    and NO payout at all, and category icons OCR'd as stray characters. ──────────
+const cm1 = mk([
+  [720, 287, 169, 22, "COLLECTION"],
+  [708, 377, 329, 16, "INTERESTED IN BUILDING A BETTER"],
+  [709, 399, 85, 16, "FUTURE?"],
+  [710, 422, 172, 12, "RAYARI INCORPORATED"],
+  [712, 497, 134, 17, "VERY HUNGRY"], // its giver line never came back from OCR
+  [735, 612, 205, 21, "INVESTIGATION"],
+  [732, 700, 131, 20, "DELIVERY"],
+  [727, 788, 169, 21, "MERCENARY"],
+  [720, 876, 228, 21, "BOUNTY HUNTER"],
+  [710, 966, 119, 21, "HAULING"],
+  [649, 1052, 312, 29, "e SERVICE BEACONS"],
+  [623, 1149, 246, 34, "5 HAND MINING"],
+  [674, 782, 27, 34, "e,"], // pure icon noise on its own line
+  [1138, 289, 12, 18, "2"],
+  [1163, 383, 48, 17, "103k"],
+  [1134, 412, 78, 13, "24m 52s"],
+  [1137, 507, 78, 13, "59m SSS"], // OCR mangled "55s"
+  [1145, 700, 11, 17, "2"],
+  [1129, 789, 25, 16, "25"],
+]);
+const r1 = parseContractList(cm1, { x: 600, y: 250, w: 640, h: 950 });
+const future = r1.find((r) => r.title.includes("BUILDING A BETTER"));
+check("timer row: payout still read", future?.amount === 103000, String(future?.amount));
+check("timer row: kind is payout", future?.kind === "payout", String(future?.kind));
+check("timer row: giver read", future?.giver === "RAYARI INCORPORATED", String(future?.giver));
+const hungry = r1.find((r) => r.title.includes("VERY HUNGRY"));
+check("timer-only row exists", !!hungry, r1.map((r) => r.title).join(" | "));
+// 🔴 The one that matters: 59m must NOT become 59,000,000 aUEC.
+check("timer-only row has NO amount", hungry?.amount == null, String(hungry?.amount));
+check("missing giver doesn't glue the next title on", hungry?.title === "VERY HUNGRY", hungry?.title);
+check("icon noise never becomes a category", !r1.some((r) => r.category === "E," || r.category === "E"));
+check("icon prefix stripped from category", !r1.some((r) => (r.category ?? "").startsWith("E ")));
+check("cleanCategory strips a digit icon", cleanCategory("5 HAND MINING") === "HAND MINING", String(cleanCategory("5 HAND MINING")));
+check("cleanCategory strips a two-digit icon", cleanCategory("15 SALVAGE") === "SALVAGE", String(cleanCategory("15 SALVAGE")));
+check("cleanCategory strips 'b,'", cleanCategory("b, MERCENARY") === "MERCENARY", String(cleanCategory("b, MERCENARY")));
+check("cleanCategory rejects pure noise", cleanCategory("e,") === null && cleanCategory("u") === null);
+check("cleanCategory leaves a clean name alone", cleanCategory("BOUNTY HUNTER") === "BOUNTY HUNTER");
+
+// ── cm2: INVESTIGATION expanded. "1M" is a MILLION-aUEC payout; "Sm 17s" is a timer
+//    OCR'd badly. One character apart, opposite meanings. ─────────────────────────
+const cm2 = mk([
+  [719, 287, 169, 21, "COLLECTION"],
+  [727, 377, 207, 21, "INVESTIGATION"],
+  [710, 463, 287, 16, "JORRIT DOSSIER: LAB SAMPLE"],
+  [711, 488, 137, 13, "HOCKROW AGENCY"],
+  [734, 579, 130, 20, "DELIVERY"],
+  [1148, 489, 66, 14, "Sm 17s"],
+  [1146, 580, 11, 16, "2"],
+]);
+const r2 = parseContractList(cm2, { x: 600, y: 250, w: 640, h: 950 });
+const jorrit = r2.find((r) => r.title.includes("JORRIT"));
+check("Jorrit row parsed", !!jorrit, r2.map((r) => r.title).join(" | "));
+// OCR dropped the "1M" glyph entirely on this capture — a real and tolerable outcome.
+check("garbled timer is never money", jorrit?.amount == null, String(jorrit?.amount));
+check("colon in the title survives", jorrit?.title === "JORRIT DOSSIER: LAB SAMPLE", jorrit?.title);
+check("1M is a million-aUEC payout", parseAmount("1M")?.amount === 1_000_000, JSON.stringify(parseAmount("1M")));
+check("1M is flagged rounded", parseAmount("1M")?.rounded === true);
+// 🔴 The trap, stated three ways.
+check("lowercase 5m is NOT 5 million", parseAmount("5m") === null);
+check("'5m 17s' is not money", parseAmount("5m 17s") === null);
+check("'24m 52s' is not money", parseAmount("24m 52s") === null);
+check("'59m SSS' is not money", parseAmount("59m SSS") === null);
+check("'Sm 17s' is not money", parseAmount("Sm 17s") === null);
+check("bare '45s' is not money", parseAmount("45s") === null);
+
+// ── cm3: DELIVERY expanded. Small values, and an ampersand OCR'd as a letter. ─────
+const cm3 = mk([
+  [732, 470, 130, 21, "DELIVERY"],
+  [713, 557, 210, 16, "ICC SPECIAL DELIVERY"],
+  [713, 581, 157, 13, "LING FAMILY HAULING"],
+  [712, 655, 231, 17, "GASLIGHT HABS STROLL"],
+  [712, 680, 119, 13, "ROUGH e READY"], // "ROUGH & READY"
+  [1177, 565, 36, 17, "31k"],
+  [1189, 665, 24, 16, "8k"],
+]);
+const r3 = parseContractList(cm3, { x: 600, y: 400, w: 640, h: 500 });
+check("two delivery rows", r3.length === 2, r3.map((r) => `${r.title}=${r.amount}`).join(" | "));
+check("31k on the right row", r3.find((r) => r.title.includes("ICC"))?.amount === 31000);
+check("small 8k parsed", r3.find((r) => r.title.includes("GASLIGHT"))?.amount === 8000);
+check("category applies to both", r3.every((r) => r.category === "DELIVERY"));
+
+console.log(failures ? `
+${failures} FAILED` : `
+all checks passed`);
 process.exit(failures ? 1 : 0);
