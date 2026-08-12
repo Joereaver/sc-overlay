@@ -1976,8 +1976,8 @@ const IDLEPAINT = `(async () => {
 const MISSIONINFO = `(async () => {
   ${PRELUDE}
   const strip = (h) => h.replace(/<[^>]+>/g, " ").replace(/\\s+/g, " ").trim();
-  const pay = (payout) => communityPayRows({ community: { payout } }).map(strip).join(" ");
-  const facts = (f) => communityFactRows({ community: { facts: f } }).map(strip).join(" ");
+  const pay = (payout) => strip(payBlock({ community: { payout } }));
+  const facts = (f) => factChips({ community: { facts: f } }).map(strip).join(" ");
 
   // ── payouts ──────────────────────────────────────────────────────────────
   ok("no observations renders NOTHING, not a zero", pay(null) === "" && pay({ samples: 0 }) === "");
@@ -1996,28 +1996,67 @@ const MISSIONINFO = `(async () => {
 
   // ── crowdsourced facts ───────────────────────────────────────────────────
   ok("no answers renders nothing", facts(null) === "" && facts({ samples: 0 }) === "");
-  const d = facts({ samples: 3, difficulty: 2.7, difficultyAnswers: 3, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
-  ok("difficulty carries its sample count", d.indexOf("2.7") >= 0 && d.indexOf("3 reports") >= 0, d);
+  // 🔑 The count is shown only while the evidence is thin — always printing it is clutter, never
+  // printing it lets one opinion pass for a fact. Both halves are asserted.
+  const thinD = facts({ samples: 1, difficulty: 4, difficultyAnswers: 1, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
+  ok("a difficulty resting on ONE answer says so on the chip", thinD.indexOf("1 report") >= 0, thinD);
+  const d = facts({ samples: 9, difficulty: 2.7, difficultyAnswers: 9, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
+  ok("a well-attested one just states it", d.indexOf("2.7") >= 0 && d.indexOf("report") < 0, d);
   ok("...and a question nobody answered is absent, not blank", d.indexOf("Soloable") < 0, d);
+  const thinSolo = facts({ samples: 1, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 1, combatTop: null, ships: [] });
+  ok("a lone solo report is qualified too", thinSolo.indexOf("1 report") >= 0, thinSolo);
   const solo = facts({ samples: 2, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 2, combatTop: null, ships: [] });
-  ok("a unanimous solo rate reads as a verdict, not a statistic", solo.indexOf("yes") >= 0 && solo.indexOf("100%") < 0, solo);
+  ok("a unanimous solo rate reads as a verdict, not a statistic", solo.indexOf("Soloable") >= 0 && solo.indexOf("100%") < 0, solo);
   const split = facts({ samples: 5, difficulty: null, difficultyAnswers: 0, soloRate: 0.6, soloAnswers: 5, combatTop: null, ships: [] });
   ok("a split one gives the number", split.indexOf("60%") >= 0, split);
+  const grp = facts({ samples: 3, difficulty: null, difficultyAnswers: 0, soloRate: 0, soloAnswers: 3, combatTop: null, ships: [] });
+  ok("nobody soloing it says so plainly", grp.indexOf("Needs a group") >= 0, grp);
   // combatTop is null whenever the site could not find a real majority; a plurality is not a fact.
   const nomaj = facts({ samples: 7, difficulty: null, difficultyAnswers: 0, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
   ok("no majority on combat means no Fighting row", nomaj.indexOf("Fighting") < 0, nomaj || "(empty)");
   const ship = facts({ samples: 1, difficulty: null, difficultyAnswers: 0, soloRate: null, soloAnswers: 0, combatTop: "fps", ships: [{ ship: "Mirai Guardian", count: 1 }] });
-  ok("a majority combat profile is worded, not coded", ship.indexOf("on foot") >= 0, ship);
-  ok("the most-flown ship is reported", ship.indexOf("Mirai Guardian") >= 0, ship);
+  ok("a majority combat profile is worded, not coded", ship.indexOf("On-foot combat") >= 0, ship);
+  ok("the most-flown ship is read off the log", flownShip({ community: { facts: { samples: 1, ships: [{ ship: "Mirai Guardian", count: 1 }] } } }) === "Mirai Guardian");
+  ok("...and no ship seen is an absence, not on-foot", flownShip({ community: { facts: { samples: 1, ships: [] } } }) === null);
 
-  // ── the local dataset fields ─────────────────────────────────────────────
+  // ── where to pick it up ──────────────────────────────────────────────────
+  // Measured over the real dataset: 898 lists name 2-4 places (specific, worth showing) and 761
+  // name 5+ (the big ones are every body in the system, which is the same as saying nothing).
+  const pu = (list) => pickupOf({ whereToGet: list });
+  ok("no list, no row", pu([]) === null && pu(null) === null);
+  const four = pu(["Checkmate", "Patch City", "Monox", "Pyro I"]);
+  ok("a specific list names ONE place", four && four.name === "Checkmate", four && four.name);
+  ok("...and counts the rest rather than listing them", four && four.more === 3, four && four.more);
+  // 🔑 Order does not encode type — 289 real lists interleave — so a station is CHOSEN, not taken
+  // from the front. A station is where you dock; a planet is not somewhere you can fly to and
+  // take a contract.
+  const planetFirst = pu(["Monox", "Pyro I", "Checkmate"]);
+  ok("a station is preferred even when a planet comes first", planetFirst && planetFirst.name === "Checkmate", planetFirst && planetFirst.name);
+  const allPlanets = pu(["Nyx I", "Nyx II", "Nyx III"]);
+  ok("all-planet lists still name one", allPlanets && allPlanets.name === "Nyx I", allPlanets && allPlanets.name);
+  ok("a system-wide list is DROPPED, not truncated",
+     pu(["ArcCorp", "Crusader", "Hurston", "microTech", "Aberdeen", "Arial", "Calliope", "Cellin",
+         "Clio", "Daymar", "Euterpe", "Ita", "Lyria", "Magda", "Wala", "Yela"]) === null);
+  ok("an unknown name is treated as a station", isStation("Some New Outpost") === true);
+  ok("...but a roman-numeral body is not", isStation("Pyro VI") === false);
+
+  // ── the local dataset fields, as chips ───────────────────────────────────
   const info = (v) => strip(missionInfoHtml(Object.assign({ giver: "Headhunters", missionType: "Bounty Hunter", reputationGained: [], reputationLost: [], whereToGet: [] }, v), true));
-  ok("an illegal contract is flagged on the type", info({ illegal: true }).indexOf("ILLEGAL") >= 0);
-  ok("...and a legal one is not", info({ illegal: false }).indexOf("ILLEGAL") < 0);
-  ok("a rank gate is shown", info({ rankRequired: 2 }).indexOf("Rank needed") >= 0);
+  ok("an illegal contract is flagged", info({ illegal: true }).indexOf("Illegal") >= 0);
+  ok("...and a legal one is not", info({ illegal: false }).indexOf("Illegal") < 0);
+  ok("a rank gate is shown", info({ rankRequired: 2 }).indexOf("Rank 2") >= 0);
   // 🔑 null is "the dataset carries no gate", NOT rank 0 — givers use 0 and null side by side.
-  ok("...but an absent gate is not rendered as rank 0", info({ rankRequired: null }).indexOf("Rank needed") < 0);
-  ok("rank 0 IS a real gate and shows", info({ rankRequired: 0 }).indexOf("Rank needed") >= 0);
+  ok("...but an absent gate is not rendered as rank 0", info({ rankRequired: null }).indexOf("Rank 0") < 0);
+  ok("rank 0 IS a real gate and shows", info({ rankRequired: 0 }).indexOf("Rank 0") >= 0);
+
+  // ── layout: standing is its own group, and labels are not repeated ───────
+  const full = missionInfoHtml({ giver: "Headhunters", missionType: "Bounty Hunter", illegal: true, rankRequired: 1,
+    reputationGained: [{ faction: "Headhunters", amount: 50 }], reputationLost: [], whereToGet: ["Checkmate", "Monox"],
+    repBar: { noData: true, faction: "Headhunters", standing: "" } }, true);
+  ok("standing sits in its own group behind a rule", full.indexOf("mi-standing") >= 0);
+  ok("the facts that explain themselves are chips, not rows", full.indexOf("mi-chips") >= 0);
+  ok("the labelled ones share one grid", full.indexOf("mi-g") >= 0);
+  ok("the reputation value does not repeat its own label", strip(full).indexOf("+50 rep") < 0, strip(full));
   return out;
 })()`;
 

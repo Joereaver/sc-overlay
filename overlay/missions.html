@@ -1443,17 +1443,38 @@
   .mi-head.static:hover { background: rgba(var(--accent-rgb), 0.04); border-color: var(--divider); color: var(--cyan-dim); }
   .mi-head .car { color: var(--cyan); font-size: 9px; }
   .mi-body { padding: 8px 9px 4px; }
+  /* 🔑 CHIPS, NOT ROWS, for anything self-describing (Sub, 2026-08-12: "if the options are
+     soloable and not soloable, just put soloable"). A label/value row spends a whole line and
+     ~72px of gutter on a word that explains itself, and a stack of them was mostly empty space.
+     Chips wrap, so six facts cost one or two lines instead of six. */
+  .mi-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+  .mi-chip { font-family: var(--sans); font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em;
+    color: var(--cyan-text); background: rgba(var(--accent-rgb), 0.10);
+    border: 1px solid var(--divider); border-radius: 3px; padding: 2px 6px; white-space: nowrap; }
+  .mi-chip.crime { color: #ffd7d7; background: rgba(255, 90, 90, 0.22); border-color: rgba(255, 120, 120, 0.5); }
+  .mi-chip.said { background: transparent; border-style: dashed; color: var(--cyan-dim); }
+  /* The headline number. It is what Sub asked for and the one figure worth reading at a glance,
+     so it gets size rather than a row of its own competing with the labels below. */
+  .mi-pay { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: 0 0 7px; }
+  .mi-pay .amt { font-family: var(--mono); font-size: 19px; font-weight: 500; color: var(--gold);
+    font-variant-numeric: tabular-nums; line-height: 1.05; }
+  .mi-pay .cur { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: var(--gold); opacity: 0.75; }
+  /* A two-column grid, left-aligned. The old rows were a flex pair pushed to opposite edges,
+     which on a 380px panel left a canyon between label and value. */
+  .mi-g { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; align-items: baseline; }
+  .mi-g .k { font-size: 9px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; color: var(--cyan-dim); }
+  .mi-g .v { font-size: 12.5px; color: var(--cyan-text); min-width: 0; }
+  .mi-g .v.pos { color: var(--gold); }
+  .mi-g .v.neg { color: var(--red); }
+  /* Standing is a DIFFERENT KIND of fact — it is about you, not the contract — so it reads as
+     its own group behind a rule rather than as one more row in the list. */
+  .mi-standing { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--divider); }
   .mi-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
   .mi-row .mi-k { min-width: 72px; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: var(--cyan-dim); }
   .mi-row .mi-v { flex: 1; font-size: 13px; color: var(--cyan-text); text-align: right; }
   .mi-row .mi-v.pos { color: var(--gold); }
   .mi-row .mi-v.neg { color: var(--red); }
-  /* CrimeStat flag on the mission type. Red, small, and never a whole row of its own — it
-     qualifies the job rather than being a separate fact about it. */
-  .mi-crime { font-family: var(--sans); font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em;
-    color: #ffd7d7; background: rgba(255, 90, 90, 0.26); border: 1px solid rgba(255, 120, 120, 0.5);
-    border-radius: 3px; padding: 1px 4px; vertical-align: 1px; }
   /* "inferred" qualifier on the rank readout — it's a lower bound, not exact rep. */
   .mi-row .mi-hint { font-size: 8.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--cyan-dim); }
@@ -2255,98 +2276,139 @@
   // presented confidently is worse than no number, which is the same rule the site follows.
   const money = (n) => Number(n || 0).toLocaleString();
   const reports = (n) => n + (n === 1 ? " report" : " reports");
-  function communityPayRows(v) {
+
+  // ── Where to pick it up: ONE useful name, or nothing ──────────────────────────────────────
+  // Measured over the real dataset (4,075 contracts, 1,659 with a list, 51 distinct names):
+  //   2–4 places … 898 lists — genuinely specific, worth naming
+  //   5+ places … 761 lists — effectively "anywhere in the system"; the big ones name all 16
+  //               Stanton bodies or 19 Pyro points, which is the same as naming none, only longer
+  // So a long list is DROPPED entirely rather than truncated (Sub: "if it's a mission that could
+  // be picked up everywhere in that system, it wouldn't need to have this"). Truncating it to
+  // "+15 more" would have kept the row while throwing away the only thing it was telling you.
+  const PICKUP_MAX = 4;
+  // 🔑 Order does NOT reliably encode type — 289 lists interleave stations and planets — so the
+  // kind is classified, not inferred from position. Every planet and moon currently in the data;
+  // anything else is treated as a station, which is the safe default in both directions: a name
+  // we have never seen is far more likely to be a new outpost than a new planet, and a station is
+  // the name worth showing anyway (it is where you actually dock to take the contract).
+  const PLANETS = new Set([
+    "ArcCorp", "Crusader", "Hurston", "microTech",
+    "Aberdeen", "Arial", "Calliope", "Cellin", "Clio", "Daymar", "Euterpe", "Ita",
+    "Lyria", "Magda", "Wala", "Yela",
+    "Monox", "Bloom", "Terminus", "Adir", "Fairo", "Fuego", "Ignis", "Vatra", "Vuur",
+  ]);
+  const isStation = (n) => !PLANETS.has(n) && !/^(Pyro|Nyx)\s+[IVX]+$/i.test(n);
+  function pickupOf(v) {
+    const list = v.whereToGet || [];
+    if (!list.length || list.length > PICKUP_MAX) return null;
+    // Prefer a station: "Checkmate" is somewhere you dock, "Pyro I" is a whole planet.
+    const name = list.find(isStation) || list[0];
+    return { name, more: list.length - 1, all: list.join(" · ") };
+  }
+  // The headline number, given size instead of a label. A fixed payout from the game files is
+  // certain and needs no qualifier; a crowdsourced one always states what it rests on.
+  function payBlock(v) {
     const p = v.community && v.community.payout;
-    if (!p || !p.samples) return [];
-    const unit = p.currency === "UEC" ? " aUEC" : " " + (p.currency || "");
-    // A spread only means something with more than one observation, and identical readings of
-    // the same fixed contract would otherwise render a pointless "48,000 – 48,000".
+    const fixed = payoutText(v.payout);
+    if (!p || !p.samples) {
+      return fixed ? '<div class="mi-pay" title="A fixed reward, straight from the game files."><span class="amt">'
+        + escapeHtml(fixed) + "</span></div>" : "";
+    }
+    const cur = p.currency === "UEC" ? "aUEC" : (p.currency || "");
     const spread = p.samples > 1 && p.max > p.min ? money(p.min) + " – " + money(p.max) : null;
     const note = p.singleContributor && p.samples === 1
       ? "1 report" : reports(p.samples) + (p.singleContributor ? ", one player" : "");
-    return ['<div class="mi-row" title="Read off the contract board by players running this. The game works most payouts out when you accept, so this is the only place the number exists.">'
-      + '<span class="mi-k">Typically pays</span><span class="mi-v pos">' + money(p.median) + unit
-      + ' <span class="mi-hint">' + escapeHtml(note) + "</span></span></div>"
-      + (spread ? '<div class="mi-row"><span class="mi-k">Range</span><span class="mi-v">' + spread + unit + "</span></div>" : "")];
+    return '<div class="mi-pay" title="Read off the contract board by players running this. The game works most payouts out when you accept, so this is the only place the number exists.">'
+      + '<span class="amt">' + money(p.median) + '</span><span class="cur">' + escapeHtml(cur) + "</span>"
+      + '<span class="mi-hint">' + escapeHtml(note + (spread ? " · " + spread : "")) + "</span></div>";
   }
-  const COMBAT_WORDS = { none: "little or none", fps: "on foot", ship: "in the ship", both: "on foot and in the ship" };
-  function communityFactRows(v) {
+  function chip(text, cls, title) {
+    return '<span class="mi-chip' + (cls ? " " + cls : "") + '"'
+      + (title ? ' title="' + escapeAttr(title) + '"' : "") + ">" + escapeHtml(text) + "</span>";
+  }
+  // Worded so the chip needs no heading — "Soloable" says what it is, "Soloable: yes" does not
+  // say any more (Sub, 2026-08-12).
+  const COMBAT_CHIP = { none: "No combat", fps: "On-foot combat", ship: "Ship combat", both: "Ship + on-foot" };
+  function factChips(v) {
     const f = v.community && v.community.facts;
     if (!f || !f.samples) return [];
     const out = [];
+    // 🔑 The sample count is shown ON THE CHIP only while the evidence is THIN, and lives in the
+    // tooltip once it is not. Printing "· 14 reports" beside every fact is the clutter Sub was
+    // objecting to; hiding it entirely is how one person's opinion starts looking like a fact.
+    // Showing it exactly when it is small serves both — the number appears precisely when it is
+    // the thing you need to know.
+    const THIN = 2;
+    const thin = (n) => (n <= THIN ? " · " + reports(n) : "");
     if (f.difficulty != null && f.difficultyAnswers) {
-      out.push('<div class="mi-row" title="Average of what players rated it, 1 (easy) to 5 (hard)."><span class="mi-k">Difficulty</span><span class="mi-v">'
-        + f.difficulty + '<span class="mi-hint"> / 5 · ' + escapeHtml(reports(f.difficultyAnswers)) + "</span></span></div>");
+      out.push(chip("Difficulty " + f.difficulty + "/5" + thin(f.difficultyAnswers), "said",
+        "Average of " + reports(f.difficultyAnswers) + " — 1 easy, 5 hard."));
     }
     if (f.soloRate != null && f.soloAnswers) {
-      // Rendered as a plain verdict rather than a percentage when it is unanimous — "100% solo"
-      // off two reports reads like a statistic, and it is really just "both people soloed it".
+      // A verdict when it is unanimous, a number when it is not: "100% solo" off two reports is a
+      // statistic-shaped way of saying "both of them soloed it".
       const pct = Math.round(f.soloRate * 100);
-      const word = pct >= 100 ? "yes" : pct <= 0 ? "no — everyone grouped" : pct + "% ran it solo";
-      out.push('<div class="mi-row" title="Whether the players who reported it ran it alone."><span class="mi-k">Soloable</span><span class="mi-v">'
-        + escapeHtml(word) + '<span class="mi-hint"> · ' + escapeHtml(reports(f.soloAnswers)) + "</span></span></div>");
+      const word = pct >= 100 ? "Soloable" : pct <= 0 ? "Needs a group" : pct + "% solo";
+      out.push(chip(word + thin(f.soloAnswers), "said", "From " + reports(f.soloAnswers) + "."));
     }
     // Only a real majority, never a plurality — the site takes the same line, and a 3-2-2 split
     // is not a fact about the mission.
-    if (f.combatTop && COMBAT_WORDS[f.combatTop]) {
-      out.push('<div class="mi-row"><span class="mi-k">Fighting</span><span class="mi-v">' + COMBAT_WORDS[f.combatTop] + "</span></div>");
+    if (f.combatTop && COMBAT_CHIP[f.combatTop]) {
+      out.push(chip(COMBAT_CHIP[f.combatTop], "said", "What most players who answered reported."));
     }
-    // Read from the log rather than asked, so there is no "declined to answer" — but an absent
-    // ship is NOT "on foot", it is just a ship we never saw. Only report what was seen.
-    const ship = (f.ships || [])[0];
-    if (ship && ship.ship) {
-      out.push('<div class="mi-row" title="The ship most often flown on this contract, taken from what players were in — not a recommendation."><span class="mi-k">Usually flown</span><span class="mi-v">'
-        + escapeHtml(ship.ship) + "</span></div>");
-    }
-    if (out.length) out.unshift('<div class="mi-sec">From players who ran it</div>');
     return out;
+  }
+  // Read from the log rather than asked, so there is no "declined to answer" — but an absent
+  // ship is NOT "on foot", it is just a ship nobody was seen in. Only report what was seen.
+  function flownShip(v) {
+    const f = v.community && v.community.facts;
+    const s = f && (f.ships || [])[0];
+    return s && s.ship ? s.ship : null;
   }
 
   function missionInfoHtml(v, forceOpen) {
     const giver = v.giver, type = v.missionType;
     const rg = v.reputationGained || [], rl = v.reputationLost || [];
     const payTxt = payoutText(v.payout);
-    // Where the contract is OFFERED. Station-first from the dataset, capped for width —
-    // a player wants two or three places they can fly to, not a gazetteer.
-    const where = (v.whereToGet || []).slice(0, 4);
-    if (!giver && !type && !rg.length && !rl.length && !payTxt && !where.length) return "";
+    const pickup = pickupOf(v);
+    if (!giver && !type && !rg.length && !rl.length && !payTxt && !pickup && !(v.community && v.community.payout)) return "";
     const open = !!forceOpen || infoOpen;
     let body = "";
     if (open) {
-      const rows = [];
-      // Order (Sub's layout): Type → Reward → Faction → Reputation gained/lost → Standing bar.
-      if (type) {
-        // The type row carries the CRIMESTAT flag, because "Delivery" and "Delivery that gets you
-        // a CrimeStat" are not the same job and the distinction is worth more than a row of its
-        // own. 704 of 4,075 contracts are illegal and the dataset knows for all of them.
-        // 🔑 Absence is not innocence: an unknown mission also reads false, so this only ever
-        // asserts "this IS illegal", never "this is safe".
-        rows.push('<div class="mi-row"><span class="mi-k">Type</span><span class="mi-v">' + escapeHtml(type)
-          + (v.illegal ? ' <span class="mi-crime" title="Criminal work — expect a CrimeStat for taking this.">ILLEGAL</span>' : "")
-          + "</span></div>");
+      // ── 1. Chips: everything that explains itself in a word or two ──────────────────────
+      // 🔑 Absence is not innocence — an unrecognised mission also reads illegal:false — so this
+      // only ever asserts that something IS criminal, never that it is safe.
+      const chips = [];
+      if (v.illegal) chips.push(chip("Illegal", "crime", "Criminal work — expect a CrimeStat for taking this."));
+      if (type) chips.push(chip(type));
+      // The rank the GIVER wants, distinct from your own standing in the group below.
+      // 🔑 null means the dataset carries no gate, NOT rank 0: givers use 0 and null side by side.
+      if (v.rankRequired != null) {
+        chips.push(chip("Rank " + v.rankRequired, "",
+          "The giver only offers this contract at rank " + v.rankRequired + " or above."));
       }
-      // aUEC reward when the dataset carries it (a fixed payout). Most PU missions are
-      // runtime-calculated, so this is null for them until the dataset is regenerated to
-      // pull FixedReward — then it appears here automatically.
-      if (payTxt) rows.push('<div class="mi-row"><span class="mi-k">Reward</span><span class="mi-v pos">' + escapeHtml(payTxt) + "</span></div>");
-      // What it actually PAID, from players who read it off the contract board. Most PU contracts
-      // have their reward calculated at accept time and it exists nowhere in the game files, so
-      // for the ~56% with no fixed `payout` this is the only answer there is.
-      rows.push(...communityPayRows(v));
-      if (giver) rows.push('<div class="mi-row"><span class="mi-k">Faction</span><span class="mi-v">' + escapeHtml(giver) + "</span></div>");
-      // 🔑 "Pick up at" is only shown once the VARIANT is resolved. Same-title variants are
-      // offered in different regions drawing from DIFFERENT pools, so before the tracker
-      // knows which one you took, naming places would send you somewhere that cannot drop
-      // what this panel lists. view() returns an empty list while ambiguous for that reason.
-      if (where.length) {
-        rows.push('<div class="mi-row"><span class="mi-k">Pick up at</span><span class="mi-v">' +
-          escapeHtml(where.join(" · ")) +
-          ((v.whereToGet || []).length > where.length ? ' <span class="mi-more">+' + ((v.whereToGet || []).length - where.length) + "</span>" : "") +
-          "</span></div>");
+      chips.push(...factChips(v));
+
+      // ── 2. The money, given size ────────────────────────────────────────────────────────
+      // ── 3. Everything that genuinely needs a label, in a tight two-column grid ──────────
+      const grid = [];
+      const gRow = (k, html, cls) => grid.push('<span class="k">' + escapeHtml(k) + '</span><span class="v'
+        + (cls ? " " + cls : "") + '">' + html + "</span>");
+      if (giver) gRow("Faction", escapeHtml(giver));
+      // 🔑 Only shown once the VARIANT is resolved. Same-title variants are offered in different
+      // regions drawing from DIFFERENT pools, so before the tracker knows which one you took,
+      // naming places would send you somewhere that cannot drop what this panel lists —
+      // view() returns an empty list while ambiguous for exactly that reason.
+      if (pickup) {
+        gRow("Pick up", escapeHtml(pickup.name)
+          + (pickup.more ? ' <span class="mi-more" title="' + escapeAttr(pickup.all) + '">+' + pickup.more + "</span>" : ""));
       }
-      // Reputation gained/lost. A single entry that just repeats the giver shown above becomes
-      // a clean "Reputation gained: +N rep" row (no redundant name); multiple entries — or rep
-      // with a DIFFERENT faction — keep the labeled section with per-faction names.
+      const ship = flownShip(v);
+      if (ship) gRow("Usually flown", escapeHtml(ship));
+
+      // Reputation. A single entry that just repeats the faction above becomes a plain amount;
+      // several — or rep with a DIFFERENT faction — keep a labelled section with the names.
+      const extra = [];
       const repSection = (list0, neg, label) => {
         // 🔑 A mission can list SEVERAL awards against the SAME standing — 12 of the 33 Battaglia
         // missions do (200+40, 200+60, 100+60). Rendered raw that's two identical faction names
@@ -2357,35 +2419,35 @@
         const list = collapseSameStanding(list0);
         if (!list.length) return;
         if (list.length === 1 && (!list[0].faction || list[0].faction === giver)) {
+          // No "rep" suffix — the label already said it.
           const amt = (neg ? "−" : "+") + Number(list[0].amount || 0).toLocaleString();
-          rows.push('<div class="mi-row"><span class="mi-k">' + label + '</span><span class="mi-v ' + (neg ? "neg" : "pos") + '">' + amt + " rep" + extraHint(list[0]) + "</span></div>");
+          gRow(label, amt + extraHint(list[0]), neg ? "neg" : "pos");
         } else {
-          rows.push('<div class="mi-sec">' + label + "</div>" + repRows(list, neg));
+          extra.push('<div class="mi-sec">' + label + "</div>" + repRows(list, neg));
         }
       };
-      // Rank the GIVER wants before they will offer it. Distinct from "Your rank" further down,
-      // which is your own inferred standing — showing both is how you see the gap.
-      // 🔑 null means the dataset carries no gate, NOT rank 0: 69% of contracts have the field and
-      // givers use 0 and null side by side, so an absent one must not render as "Rank 0".
-      if (v.rankRequired != null) {
-        rows.push('<div class="mi-row" title="The giver only offers this contract at this standing or above."><span class="mi-k">Rank needed</span><span class="mi-v">'
-          + v.rankRequired + "</span></div>");
-      }
-      repSection(rg, false, "Reputation gained");
-      repSection(rl, true, "Reputation lost");
-      // What players who ran it reported afterwards.
-      rows.push(...communityFactRows(v));
-      // Standing (rep progress bar toward the next rank) sits at the BOTTOM. The bar when we
-      // have the giver's ladder, else the bare inferred-rank number. Both are lower bounds.
+      repSection(rg, false, "Reputation");
+      repSection(rl, true, "Rep lost");
+
+      // ── 4. Standing: its own group behind a rule ────────────────────────────────────────
+      // A different KIND of fact — it is about you, not about the contract (Sub, 2026-08-12).
+      let standing = "";
       if (v.repBar) {
-        rows.push(repBarHtml(v.repBar));
+        standing = repBarHtml(v.repBar);
       } else if (v.inferredRank != null) {
-        rows.push('<div class="mi-row" title="Lowest rank you must be — the game only offers this giver&#39;s rank-' +
-          v.inferredRank + ' missions at that standing. Your exact rep isn&#39;t in the game log.">' +
-          '<span class="mi-k">Your rank</span><span class="mi-v">' + v.inferredRank +
-          '+ <span class="mi-hint">inferred</span></span></div>');
+        standing = '<div class="mi-row" title="Lowest rank you must be — the game only offers this giver&#39;s rank-'
+          + v.inferredRank + ' missions at that standing. Your exact rep isn&#39;t in the game log.">'
+          + '<span class="mi-k">Your rank</span><span class="mi-v">' + v.inferredRank
+          + '+ <span class="mi-hint">inferred</span></span></div>';
       }
-      body = '<div class="mi-body">' + rows.join("") + "</div>";
+
+      body = '<div class="mi-body">'
+        + (chips.length ? '<div class="mi-chips">' + chips.join("") + "</div>" : "")
+        + payBlock(v)
+        + (grid.length ? '<div class="mi-g">' + grid.join("") + "</div>" : "")
+        + extra.join("")
+        + (standing ? '<div class="mi-standing">' + standing + "</div>" : "")
+        + "</div>";
     }
     const car = forceOpen ? "" : '<span class="car">' + (open ? "▾" : "▸") + "</span>";
     const title = forceOpen ? "" : ' title="' + (open ? "Hide" : "Show") + ' mission details"';
