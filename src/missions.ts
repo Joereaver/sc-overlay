@@ -1923,6 +1923,20 @@ export class MissionTracker extends EventEmitter {
    *  the giver's standing tier, which lines up 1:1 with the rep scope's rank ladder — that's how
    *  the rank-gated ships (Golem @3, Prospector @4, MOLE @5) are surfaced. Returns null when the
    *  giver has no missions or no usable rep scope in the loaded dataset. */
+  /** Title / giver / type for every contract in the loaded dataset, for matching a row
+   *  read off the mobiGlas board back to a debug_name. Exposed rather than handing out
+   *  `dataset` so the payout scanner can't reach into anything else, and so it follows
+   *  whatever patch the tracker resolved instead of loading its own copy. */
+  matchCandidates(): { debugName: string; title: string; giver: string; missionType: string }[] {
+    if (!this.dataset) return [];
+    return Object.entries(this.dataset.missions).map(([debugName, m]) => ({
+      debugName,
+      title: m.title ?? "",
+      giver: m.giver ?? "",
+      missionType: m.missionType ?? "",
+    }));
+  }
+
   giverTrack(giver: string): GrindTrack | null {
     if (!this.dataset) return null;
     const want = norm(giver);

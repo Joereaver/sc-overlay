@@ -606,8 +606,15 @@ function startFabCapture({ port, configDir, onStatus, devTools = false }) {
     // The foreground watcher is only worth running while something here is armed — with all three
     // opt-ins off this loop does nothing but re-read a config file every 3s, and shouldn't be
     // keeping a helper process alive to do it.
-    fgWatch.want("ocr", fab || miss || mining || claim);
-    if (!fab && !miss && !mining && !claim) { emitContext("off"); return; }
+    // The contract-board payout scanner. Its own opt-in, and enough on its own to arm the
+    // loop: it needs no upload path of its own (the sidecar queues and flushes) and it
+    // reads the SAME full-frame OCR every other consumer here already takes — the parsing
+    // happens server-side in /api/screen-read, so nothing extra is captured for it.
+    // Requires a calibrated panel; without one the parser cannot separate the columns and
+    // arming the loop would burn OCR for nothing.
+    const payout = cfg.payoutScan === true && !!cfg.contractRegion;
+    fgWatch.want("ocr", fab || miss || mining || claim || payout);
+    if (!fab && !miss && !mining && !claim && !payout) { emitContext("off"); return; }
     // Watchdog: a single hung await (e.g. a fetch to the sidecar while it's restarting during an
     // auto-update) must never latch the loop forever. If a prior tick has held `busy` well past
     // any real tick, treat it as wedged and re-arm — otherwise the overlay freezes on its last

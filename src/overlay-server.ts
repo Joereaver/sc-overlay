@@ -20,6 +20,9 @@ import { SCENARIOS, replayLines, replayMissionId } from "./dev-replay.js";
 import { SiteSync } from "./sync.js";
 import { assetDir } from "./paths.js";
 import { loadCatalog, ocrImage, ocrSelfTest, hasScanHud, classifyScreen, bestSignatureLine, glyphSearchBox, type CatalogEntry, type OcrHealth, type OcrResult, type ScanRegion } from "./screen-read.js";
+import { parseContractList } from "./contract-list.js";
+import { ContractMatcher } from "./contract-match.js";
+import { PayoutScanner, type PayoutObservation } from "./payout-scan.js";
 import { maybeShareLog } from "./log-share.js";
 
 const overlayDir = assetDir(import.meta.url, "overlay");
@@ -126,6 +129,18 @@ interface Config {
    *  Set by dragging the "scan read area" box (Mining Scanner cog) — the only way to cope with a
    *  HUD that doesn't sit where we assume. */
   scanRegion: ScanRegion | null;
+  /** OPT-IN, OFF BY DEFAULT: read the mobiGlas Contract Manager's offers list and record
+   *  what each contract PAYS. For the ~1,000 CalculatedReward contracts that number exists
+   *  nowhere else — not in the datacore, not in game.log any more — so the board is the
+   *  only source. Toggled with POST /api/payout-scan; deliberately not a config screen
+   *  yet, because it is a sit-down data-gathering task rather than something you leave on.
+   *  🔑 Persisted, so a crash mid-sweep doesn't silently stop collecting. */
+  payoutScan: boolean;
+  /** Where the offers PANEL sits, as fractions of the frame. Null = not calibrated, and
+   *  the scan will not run without it: the parser needs the panel to tell the title column
+   *  from the amount column, and guessing produced garbage (the bottom nav pushed the
+   *  column boundary past the amounts and every row read as priceless). */
+  contractRegion: ScanRegion | null;
   /** Auto-show the Mining Assistant window when the scanner/refinery screen is detected. */
   miningAutoShow: boolean;
   /** Remembers whether the Mining Assistant window was left open, so it's restored on launch. */
@@ -320,6 +335,8 @@ const DEFAULTS: Config = {
   miningAssistant: false,
   miningDebug: false,
   scanRegion: null,
+  payoutScan: false,
+  contractRegion: null,
   miningAutoShow: false,
   miningOpen: false,
   notepadOpen: false,
@@ -828,6 +845,74 @@ const mining = new MiningTracker({ dataDir, stateDir: userDir });
 // Crowdsourced mission facts (what you actually do in it, difficulty, soloable) collected by
 // the completion report. Local-only for now — this file IS the upload queue for when the
 // subliminal.gg endpoint lands.
+
+// ── Contract-board payout scanner ──────────────────────────────────────────
+// OFF unless switched on (POST /api/payout-scan). While on, every full-frame OCR the
+// capture loop already takes is ALSO parsed as a Contract Manager board — no second
+// screenshot, no second OCR, no extra polling. That matters: the loop is the app's
+// hottest path and a parallel capture would double its cost for a feature most players
+// will never turn on.
+let payoutScanner: PayoutScanner | null = null;
+let payoutMatcher: ContractMatcher | null = null;
+let payoutMatcherFor = "";
+
+/** Built lazily and rebuilt when the patch changes — the matcher is an index over the
+ *  whole dataset and there is no point paying for it until someone scans. */
+function ensurePayoutScanner(): PayoutScanner | null {
+  const patch = tracker.view().patch ?? "";
+  if (payoutScanner && payoutMatcherFor === patch) return payoutScanner;
+  const candidates = tracker.matchCandidates();
+  if (!candidates.length) return null;
+  payoutMatcher = new ContractMatcher(candidates);
+  payoutMatcherFor = patch;
+  payoutScanner = new PayoutScanner(payoutMatcher, patch);
+  console.log(`[payout] matcher built for ${patch || "(unknown patch)"} over ${candidates.length} contracts`);
+  return payoutScanner;
+}
+
+/** The star system the player is in, when the log has said recently. Used only to break a
+ *  tie between same-titled variants; a wrong guess here would silently mis-file a price,
+ *  so an unknown place yields null and the row stays ambiguous. */
+/** Last star system seen this session. 🔑 Deliberately NOT expired, unlike PlaceWatcher's
+ *  own reading. The terrain report only fires about every ten minutes, so `current()`
+ *  spends most of its time stale-and-therefore-unknown — which for the WIDGET is right
+ *  (it must not claim you are somewhere you left) but for this is self-defeating: with no
+ *  system, every same-titled Mercenary variant stays ambiguous and the scan records
+ *  nothing. A SYSTEM is not a place: you cannot leave one without a long quantum trip, so
+ *  the last one seen is overwhelmingly still true. Cleared on a session change, which is
+ *  the only moment it can silently stop being true. */
+let lastSystem: string | null = null;
+
+function currentSystem(): string | null {
+  // `place` is declared further down; this only runs at request time, well after init.
+  const p = place.current();
+  if (p.kind === "planet" && p.body) {
+    // Body codes are "<system><number><letter>" — "stanton2a" -> "stanton".
+    const sys = String(p.body).replace(/[0-9].*$/, "").trim();
+    if (sys.length >= 3) lastSystem = sys;
+  }
+  return lastSystem;
+}
+
+async function flushPayouts(): Promise<void> {
+  const sc = payoutScanner;
+  if (!sc || !sc.pending()) return;
+  if (!config.syncEnabled || !config.syncToken) return;
+  const base = (process.env.SC_SYNC_BASE || "https://subliminal.gg").replace(/\/+$/, "");
+  await sc.flush(async (batch: PayoutObservation[]) => {
+    const res = await fetch(`${base}/api/sc/mission-payout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.syncToken}` },
+      body: JSON.stringify({ observations: batch }),
+    });
+    if (!res.ok) console.log(`[payout] upload refused (${res.status}) — ${batch.length} still queued`);
+    return res.ok;
+  });
+}
+// Flushed on a timer rather than per capture: the board is re-read every few seconds and
+// a request per read would be pointless traffic for rows that are nearly all duplicates.
+setInterval(() => { void flushPayouts(); }, 30_000).unref?.();
+
 const missionFeedback = new MissionFeedbackStore(userDir);
 
 /** Push answered missions to subliminal.gg. Uses the SAME device token as the blueprint
@@ -1748,6 +1833,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
   // (drops stale missions from a previous shard the log never logged ending).
   if (url === "/api/missions/refresh" && req.method === "POST") {
     tracker.resetSession();
+    // A session reset means a new shard or a fresh log — the cached system may no longer
+    // be where the player is, and a WRONG system silently mis-files a price.
+    lastSystem = null;
     seedTrackerFromLog();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
@@ -1844,6 +1932,22 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       const ocr = await ocrImage(body.path);
       result = classifyScreen(ocr, screenCatalog, { scanRegion: config.scanRegion });
       scanHud = hasScanHud(ocr);
+      // Piggyback: the same frame, already OCR'd, read as a contract board. Requires a
+      // calibrated panel — without one the parser cannot tell the title column from the
+      // amount column, and it must not guess (that produced rows with no price at all).
+      if (config.payoutScan && config.contractRegion) {
+        try {
+          const sc = ensurePayoutScanner();
+          if (sc) {
+            const r = config.contractRegion;
+            const rect = { x: r.x * ocr.w, y: r.y * ocr.h, w: r.w * ocr.w, h: r.h * ocr.h };
+            sc.ingest(parseContractList(ocr, rect), currentSystem());
+          }
+        } catch (e) {
+          // Never let a scanning bug break the fabricator/mission read this route exists for.
+          console.log(`[payout] scan error: ${(e as Error).message}`);
+        }
+      }
     }
     // Routing applies to BOTH sources. Mining reads feed its tracker (same process); the
     // mission/fabricator reads are routed by capture.cjs off the returned result.
@@ -2025,6 +2129,56 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
 
   // The diagnostic ring (see noteMiningRead). Read-only, in-memory, no persistence — it answers
   // "what did the scanner actually see in the last minute, and how fast was it looking".
+  // ── Payout scanner: on/off + what it has seen ────────────────────────────
+  // A MODE, not a hotkey. Sub drives it by saying "turn it on" and later "turn it off",
+  // because gathering these means flying to another system for a different board — so it
+  // has to survive hours of travel, disconnects and shard changes.
+  //
+  // 🔒 Loopback only. It is off by default and it reads the player's screen; a LAN caller
+  // (the sidecar binds all interfaces so OBS on another PC can load widget pages) must not
+  // be able to switch screen-reading on. Same rule as /api/twitch/*.
+  if (url === "/api/payout-scan") {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "loopback_only" }));
+      return;
+    }
+    if (req.method === "POST") {
+      const body = await readBody(req);
+      if (typeof body.on === "boolean") {
+        config.payoutScan = body.on;
+        saveConfig();
+        console.log(`[payout] scanning ${body.on ? "ON" : "OFF"}`);
+        // Flush immediately on the way out so a sweep's tail isn't stranded for 30s.
+        if (!body.on) void flushPayouts();
+      }
+      if (body.region === null) { config.contractRegion = null; saveConfig(); }
+      else if (body.region && typeof body.region === "object") {
+        const r = body.region as Record<string, number>;
+        const ok = ["x", "y", "w", "h"].every((k) => Number.isFinite(r[k]))
+          && r.w > 0.02 && r.h > 0.02
+          && r.x >= 0 && r.y >= 0 && r.x + r.w <= 1.001 && r.y + r.h <= 1.001;
+        // Validated server-side because a bad region silently kills every read — the
+        // same trap the mining scan box already documents.
+        if (ok) { config.contractRegion = { x: r.x, y: r.y, w: r.w, h: r.h }; saveConfig(); }
+      }
+    }
+    const sc = payoutScanner;
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      on: config.payoutScan,
+      region: config.contractRegion,
+      calibrated: !!config.contractRegion,
+      // Says WHY nothing is being recorded, which is the question anyone asks first.
+      ready: config.payoutScan && !!config.contractRegion && !!config.syncToken && config.syncEnabled,
+      syncReady: !!config.syncToken && config.syncEnabled,
+      patch: tracker.view().patch ?? null,
+      system: currentSystem(),
+      tally: sc ? sc.tally : null,
+    }));
+    return;
+  }
+
   if (url === "/api/mining/recent" && req.method === "GET") {
     const now = Date.now();
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
