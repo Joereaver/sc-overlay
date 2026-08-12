@@ -34,7 +34,44 @@ npm run chat-server          # ws://127.0.0.1:8788/ws
   (shards churn every patch), global scrollback resets on restart. Postgres persistence is
   future site-side work.
 
+## Moderation
+
+Reports and auto-moderation both feed one outbound link to the portal on subliminal.gg.
+
+🔴 **This server only ever dials OUT.** Every `/admin/*` route is loopback-gated because an
+endpoint that acts with authority *is* the authority, so moderation is never reachable from the
+internet — not even behind a token. Events are PUSHED and pending actions are PULLED. The public
+attack surface is unchanged by any of it.
+
+| env | default | what it does |
+|---|---|---|
+| `AUTOMOD_MODE` | `off` | `off` · `flag` (refuse the message + notify) · `ban` (also bans the sender) |
+| `AUTOMOD_LIST` | `chat-server/wordlist.txt` | one term per line, `#` comments a line out |
+| `REPORT_WEBHOOK_URL` | — | where report / auto-ban events are POSTed |
+| `MOD_ACTION_URL` | — | the portal's ban/unban queue, polled and acked |
+| `MOD_SHARED_SECRET` | — | `Authorization: Bearer` on both. **Unset ⇒ the whole link is off** |
+| `MOD_POLL_MS` | `20000` | how often the queue is drained |
+
+Every one of them is optional, and every default is the behaviour that existed before the
+feature: no list means no auto-moderation, no URL means no push, no secret means no link.
+
+🔴 **`AUTOMOD_MODE` defaults to `off` deliberately.** `wordlist.txt` ships as LDNOOBW verbatim —
+a published list carrying ordinary vocabulary alongside slurs, and `escort`, `ass`, `shit`,
+`suck` and `sex` are all on it. Chat identities are RSI-verified, so a match bans a real person
+by name, and *both* enforcing modes refuse the message. Prune the list before arming it; the
+false-positive surface is asserted in `automod.test.mjs` so it can't be forgotten.
+
+🔑 **Queued actions are delivered at least once** — an action applied but not acked comes back on
+the next poll — so `ban` and `unban` are both idempotent no-ops the second time.
+
 ## Tests
 
-`node chat-server/server.test.mjs` (protocol) · `npx tsx src/chat.test.ts` (the sidecar
-client against a real spawned server) · `npm run test:chat` (both).
+`node chat-server/automod.test.mjs` (the matcher, offline) · `node chat-server/server.test.mjs`
+(protocol, including the moderation link end-to-end against a stub portal) ·
+`npx tsx src/chat.test.ts` (the sidecar client against a real spawned server) ·
+`npm run test:chat` (all three).
+
+⚠️ The channel table and the persistence note at the top of this file are **stale** — the shard
+tier was removed in 0.1.42 and scrollback has been in Postgres since then. Not touched here
+because it is nothing to do with moderation; see `dev-bp-tracker/references/chat.md` for what is
+actually true.

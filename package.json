@@ -32,7 +32,7 @@
     "test:repaccrual": "tsx src/rep-accrual.test.ts",
     "test:logpaths": "tsx src/log-paths.test.ts",
     "test:logshare": "tsx src/log-share.test.ts",
-    "test:chat": "node chat-server/server.test.mjs && tsx src/chat.test.ts",
+    "test:chat": "node chat-server/automod.test.mjs && node chat-server/server.test.mjs && tsx src/chat.test.ts",
     "chat-server": "node chat-server/server.mjs",
     "dev:fresh": "node tools/dev-fresh.mjs",
     "test:location": "tsx src/location.test.ts"

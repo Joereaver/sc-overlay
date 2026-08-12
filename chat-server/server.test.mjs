@@ -9,14 +9,57 @@ import { join, dirname } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = 8797; // scratch — not 8788 (a dev chat server may be running) nor 8778 (sidecar)
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 const scratchData = mkdtempSync(join(tmpdir(), "sc-chat-test-"));
+
+// ── A stand-in for the moderation portal ───────────────────────────────────
+// The chat server only ever DIALS OUT for moderation (every /admin/* route is loopback-gated),
+// so testing that link means being the other end of it: receive the pushes, serve a queue of
+// actions, and collect the acks. Started BEFORE the chat server so nothing races the first poll.
+const MOD_PORT = 8798;
+const MOD_SECRET = "test-mod-secret";
+const modEvents = [];      // what the chat server pushed at us
+const modQueue = [];       // what we want it to do
+const modAcks = [];        // how it said each one went
+const modAuthed = (req) => req.headers.authorization === `Bearer ${MOD_SECRET}`;
+const portal = createServer((req, res) => {
+  const url = (req.url ?? "/").split("?")[0];
+  if (!modAuthed(req)) { res.writeHead(401); res.end(); return; }
+  if (url === "/events" && req.method === "POST") {
+    let s = ""; req.on("data", (c) => (s += c));
+    req.on("end", () => { try { modEvents.push(JSON.parse(s)); } catch { /* ignore */ } res.writeHead(200); res.end("{}"); });
+    return;
+  }
+  if (url === "/actions" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ rows: modQueue.splice(0, modQueue.length) }));
+    return;
+  }
+  if (url.startsWith("/actions/") && req.method === "POST") {
+    let s = ""; req.on("data", (c) => (s += c));
+    req.on("end", () => { modAcks.push({ id: decodeURIComponent(url.slice("/actions/".length)), body: JSON.parse(s || "{}") }); res.writeHead(200); res.end("{}"); });
+    return;
+  }
+  res.writeHead(404); res.end();
+});
+await new Promise((r) => portal.listen(MOD_PORT, "127.0.0.1", r));
+
+// A scratch word list. Deliberately NOT the shipped one: a nonsense term cannot collide with
+// anything else this suite says, and the shipped list's own behaviour is covered by
+// automod.test.mjs (which is also where its false-positive surface is written down).
+const scratchList = join(scratchData, "words.txt");
+writeFileSync(scratchList, "# scratch\nflarnwibble\nvoid harvester\n");
 
 const server = spawn(process.execPath, [join(here, "server.mjs")], {
   env: { ...process.env, CHAT_PORT: String(PORT), CHAT_AUTH: "dev", CHAT_DATA_DIR: scratchData,
          // Dev auth trusts any handle, so the server refuses to boot with it unless told.
-         CHAT_ALLOW_DEV_AUTH: "1" },
+         CHAT_ALLOW_DEV_AUTH: "1",
+         AUTOMOD_MODE: "ban", AUTOMOD_LIST: scratchList,
+         REPORT_WEBHOOK_URL: `http://127.0.0.1:${MOD_PORT}/events`,
+         MOD_ACTION_URL: `http://127.0.0.1:${MOD_PORT}/actions`,
+         MOD_SHARED_SECRET: MOD_SECRET, MOD_POLL_MS: "200" },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
 });
@@ -633,7 +676,163 @@ try {
   pfSeeker.send({ t: "apply", ch: "custom:silly-numbers" });
   await pfSeeker.next((f) => f.t === "error" && f.code === "bad_channel", "an open listing has nothing to apply to");
 
+  // ── Auto-moderation + the moderation link ─────────────────────────────────
+  // Everything here is end-to-end through the REAL outbound path: the chat server pushes to the
+  // portal stub and pulls its action queue. The matcher itself is covered in automod.test.mjs.
+  const until = async (pred, why, ms = 4000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) { if (pred()) return true; await wait(50); }
+    throw new Error(`timeout waiting for: ${why}\nserver log:\n${serverLog}`);
+  };
+  const eventsOf = (kind) => modEvents.filter((e) => e.kind === kind);
+
+  // A player report is pushed outward as well as stored. The report at line ~584 already fired,
+  // so this only has to confirm it left the process.
+  await until(() => eventsOf("report").length > 0, "the earlier report was pushed to the portal");
+  const pushedReport = eventsOf("report")[0];
+  assert.equal(pushedReport.about, "owner", "the pushed report names who was reported, lowercased");
+  assert.equal(pushedReport.by, "guest2", "and who reported them");
+  assert.equal(typeof pushedReport.at, "number", "with a timestamp the portal can order by");
+
+  const badMouth = client();
+  await badMouth.open();
+  badMouth.send({ t: "hello", handle: "Flarnix" });
+  await badMouth.next((f) => f.t === "welcome", "Flarnix connects");
+  await badMouth.next((f) => f.t === "joined" && f.ch === "global", "Flarnix joins global");
+
+  // A clean message goes through, so the next assertion is about the WORD and not about Flarnix.
+  badMouth.send({ t: "msg", ch: "global", text: "anyone flying to Yela?" });
+  await badMouth.next((f) => f.t === "msg" && /Yela/.test(f.text), "a clean message is delivered");
+
+  const watcher = client();
+  await watcher.open();
+  watcher.send({ t: "hello", handle: "Watcher" });
+  await watcher.next((f) => f.t === "joined" && f.ch === "global", "Watcher joins global");
+
+  badMouth.send({ t: "msg", ch: "global", text: "you absolute flarnwibble" });
+  // 🔴 The message must not reach the room in ANY mode. A "flag" that still published it would
+  // be surveillance rather than moderation, and a ban that published it first is worse.
+  await badMouth.next((f) => f.t === "error" && f.code === "banned", "the sender is banned");
+  await wait(200);
+  assert(!watcher.frames.some((f) => f.t === "msg" && /flarnwibble/.test(f.text ?? "")),
+    "the matched message never reached the room");
+
+  await until(() => eventsOf("autoban").length > 0, "the auto-ban was pushed to the portal");
+  const autoban = eventsOf("autoban")[0];
+  assert.equal(autoban.about, "flarnix", "the event names the banned handle");
+  assert.equal(autoban.by, "automod", "and says it was not a person");
+  assert.equal(autoban.banned, true, "and that a ban was actually applied");
+  // 🔑 The evidence is the whole reason this is reviewable. Sub: "look at the message and decide
+  // if I want to unban." A ban with no message attached cannot be reviewed at all.
+  assert.equal(autoban.text, "you absolute flarnwibble", "the triggering message rides with it");
+  assert(/flarnwibble/.test(autoban.reason ?? ""), "and the reason names the term that matched");
+
+  // It is a real ban, not a refusal: reconnecting does not get you back in.
+  const rebanned = client();
+  await rebanned.open();
+  rebanned.send({ t: "hello", handle: "Flarnix" });
+  await rebanned.next((f) => f.t === "error" && f.code === "banned", "a banned handle cannot reconnect");
+
+  // A multi-word term matches across whitespace, and the boundary still applies.
+  const phraser = client();
+  await phraser.open();
+  phraser.send({ t: "hello", handle: "Phraser" });
+  await phraser.next((f) => f.t === "joined" && f.ch === "global", "Phraser joins global");
+  phraser.send({ t: "msg", ch: "global", text: "flarnwibbles are fine actually" });
+  await phraser.next((f) => f.t === "msg" && /fine actually/.test(f.text), "a longer word is not the term");
+  phraser.send({ t: "msg", ch: "global", text: "the void   harvester run" });
+  await phraser.next((f) => f.t === "error" && f.code === "banned", "a phrase matches across any whitespace");
+
+  // ── The portal's queue: the only two things it may do to this server ──────
+  modQueue.push({ id: "act-1", action: "unban", handle: "Flarnix" });
+  await until(() => modAcks.some((a) => a.id === "act-1"), "the unban was picked up and acked");
+  assert.equal(modAcks.find((a) => a.id === "act-1").body.status, "applied");
+  const forgiven = client();
+  await forgiven.open();
+  forgiven.send({ t: "hello", handle: "Flarnix" });
+  await forgiven.next((f) => f.t === "welcome", "an unbanned handle can connect again");
+
+  // Banning from the portal evicts a live connection, same as the loopback route.
+  modQueue.push({ id: "act-2", action: "ban", handle: "Phraser" });
+  const stillOn = client();
+  await stillOn.open();
+  stillOn.send({ t: "hello", handle: "Watcher2" });
+  await stillOn.next((f) => f.t === "welcome", "an unrelated connection is unaffected");
+  await until(() => modAcks.some((a) => a.id === "act-2"), "the ban was acked");
+  const bansNow = await (await fetch(`http://127.0.0.1:${PORT}/admin/bans`)).json();
+  assert(bansNow.includes("phraser"), "the queued ban landed");
+  assert(!bansNow.includes("flarnix"), "and the queued unban stuck");
+
+  // 🔑 Re-delivery is expected — an action we applied but failed to ack comes back — so both
+  // verbs have to be no-ops the second time rather than errors.
+  modQueue.push({ id: "act-3", action: "ban", handle: "Phraser" });
+  await until(() => modAcks.some((a) => a.id === "act-3"), "a repeated ban is acked");
+  assert.equal(modAcks.find((a) => a.id === "act-3").body.status, "applied", "re-banning is a no-op, not a failure");
+
+  // A malformed row is reported back rather than silently swallowed, or the portal would show
+  // an action as done that never happened.
+  modQueue.push({ id: "act-4", action: "delete-everything", handle: "Phraser" });
+  await until(() => modAcks.some((a) => a.id === "act-4"), "an unknown action is acked");
+  assert.equal(modAcks.find((a) => a.id === "act-4").body.status, "failed");
+  modQueue.push({ id: "act-5", action: "ban", handle: "no good!" });
+  await until(() => modAcks.some((a) => a.id === "act-5"), "a bad handle is acked");
+  assert.equal(modAcks.find((a) => a.id === "act-5").body.status, "failed");
+
+  // The queue is not a public route by accident: the stub refuses anything unauthenticated,
+  // which is what proves the server is sending the secret rather than getting lucky.
+  assert.equal((await fetch(`http://127.0.0.1:${MOD_PORT}/actions`)).status, 401,
+    "the portal stub really does check the shared secret");
+
+  // ── activity: what you're doing, opt-in, on the presence frame ────────────
+  const acA = client();
+  await acA.open();
+  acA.send({ t: "hello", handle: "ActorOne" });
+  await acA.next((f) => f.t === "joined" && f.ch === "global", "ActorOne joins global");
+  const acB = client();
+  await acB.open();
+  acB.send({ t: "hello", handle: "ActorTwo" });
+  await acB.next((f) => f.t === "joined" && f.ch === "global", "ActorTwo joins global");
+
+  /** The member row for a handle in the LATEST global presence frame this client saw. */
+  const acMember = (c, handle) => {
+    for (let i = c.frames.length - 1; i >= 0; i--) {
+      const f = c.frames[i];
+      if (f.t === "presence" && f.ch === "global" && Array.isArray(f.members)) {
+        return f.members.find((m) => m.handle === handle) ?? null;
+      }
+    }
+    return null;
+  };
+
+  acA.send({ t: "activity", activity: "Running Deep space hit" });
+  await until(() => acMember(acB, "ActorOne")?.activity === "Running Deep space hit",
+    "the room is told what ActorOne is doing");
+  // 🔑 ABSENT, not null. Every shipped client ignores unknown fields, but a null on every row
+  // would make an older widget's "has an activity" check disagree with a newer one's about the
+  // same person — and most people will never turn this on, so that row is the common case.
+  assert.equal(acMember(acB, "ActorTwo")?.activity, undefined,
+    "someone who has not opted in carries no activity field at all");
+  assert.equal(Object.prototype.hasOwnProperty.call(acMember(acB, "ActorTwo"), "activity"), false,
+    "the key is omitted, not set to null");
+
+  // Turning it off has to actually reach the room — a privacy switch that only stops FUTURE
+  // updates leaves the last thing you were doing on everyone's screen indefinitely.
+  acA.send({ t: "activity", activity: null });
+  await until(() => acMember(acB, "ActorOne")?.activity === undefined,
+    "clearing it takes it off everyone else's list");
+
+  const acLong = "x".repeat(200);
+  acA.send({ t: "activity", activity: acLong });
+  await until(() => (acMember(acB, "ActorOne")?.activity ?? "").length === 48,
+    "an over-long activity is capped rather than refused");
+
+  // 🔴 It is charged against the MESSAGE budget. Presence reaches everyone in every channel you
+  // are in, so an uncharged activity would be a cheaper broadcast than actually talking.
+  for (let i = 0; i < 8; i++) acA.send({ t: "activity", activity: "state " + i });
+  await acA.next((f) => f.t === "error" && f.code === "rate", "spamming it hits the rate limit");
+
   console.log("chat-server tests passed");
 } finally {
   server.kill();
+  portal.close();
 }

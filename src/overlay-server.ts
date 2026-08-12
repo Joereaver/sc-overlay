@@ -289,6 +289,13 @@ interface Config {
    *  restart lands you back in the same channels. The client owns this list; the sidecar only
    *  persists what it reports. */
   chatChannels: string[];
+  /** Share what you're doing (the contract you're running, or that you're scanning rocks) with
+   *  the people in your chat channels.
+   *  🔴 OFF by default, and it stays that way for the same reason publishing your shard on a
+   *  party listing is opt-in per listing: nothing may leak from merely having the widget open.
+   *  This is the one thing an external chat can show that the game's own social panel cannot —
+   *  it comes off game.log — which is exactly why it has to be asked for rather than assumed. */
+  chatShareActivity: boolean;
   /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
    *  wizard is finished; the wizard never auto-opens again once true. */
   setupDone: boolean;
@@ -372,6 +379,7 @@ const DEFAULTS: Config = {
   chatServerUrl: "wss://chat.subliminal.gg/ws",
   chatHandle: "",
   chatChannels: [],
+  chatShareActivity: false,
   setupDone: false,
   setupSettingsReviewed: false,
   setupShareResolved: false,
@@ -975,6 +983,35 @@ mining.on("change", () => miningSend({ kind: "state", view: miningViewWithPlace(
 // Transient alerts the overlay turns into TTS + sound + a flash.
 mining.on("target-hit", (hit) => miningSend({ kind: "target-hit", hit }));
 mining.on("refinery-done", (job) => miningSend({ kind: "refinery-done", job }));
+
+/* ── What you're doing, published to the people in your channels ────────────
+ *
+ * 🔴 OPT-IN, off by default (`chatShareActivity`). Same rule as publishing your shard on a
+ * party listing: nothing may leak from merely having the widget open. This is the one thing an
+ * external chat can show that the game's own social panel will not — it comes off game.log —
+ * and that is exactly why it has to be asked for rather than assumed.
+ *
+ * 🔑 The MISSION wins over mining. Someone scanning rocks for a contract is running the
+ * contract; naming the rocks would describe the means and hide the point.
+ * 🔑 Mining has no "stopped" event, so it can only be inferred from a scan going stale — hence
+ * the timer as well as the two change hooks. Everything downstream is idempotent
+ * (`setActivity` drops an unchanged value before it reaches the socket), so re-running this on
+ * every mining tick, every mission change and once a minute costs nothing.
+ */
+const ACTIVITY_MINING_MS = 10 * 60 * 1000;
+function chatActivityLabel(): string | null {
+  const title = tracker.view().title;
+  if (title) return `Running ${title}`;
+  const scan = mining.view().scan;
+  if (scan && Date.now() - scan.at < ACTIVITY_MINING_MS) return "Mining";
+  return null;
+}
+function pushChatActivity(): void {
+  chat.setActivity(config.chatShareActivity ? chatActivityLabel() : null);
+}
+tracker.on("change", pushChatActivity);
+mining.on("change", pushChatActivity);
+setInterval(pushChatActivity, 60_000).unref();
 
 // Is SubliminalsTV live on Twitch? Polled via sc-feed's public twitch proxy (which holds the
 // Twitch credentials) so the distributed app never embeds secrets. Drives the overlay diamond
@@ -1877,6 +1914,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     res.end(JSON.stringify({
       ...chat.view(),
       open: config.chatOpen,
+      shareActivity: config.chatShareActivity,
       hasIdentity: !!(config.chatHandle || config.syncToken),
       hasToken: !!config.syncToken,
       handle: config.chatHandle,
@@ -2204,6 +2242,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
     }
     if (typeof body.bindingChartOpen === "boolean") config.bindingChartOpen = body.bindingChartOpen;
     if (typeof body.chatOpen === "boolean") config.chatOpen = body.chatOpen;
+    if (typeof body.chatShareActivity === "boolean") {
+      config.chatShareActivity = body.chatShareActivity;
+      // Apply it NOW, not on the next mission event. Turning it OFF has to take effect
+      // immediately — a privacy switch that waits for something to happen is not a switch.
+      pushChatActivity();
+    }
     // ws/wss only — this string becomes an outbound WebSocket dial.
     const wsUrl = (v: unknown, fallback: string): string => {
       if (typeof v !== "string") return fallback;

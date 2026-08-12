@@ -37,6 +37,9 @@
 //        {t:"dm", to, text}                    private message to one handle
 //        {t:"dmlist"}                          ask for this handle's conversations
 //        {t:"leave", ch}                       custom rooms + DMs (auto/org follow identity)
+//        {t:"activity", activity}              what you are doing, off game.log. OPT-IN at the
+//                                              client; null clears. 48 chars, charged against
+//                                              the message budget, unchanged values are free.
 //   s→c  {t:"welcome", you:{...}, categories}  hello accepted; categories = the activity list
 //        {t:"joined", ch, label?, kind?}       membership changes (always server-initiated)
 //        {t:"roominfo", ch, category,          the room you just joined; `code` ONLY for a
@@ -48,7 +51,8 @@
 //        {t:"history", ch, msgs:[Msg]}         last messages, follows joined
 //        {t:"msg", ...Msg}                     live message (Msg = {ch,id,from,text,at})
 //        {t:"presence", ch, count, members}    unique handles in the room, debounced;
-//                                              members = [{handle,verified}] capped at 200
+//                                              members = [{handle,verified,activity?}], capped
+//                                              at 200. `activity` is OMITTED when not shared.
 //        {t:"dir", channels}                   the PUBLIC custom-room directory
 //                                              [{ch,label,category,count}], on welcome +
 //                                              debounced on change. Private rooms are absent.
@@ -62,6 +66,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { createStore, dmKey } from "./store.mjs";
+import { createAutomod } from "./automod.mjs";
+import { createModLink } from "./modlink.mjs";
 
 const PORT = Number(process.env.CHAT_PORT) || 8788;
 const AUTH_MODE = process.env.CHAT_AUTH === "site" ? "site" : "dev";
@@ -69,6 +75,9 @@ const AUTH_URL = process.env.CHAT_AUTH_URL || "https://subliminal.gg/api/sc/chat
 const HISTORY_KEEP = 200;   // ring size per room
 const HISTORY_SEND = 50;    // sent on join
 const MSG_MAX = 400;        // chars
+// A member row is one line in a narrow rail; anything longer is truncated on screen anyway, and
+// a generous cap would just make presence a second, cheaper message channel.
+const ACTIVITY_MAX = 48;
 const RATE_N = 5, RATE_WINDOW_MS = 10_000; // msgs per window per connection
 // Access ATTEMPTS (join / dm / invite / delete) get their own, tighter budget. A legitimate
 // client sends a handful of joins on connect and then almost none; a code-guesser sends
@@ -92,6 +101,33 @@ const PRUNE_EVERY_MS = 3600_000;
 // (which is what keeps the test suite hermetic). See store.mjs.
 const store = createStore({ dataDir, databaseUrl: process.env.DATABASE_URL, log: console });
 const loaded = await store.init();
+
+// ── Moderation ──────────────────────────────────────────────────────────────
+// Auto-mod is the plan; reports are the backstop. Both feed ONE outbound link to the portal.
+// 🔑 Every env here is optional and every one of them defaults to the behaviour that existed
+// before this feature: no list means no auto-moderation, no URL means no push, no secret means
+// no link at all. Nothing about a plain `docker run` of this server changes.
+const automod = createAutomod({
+  file: process.env.AUTOMOD_LIST,
+  mode: process.env.AUTOMOD_MODE || "off",
+  log: console,
+});
+const modlink = createModLink({
+  webhookUrl: process.env.REPORT_WEBHOOK_URL,
+  actionUrl: process.env.MOD_ACTION_URL,
+  secret: process.env.MOD_SHARED_SECRET,
+  pollMs: Number(process.env.MOD_POLL_MS) || undefined,
+  log: console,
+  // The portal can do exactly two things to this server, and both are idempotent — an
+  // un-acked action is redelivered, so "ban someone already banned" has to be a no-op.
+  onAction: async (row) => {
+    const handle = String(row?.handle ?? "").toLowerCase();
+    if (!HANDLE_RE.test(handle)) throw new Error("bad handle");
+    if (row?.action === "ban") applyBan(handle);
+    else if (row?.action === "unban") liftBan(handle);
+    else throw new Error(`unknown action ${row?.action}`);
+  },
+});
 
 /** Bans — lowercase handles. The whole point of the RSI-verify gate is that these stick. */
 const bans = loaded.bans;
@@ -315,7 +351,16 @@ function presence(ch) {
     // One row per HANDLE (a second window isn't a second person), capped for frame size —
     // the count stays exact past the cap.
     const seen = new Map();
-    for (const c of r.members) if (!seen.has(c.handleLower)) seen.set(c.handleLower, { handle: c.handle, verified: c.verified });
+    // 🔑 `activity` is OMITTED when absent rather than sent as null. Every shipped client
+    // ignores unknown fields, so adding one is safe — but a null on every row would make an
+    // older widget's "does this member have an activity" check answer differently from a newer
+    // one's for the same person, and the protocol has to stay boringly backward compatible.
+    for (const c of r.members) {
+      if (seen.has(c.handleLower)) continue;
+      const m = { handle: c.handle, verified: c.verified };
+      if (c.activity) m.activity = c.activity;
+      seen.set(c.handleLower, m);
+    }
     roomSend(ch, { t: "presence", ch, count: seen.size, members: [...seen.values()].slice(0, MEMBERS_CAP) });
     if (ch.startsWith("custom:")) broadcastDir();
   }, 250);
@@ -363,6 +408,24 @@ function deliver(conn, ch, raw) {
   const cleaned = String(raw ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim();
   const text = [...cleaned].slice(0, MSG_MAX).join("");
   if (!text) { conn.send({ t: "error", code: "bad_msg", message: "Empty message." }); return null; }
+  // Auto-moderation runs on the FINAL text, after cleaning and truncation, so what is judged is
+  // exactly what would have been broadcast. A hit never reaches the room in either mode — a
+  // "flag" that still published the message would be surveillance rather than moderation.
+  // 🔑 The rate stamp is pushed FIRST so a refused message still costs its quota; without that,
+  // matching text is the one thing you can send as fast as you like.
+  const hit = automod.scan(text);
+  if (hit) {
+    conn.stamps.push(now);
+    const willBan = automod.mode === "ban";
+    recordModEvent({
+      kind: willBan ? "autoban" : "autoflag",
+      ch, about: conn.handleLower, by: "automod",
+      reason: `word list: ${hit.term}`, text, banned: willBan,
+    });
+    if (willBan) applyBan(conn.handleLower);
+    else conn.send({ t: "error", code: "bad_msg", message: "That message wasn't sent." });
+    return null;
+  }
   conn.stamps.push(now);
   const msg = { ch, id: nextMsgId++, from: { handle: conn.handle, verified: conn.verified }, text, at: new Date().toISOString() };
   const r = room(ch);
@@ -383,6 +446,37 @@ function setPin(ch, pin) {
   // 🔑 `pin: null` is a real value here, not an omission — an unpin has to REACH clients, and a
   // frame that simply left the field out would leave the old banner sitting there forever.
   roomSend(ch, { t: "pin", ch, pin: pin ?? null });
+}
+
+/** Ban a handle: remember it, persist it, and evict every connection holding it.
+ *  Shared by the loopback /admin/ban route, the portal's queued action, and auto-moderation, so
+ *  a ban means exactly one thing however it was decided — the same reasoning as destroyRoom.
+ *  🔑 Idempotent on purpose. A queued action that we applied but failed to ACK is redelivered,
+ *  so re-banning has to be free; `bans` is a Set and the store insert is ON CONFLICT DO NOTHING. */
+function applyBan(handle) {
+  bans.add(handle);
+  for (const c of conns) if (c.handleLower === handle) { c.send({ t: "error", code: "banned", message: "You have been banned." }); c.ws.close(); }
+  store.saveBan(handle);
+  return true;
+}
+function liftBan(handle) {
+  bans.delete(handle);
+  store.deleteBan(handle);
+  return true;
+}
+
+/** Record one moderation event and tell the portal about it.
+ *
+ *  🔑 An auto-ban writes the SAME SHAPE as a player report — same table, same snapshotted
+ *  message text — because Sub's requirement for reviewing one is his requirement for reviewing
+ *  the other: "take a look at the message and decide if I want to unban." A ban with no evidence
+ *  attached cannot be reviewed at all, and by the time anyone looks, scrollback has been pruned.
+ *  🔑 The row is written FIRST and the push is not awaited: the record is what matters, the
+ *  Discord ping is a convenience, and neither is allowed to sit in front of a live message. */
+function recordModEvent({ kind, ch, about, by, reason, id = null, text = null, banned = false }) {
+  const at = Date.now();
+  store.saveReport({ ch, about, by, reason, id, text, at });
+  modlink.push({ kind, ch, about, by, reason, msgId: id, text, banned, at, mode: automod.mode });
 }
 
 /** Wipe a custom room: evict everyone, drop it from the directory, delete it and its messages.
@@ -560,11 +654,7 @@ const server = createServer(async (req, res) => {
   if ((url === "/admin/ban" || url === "/admin/unban") && req.method === "POST") {
     const handle = String((await readBody(req)).handle ?? "").toLowerCase();
     if (!HANDLE_RE.test(handle)) { res.writeHead(400); res.end(); return; }
-    if (url === "/admin/ban") {
-      bans.add(handle);
-      for (const c of conns) if (c.handleLower === handle) { c.send({ t: "error", code: "banned", message: "You have been banned." }); c.ws.close(); }
-      store.saveBan(handle);
-    } else { bans.delete(handle); store.deleteBan(handle); }
+    if (url === "/admin/ban") applyBan(handle); else liftBan(handle);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, bans: bans.size }));
     return;
@@ -632,6 +722,10 @@ wss.on("connection", (ws) => {
   const conn = {
     ws,
     handle: null, handleLower: null, verified: false,
+    // What this player is doing, as their own client chose to describe it. OPT-IN at the
+    // client — an absent activity is the normal, expected state and means nothing more than
+    // "not sharing", never "idle".
+    activity: null,
     channels: new Set(),
     orgSid: null, token: null, // org membership + the token used to re-check it
     stamps: [], // send timestamps for the message rate limit
@@ -702,6 +796,30 @@ wss.on("connection", (ws) => {
       for (const ch of [...conn.channels])
         if ((ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dgs:")) && !want.has(ch)) leaveRoom(conn, ch);
       for (const ch of want) joinRoom(conn, ch);
+      return;
+    }
+
+    // ── what you are doing ───────────────────────────────────────────────
+    // The friends list and the member rail are the only places this shows, and it is the one
+    // thing an external chat can offer that the game's own social panel will not: it comes off
+    // game.log. Sharing it is OPT-IN at the client and null clears it.
+    //
+    // 🔴 This is a short string broadcast to every member of every channel you are in, so it
+    // has to cost something. It is charged against the MESSAGE budget: setting an activity is
+    // at most as cheap as saying it out loud, which is the bar a would-be spammer has to beat
+    // for this to be worth abusing. An unchanged value is free — clients re-send on reconnect
+    // and on every log event, and none of that should burn quota.
+    if (f.t === "activity") {
+      const raw = f.activity === null || f.activity === undefined ? null : String(f.activity);
+      const cleaned = raw === null ? null
+        : ([...raw.replace(/[\x00-\x1f\x7f]/g, " ").trim()].slice(0, ACTIVITY_MAX).join("") || null);
+      if (cleaned === conn.activity) return;
+      if (!underRate(conn)) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return; }
+      conn.stamps.push(Date.now());
+      conn.activity = cleaned;
+      // Every room they are in has a member list that just went stale. presence() debounces per
+      // room, so a player in eight channels costs eight debounced frames, not eight immediate ones.
+      for (const ch of conn.channels) presence(ch);
       return;
     }
 
@@ -914,10 +1032,12 @@ wss.on("connection", (ws) => {
       conn.stamps.push(Date.now());
       const id = Number.isFinite(Number(f.id)) ? Number(f.id) : null;
       const src = id === null ? null : room(ch).history.find((m) => m.id === id);
-      store.saveReport({
+      recordModEvent({
+        kind: "report",
         ch, about: about.toLowerCase(), by: conn.handleLower,
         reason: typeof f.reason === "string" ? f.reason.slice(0, 300) : null,
-        id, text: src ? src.text : null, at: Date.now(),
+        id, text: src ? src.text : null,
+        banned: bans.has(about.toLowerCase()),
       });
       conn.send({ t: "reported", ch, handle: about });
       return;
@@ -1038,5 +1158,8 @@ if (AUTH_MODE === "dev" && process.env.CHAT_ALLOW_DEV_AUTH !== "1") {
 
 server.listen(PORT, () => {
   console.log(`[chat-server] listening on :${PORT} (auth=${AUTH_MODE}, store=${store.mode}, `
-    + `rooms=${customDir.size}, bans=${bans.size})`);
+    + `rooms=${customDir.size}, bans=${bans.size}, automod=${automod.mode}/${automod.size})`);
+  // Started AFTER listen so a poll can never race the boot, and no-op unless both the queue URL
+  // and the shared secret are set.
+  modlink.start();
 });

@@ -1620,6 +1620,130 @@ const ANGLE = `(async () => {
   return out;
 })()`;
 
+// ── Suite: split fade — the panel and its text, independently ──────────────────
+// 🔑 Half of these assertions exist because the FIRST attempt at this feature shipped a
+// regression that 545 green assertions did not notice. It put the surface layer on
+// ::after, which on a widget panel is already the skin's SHEEN, so the highlight
+// silently vanished in all 16 themes and the whole suite stayed green — nothing had
+// ever asserted the sheen exists. A green sweep is not coverage of what you changed.
+const SPLITFADE = `(async () => {
+  ${PRELUDE}
+  const saved = [];
+  window.overlayApi = Object.assign({}, window.overlayApi, {
+    saveWidget: (id, l) => saved.push([id, JSON.parse(JSON.stringify(l))]),
+  });
+  for (const w of WIDGETS) setWidgetVisible(w, true);
+  await sleep(1200);                        // iframes must LOAD before we can reach into them
+  const party = WBY.party, mining = WBY.mining, bp = WBY.blueprint;
+  const fdoc = (w) => document.getElementById("wf-" + w.key).contentDocument;
+  // 🔑 A hidden window never composites, so a TRANSITIONED property reads as its start value
+  // forever. The fade is transitioned on purpose, so transitions have to be switched off
+  // inside each frame before a single value is measured — otherwise every assertion below
+  // would read the pre-change number and the suite would pass while testing nothing.
+  const killT = (d) => {
+    const s = d.createElement("style");
+    s.textContent = "*{transition:none !important}";
+    d.head.appendChild(s);
+  };
+  killT(document); killT(fdoc(party)); killT(fdoc(mining));
+
+  // ── the regression that forced the revert ───────────────────────────────────
+  const pseudoBg = (d, which) => getComputedStyle(d.getElementById("panel"), which).backgroundImage;
+  const hasGradient = (s) => String(s).indexOf("gradient") >= 0;
+  ok("the Mining Scanner still has its skin sheen (::after)", hasGradient(pseudoBg(fdoc(mining), "::after")), pseudoBg(fdoc(mining), "::after").slice(0, 46));
+  ok("...and so does the tracker", hasGradient(pseudoBg(document, "::after")), pseudoBg(document, "::after").slice(0, 46));
+  ok("scanlines survive on a shared-sheet panel (::before)", hasGradient(pseudoBg(fdoc(party), "::before")), pseudoBg(fdoc(party), "::before").slice(0, 46));
+  ok("...and on the tracker", hasGradient(pseudoBg(document, "::before")));
+
+  // ── the two alphas are genuinely independent ────────────────────────────────
+  // Compared as whole computed strings rather than parsed alphas: the point is only whether a
+  // slider moved this property or left it alone, and string equality cannot be fooled by a
+  // rounding difference the way a hand-rolled alpha parser can.
+  const bgOf = (d) => getComputedStyle(d.getElementById("panel")).backgroundImage;
+  const headOf = (d) => Number(getComputedStyle(d.getElementById("panel").querySelector(".head")).opacity);
+  const setFade = (w, s, t) => { setWidgetDim(w, s * 100); setWidgetDimText(w, t * 100); };
+
+  setFade(party, 1, 1);
+  const bgFull = bgOf(fdoc(party)), headFull = headOf(fdoc(party));
+  setFade(party, 0.3, 1);
+  const bgGhost = bgOf(fdoc(party)), headGhost = headOf(fdoc(party));
+  setFade(party, 1, 0.3);
+  const bgSolid = bgOf(fdoc(party)), headFaint = headOf(fdoc(party));
+
+  ok("the panel fill follows the PANEL slider", bgGhost !== bgFull);
+  ok("...and ignores the TEXT slider", bgSolid === bgFull);
+  ok("the content follows the TEXT slider", headFaint < 0.9, headFaint);
+  ok("...and ignores the PANEL slider", headGhost > 0.99, headGhost);
+  ok("the panel is unchanged at rest", headFull === 1 && hasGradient(bgFull));
+  // The case the whole rebuild exists for. With one opacity the widget composites as a single
+  // unit so text can only ever be DIMMER than its panel; with a nested one the two multiply.
+  // Either way this combination does not exist at any setting.
+  ok("a faint panel carrying FULL-strength text is reachable", bgGhost !== bgFull && headGhost > 0.99);
+  ok("the wrapper carries no opacity of its own, so nothing multiplies",
+     getComputedStyle(el(party)).opacity === "1", getComputedStyle(el(party)).opacity);
+
+  // ── hover, which is no longer a CSS rule ────────────────────────────────────
+  setFade(party, 0.3, 0.3);
+  ok("full-on-hover defaults ON", wHoverFull(party));
+  el(party).classList.add("touched"); applyFade(party);
+  ok("engaging a widget restores it to full", bgOf(fdoc(party)) === bgFull);
+  el(party).classList.remove("touched"); applyFade(party);
+  ok("...and letting go fades it again", bgOf(fdoc(party)) !== bgFull);
+  setWidgetHoverFull(party, false);
+  ok("the preference is stored per widget", !wHoverFull(party));
+  el(party).classList.add("touched"); applyFade(party);
+  ok("interaction restores it even with full-on-hover OFF", bgOf(fdoc(party)) === bgFull,
+     "the switch is about the cursor crossing, never about the widget you are using");
+  el(party).classList.remove("touched"); setWidgetHoverFull(party, true);
+
+  // Arrange mode and the override hotkey have to reach INSIDE the frame now — html.no-dim
+  // cannot cross the boundary, so a CSS-only override would leave every widget ghosted while
+  // you tried to place it.
+  document.documentElement.classList.add("no-dim"); applyAllFades();
+  ok("the fade override reaches into the frames", bgOf(fdoc(party)) === bgFull);
+  document.documentElement.classList.remove("no-dim"); applyAllFades();
+  ok("...and lifting it fades them again", bgOf(fdoc(party)) !== bgFull);
+
+  // ── inheritance, so one slider still behaves like the control it replaces ───
+  bp.s.dim = null; bp.s.dimText = null;
+  setWidgetDim(bp, 40);
+  ok("text inherits the PANEL value when it has no opinion", Math.abs(wDimText(bp) - 0.4) < 0.001, wDimText(bp));
+  setWidgetDimText(bp, 100);
+  ok("...and stops inheriting the moment it is set", wDimText(bp) === 1 && Math.abs(wDim(bp) - 0.4) < 0.001);
+
+  // The tracker is local to THIS document, which hosts every other widget too.
+  ok("the tracker fades on its own panel, never on :root",
+     document.getElementById("panel").style.getPropertyValue("--wsurf") !== ""
+     && document.documentElement.style.getPropertyValue("--wsurf") === "",
+     "root=[" + document.documentElement.style.getPropertyValue("--wsurf") + "]");
+
+  // ── persistence ─────────────────────────────────────────────────────────────
+  saved.length = 0;
+  persistW(party);
+  const rec = saved.find((s) => s[0] === "party");
+  ok("all three values persist", !!rec && "dim" in rec[1] && "dimText" in rec[1] && "hoverFull" in rec[1],
+     rec ? Object.keys(rec[1]).join(",") : "nothing saved");
+  // 🔑 persistW, not persistLayout: the fade is per WIDGET, but persistLayout writes to the
+  // GROUP when one is stacked, so a grouped widget used to save its fade where nothing read
+  // it back and silently forgot the setting on restart.
+  saved.length = 0;
+  groupWidgets(party, mining);
+  await sleep(60);
+  setWidgetDim(party, 45); persistW(party);
+  ok("a STACKED widget still saves its fade to itself",
+     saved.some((s) => s[0] === "party" && s[1] && s[1].dim === 0.45), saved.map((s) => s[0]).join(","));
+  while (GROUPS.length) detachFromGroup(WBY[GROUPS[0].active]);
+
+  // ── notifiers keep the old single-opacity path ──────────────────────────────
+  const alert = WBY.unlockAlert;
+  ok("a notifier is not split (it has no widget panel)",
+     el(alert).style.getPropertyValue("--wsurf") === "" && el(alert).style.getPropertyValue("--wdim") !== "",
+     "wdim=[" + el(alert).style.getPropertyValue("--wdim") + "]");
+
+  for (const w of WIDGETS) resetWidget(w);
+  return out;
+})()`;
+
 // A widget's settings popover closes itself after 15s of not being used (Sub, 2026-08-03). Not just
 // tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box over the game, and it
 // masks the Web Page widget's native view for as long as it is up.
@@ -2301,6 +2425,42 @@ const CHATLINKS = `(async () => {
      items.join(" | "));
   closeCtx();
 
+  // ── what someone is doing, when they have chosen to share it ─────────────
+  // 🔑 The interesting assertion is the NEGATIVE one. Almost nobody will turn this on, so the
+  // row with no activity is the common case — and rendering anything at all in its place
+  // ("idle", a dash) would be a confident claim about someone we know nothing about.
+  view.channels[0].members = [
+    { handle: "Rytharr", verified: true, activity: "Running Deep space hit" },
+    { handle: "IMC-Subliminal", verified: true },
+  ];
+  renderMembers();
+  const acRowOf = (h) => [...document.querySelectorAll("#memList .mrow")]
+    .find((r) => r.querySelector(".nm")?.textContent === h);
+  ok("a shared activity shows on that person's row",
+     acRowOf("Rytharr").querySelector(".act")?.textContent === "Running Deep space hit",
+     acRowOf("Rytharr").querySelector(".act")?.textContent);
+  ok("...and someone not sharing gets NOTHING in its place, not a placeholder",
+     !acRowOf("IMC-Subliminal").querySelector(".act"));
+
+  // The switch is a per-USER privacy choice, so it sits with the rail that shows the effect —
+  // not in the per-channel cog.
+  view.shareActivity = false;
+  renderMembers();
+  ok("the share switch reads off by default",
+     $("shareAct").getAttribute("aria-pressed") === "false", $("shareAct").getAttribute("aria-pressed"));
+  // 🔑 The tooltip must say WHAT would be published. "Share my activity" invites a shrug; the
+  // contract you are running is something a person can actually decide about.
+  ok("...and says what turning it on would publish",
+     /contract/i.test($("shareAct").title), $("shareAct").title);
+  view.shareActivity = true;
+  renderMembers();
+  ok("...and lights up when it is on",
+     $("shareAct").getAttribute("aria-pressed") === "true"
+       && /Click to stop/i.test($("shareAct").title), $("shareAct").title);
+  view.shareActivity = false;
+  view.channels[0].members = [{ handle: "Rytharr", verified: true }, { handle: "IMC-Subliminal", verified: true }];
+  renderMembers();
+
   // ── per-channel notification mute ────────────────────────────────────────
   const savedMuted = localStorage.getItem("chatMuted");
   mutedChans = new Set();
@@ -2545,15 +2705,211 @@ const CHATLINKS = `(async () => {
   ok("the TAB carries the count, so it is seen without opening the cog",
      pfTab?.querySelector(".apps")?.textContent === "2", pfTab?.querySelector(".apps")?.textContent);
 
+  // 🔴 The applicant bar — Sub's own question about this feature: the cog may be the wrong home,
+  // because an application arriving mid-mission is invisible inside a popover and the applicant
+  // waits on an owner who never knew. The cog keeps the full list; the bar is the part that must
+  // not need opening.
+  setChanSettings(false);
+  renderApps();
+  const abBar = $("appbar");
+  ok("pending applications show IN the room, not only behind the cog", abBar.hidden === false);
+  ok("...counting them when there is more than one",
+     /2 people want in/.test($("appText").textContent), $("appText").textContent);
+  ok("...offering Review rather than a guess at which one you meant",
+     $("appMore").hidden === false && $("appYes").hidden === true, $("appText").textContent);
+
+  pfMine.applications = [{ handle: "seeker", note: "have a Prospector", at: Date.now() }];
+  renderApps();
+  ok("one applicant is named on the bar, with their note",
+     /seeker/.test($("appText").textContent) && /have a Prospector/.test($("appText").textContent),
+     $("appText").textContent);
+  ok("...and is actionable without opening anything",
+     $("appYes").hidden === false && $("appNo").hidden === false && $("appMore").hidden === true);
+  // 🔑 The handle is read off the bar at CLICK time, never captured in a listener — a render
+  // between seeing a name and pressing Accept must not admit the person who used to be there.
+  ok("...with the handle carried on the bar itself", abBar.dataset.handle === "seeker", abBar.dataset.handle);
+
   pfMine.owner = "someoneelse";
-  renderChanSettings(); renderTabs();
+  renderChanSettings(); renderTabs(); renderApps();
   ok("a non-owner is shown no applicant list", $("csAppsRow").hidden === true);
+  ok("...and no bar either", abBar.hidden === true);
+  // 🔑 The bare attribute is not enough when any rule sets display — the shipped 0.1.38 bug.
+  ok("...with a real [hidden] guard behind it, not just the attribute",
+     getComputedStyle(abBar).display === "none", getComputedStyle(abBar).display);
   const pfTab2 = [...document.querySelectorAll("#tabs .tab")].find((t) => /Halo Run/.test(t.textContent));
   ok("...and no tab marker either", !pfTab2?.querySelector(".apps"));
   setChanSettings(false);
   view.channels.pop();
+
+  // A new applicant in a room you are NOT looking at has to reach you somehow.
+  const abRoom = { ch: "custom:other-run", kind: "custom", label: "Other Run", count: 1, members: [], msgs: [],
+                   privacy: "public", owner: myHandle.toLowerCase(), party: true, joinMode: "apply",
+                   applications: [{ handle: "newbie", note: null, at: Date.now() }] };
+  view.channels.push(abRoom);
+  activeCh = gCh.ch;
+  unread.delete(abRoom.ch); seenApps.delete(abRoom.ch);
+  noteApplications();
+  // 🔑 First sight seeds SILENTLY. This iframe reloads on every regroup and the server re-sends
+  // the whole list on join, so without it a stack, a restart or an arrange pass would re-announce
+  // applicants the owner already dealt with — the same trap the mining scanner hit on mount.
+  ok("a room seen for the first time does not shout about applicants it already had",
+     !unread.has(abRoom.ch));
+  abRoom.applications.push({ handle: "second", note: null, at: Date.now() });
+  noteApplications();
+  ok("...but a genuinely new one lights the unread dot from another tab", unread.has(abRoom.ch));
+  unread.delete(abRoom.ch);
+  activeCh = abRoom.ch;
+  abRoom.applications.push({ handle: "third", note: null, at: Date.now() });
+  noteApplications();
+  ok("...and never while you are looking at that room — the bar is already saying it",
+     !unread.has(abRoom.ch));
+  activeCh = gCh.ch;
+  view.channels.pop();
+  seenApps.delete(abRoom.ch);
+  renderApps();
   view.directory = [];
   activeCh = gCh.ch;
+
+  // ── what the create form actually SENDS, and what a board row DOES ───────
+  // 🔑 Everything above this point asserts what the party UI LOOKS like. None of it could
+  // catch the two things that matter most about it: which location leaves the machine, and
+  // whether clicking an apply-only listing sends a join we know will bounce. Both are request
+  // bodies, so the only way to test them is to be the server.
+  const crPost = post;                 // function declaration in page scope — reassignable
+  let crSent = null;
+  post = async (path, body) => { crSent = { path, body: JSON.parse(JSON.stringify(body)) }; return true; };
+  try {
+    setCreatePop(true);
+    await sleep(60);
+    $("cpName").value = "Halo Mining Run";
+
+    // 🔑 A <select> silently defaults to its FIRST option, so "nobody touched it" is whatever
+    // happens to be listed first rather than a considered default. Assert the defaults rather
+    // than assuming the markup order is the intent.
+    ok("joining defaults to open", $("cpJoin").value === "open", $("cpJoin").value);
+    ok("voice defaults to none — we host no voice and must not imply otherwise",
+       $("cpVoice").value === "none", $("cpVoice").value);
+
+    // An ordinary room is an ordinary room: no listing fields ride along uninvited.
+    $("cpParty").checked = false;
+    syncPartyFields();
+    await createRoom();
+    ok("creating a plain room sends no listing fields at all",
+       crSent.path === "/api/chat/join" && crSent.body.mode === "create"
+         && crSent.body.party === undefined && crSent.body.minutes === undefined,
+       JSON.stringify(crSent.body));
+
+    // 🔴 THE PRIVACY CALL, and the one assertion in this file worth the most: publishing your
+    // shard is OPT-IN PER LISTING (Sub, 2026-08-10). Unticked, only what they typed goes out —
+    // merely having the widget open, or having a region known, must leak nothing.
+    view.shard = "pub_use1b_12326004_040"; view.regionLabel = "US East 1B";
+    $("cpName").value = "Halo Mining Run";
+    $("cpParty").checked = true;
+    syncPartyFields();
+    $("cpWhere").value = "Aaron Halo";
+    $("cpHere").checked = false;
+    syncPartyFields();
+    await createRoom();
+    ok("with the opt-in OFF, the real region never leaves the machine",
+       crSent.body.location === "Aaron Halo", JSON.stringify(crSent.body.location));
+    ok("...and the listing fields are all present",
+       crSent.body.party === true && crSent.body.joinMode === "open" && crSent.body.voice === "none"
+         && crSent.body.sizeMax === 4,
+       JSON.stringify(crSent.body));
+    // 🔑 A DURATION, never an expiresAt. A wall-clock stamp off a machine we do not control is a
+    // listing that never expires or is dead on arrival, and desktop clocks are wrong often
+    // enough for that to look random rather than broken.
+    ok("expiry is sent as minutes, not as a wall-clock time",
+       typeof crSent.body.minutes === "number" && crSent.body.minutes === 120
+         && crSent.body.expiresAt === undefined && crSent.body.expires_at === undefined,
+       JSON.stringify(crSent.body.minutes));
+
+    $("cpName").value = "Halo Mining Run";
+    $("cpParty").checked = true;
+    $("cpHere").checked = true;
+    syncPartyFields();
+    ok("ticking it takes the free-text field out of play, so the two can't disagree",
+       $("cpWhere").disabled === true);
+    await createRoom();
+    ok("...and THEN the real region is what publishes",
+       crSent.body.location === "US East 1B", JSON.stringify(crSent.body.location));
+
+    $("cpHere").checked = false; $("cpParty").checked = false;
+    syncPartyFields();
+    setCreatePop(false);
+
+    // ── clicking a row ────────────────────────────────────────────────────
+    view.directory = [
+      { ch: "custom:open-run", label: "Open Run", category: "mining", count: 2,
+        party: true, joinMode: "open", sizeMax: 4 },
+      { ch: "custom:ask-run", label: "Ask Run", category: "mining", count: 1,
+        party: true, joinMode: "apply", sizeMax: 6 },
+    ];
+    collapsed.delete("browse");
+    renderChannels();
+    const crRowOf = (label) => [...document.querySelectorAll("#chanList .crow")]
+      .find((r) => r.querySelector(".nm")?.textContent === label);
+
+    ok("an open listing is flagged OPEN, not ASK",
+       crRowOf("Open Run").querySelector(".pflag")?.textContent === "OPEN",
+       crRowOf("Open Run").querySelector(".pflag")?.textContent);
+    // Anything absent is left out rather than rendered as an empty field — a listing carrying a
+    // bare separator reads as missing data, which on a board is worse than a shorter row.
+    ok("a listing with no location and no voice carries no meta line at all",
+       !crRowOf("Ask Run").querySelector(".pmeta"),
+       crRowOf("Ask Run").querySelector(".pmeta")?.textContent);
+
+    crSent = null;
+    crRowOf("Open Run").click();
+    await sleep(30);
+    ok("clicking an open listing joins it",
+       crSent && crSent.path === "/api/chat/join" && crSent.body.name === "Open Run"
+         && crSent.body.mode === "join",
+       JSON.stringify(crSent));
+
+    // 🔴 The UI half of the gate bug. The server refuses an apply-mode join by name — that
+    // refusal is what makes "you approve people" mean anything — but sending a join we KNOW
+    // will bounce, purely to show the user an error, is a worse experience than asking
+    // properly. This is the assertion that notices if the row handler is ever simplified.
+    crSent = null;
+    crRowOf("Ask Run").click();
+    await sleep(30);
+    ok("clicking an apply-only listing ASKS instead of trying to walk in",
+       crSent && crSent.path === "/api/chat/apply" && crSent.body.ch === "custom:ask-run",
+       JSON.stringify(crSent));
+    ok("...and the row says so before you click it",
+       /Ask to join/i.test(crRowOf("Ask Run").title), crRowOf("Ask Run").title);
+
+    // The bar's buttons go down the SAME path the cog's list uses — one way to admit someone,
+    // not two, so a fix to one can never leave the other behind.
+    const crMine = { ch: "custom:bar-run", kind: "custom", label: "Bar Run", count: 1, members: [], msgs: [],
+                     privacy: "public", owner: myHandle.toLowerCase(), party: true, joinMode: "apply",
+                     applications: [{ handle: "seeker", note: null, at: Date.now() }] };
+    view.channels.push(crMine);
+    activeCh = "custom:bar-run";
+    renderApps();
+    crSent = null;
+    $("appYes").click();
+    await sleep(30);
+    ok("accepting from the bar resolves that application",
+       crSent && crSent.path === "/api/chat/application" && crSent.body.handle === "seeker"
+         && crSent.body.accept === true,
+       JSON.stringify(crSent));
+    crSent = null;
+    $("appNo").click();
+    await sleep(30);
+    ok("...and No declines the same one", crSent && crSent.body.accept === false, JSON.stringify(crSent));
+    view.channels.pop();
+  } finally {
+    // Leave the page exactly as it was: this suite shares an origin and a live sidecar with the
+    // real overlay window, and a stubbed post() left behind would silently swallow real calls.
+    post = crPost;
+    view.directory = [];
+    $("cpName").value = "";
+    activeCh = gCh.ch;
+    setCreatePop(false);
+    renderChannels(); renderApps();
+  }
 
   // ── the bundled colour emoji font ────────────────────────────────────────
   // 🔑 Assert the font actually LOADS, not merely that the CSS mentions it. A 404 on the file
@@ -2701,6 +3057,7 @@ app.whenReady().then(async () => {
     fails += await run("chrome anchoring + latches", ANCHOR, path.join(__dirname, "widget-dom-stub-preload.cjs"));
     fails += await run("lifecycle: closed = idle", LIFECYCLE, null);
     fails += await run("per-widget angle", ANGLE, null);
+    fails += await run("split fade: panel vs text", SPLITFADE, null);
     fails += await run("cog auto-hide on game focus", COGHIDE,
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");

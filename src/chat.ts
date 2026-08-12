@@ -23,7 +23,14 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { regionOfShard } from "./missions-parser.js";
 
-export interface ChatIdentity { handle: string; verified: boolean }
+export interface ChatIdentity {
+  handle: string;
+  verified: boolean;
+  /** What they are doing, off their game.log — only present when they have opted in to sharing
+   *  it. 🔑 ABSENT means "not sharing", never "idle": most people will never turn this on, and a
+   *  UI that renders a blank as a state would be confidently wrong about almost everyone. */
+  activity?: string;
+}
 export interface ChatMsg {
   ch: string;
   id: number | string;
@@ -303,6 +310,27 @@ export class ChatClient extends EventEmitter {
     if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(frame));
   }
 
+  /** Publish what the player is doing, or null to stop.
+   *
+   *  🔴 OPT-IN, and the caller owns that decision — this method just sends what it is given.
+   *  The same rule as publishing your shard on a party listing (Sub, 2026-08-10): nothing may
+   *  leak from merely having the widget open.
+   *  🔑 Held so it can be RE-SENT on welcome. A reconnect is invisible to the user, and without
+   *  this their activity would silently vanish from every rail the first time the socket blipped
+   *  — which reads as the feature being broken, not as a reconnect. Same reason sendLoc is
+   *  re-run there. */
+  setActivity(activity: string | null): void {
+    const next = activity && activity.trim() ? activity.trim().slice(0, 48) : null;
+    if (next === this.activity) return;
+    this.activity = next;
+    this.sendActivity();
+  }
+  private activity: string | null = null;
+  private sendActivity(): void {
+    if (this.status !== "connected") return;
+    this.wsSend({ t: "activity", activity: this.activity });
+  }
+
   private sendLoc(): void {
     if (this.status !== "connected") return;
     // 🔑 The HASH goes on the wire, never the endpoint. The server keys the room on whatever
@@ -324,6 +352,8 @@ export class ChatClient extends EventEmitter {
         this.you = f.you ?? null;
         if (Array.isArray(f.categories)) this.categories = f.categories;
         this.sendLoc();
+        // Only sends anything if the user actually turned it on — null is a no-op on the server.
+        if (this.activity) this.sendActivity();
         // Rejoin the user's custom rooms — this is what makes a reconnect (or app restart)
         // land back in the same channels instead of just Global.
         for (const name of this.customRooms) this.wsSend({ t: "join", name });
