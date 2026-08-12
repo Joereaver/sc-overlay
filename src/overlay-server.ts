@@ -320,6 +320,13 @@ interface Config {
    *  This is the one thing an external chat can show that the game's own social panel cannot —
    *  it comes off game.log — which is exactly why it has to be asked for rather than assumed. */
   chatShareActivity: boolean;
+  /** Be invisible in the channels that identify WHERE you are — your server (region) and Nearby
+   *  (DGS). Global, your org and custom rooms are unaffected: this hides a location, not a
+   *  person.
+   *  🔑 Enforced by not SENDING the location at all (see ChatClient.setHideLocation), so the
+   *  shard never reaches a machine the player does not own. A server-side "hide me" flag would
+   *  still have published it and merely declined to show it. */
+  chatHideLocation: boolean;
   /** First-run setup wizard: every step is resolved (done or explicitly skipped). Set when the
    *  wizard is finished; the wizard never auto-opens again once true. */
   setupDone: boolean;
@@ -406,6 +413,7 @@ const DEFAULTS: Config = {
   chatHandle: "",
   chatChannels: [],
   chatShareActivity: false,
+  chatHideLocation: false,
   setupDone: false,
   setupSettingsReviewed: false,
   setupShareResolved: false,
@@ -1097,6 +1105,9 @@ chat.on("sse", (frame: unknown) => {
  *  connect AS, so stay off and let the widget show its verify prompt. */
 function chatConfigure(): void {
   const active = config.chatOpen && !!(config.chatHandle || config.syncToken);
+  // 🔑 Applied BEFORE the socket is armed, so a restart never leaks one location frame on the
+  // way to honouring the setting. `sendLoc()` runs on `welcome`, which is early enough to matter.
+  chat.setHideLocation(config.chatHideLocation);
   chat.configure({
     url: config.chatServerUrl,
     handle: config.chatHandle,
@@ -2171,6 +2182,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       ...chat.view(),
       open: config.chatOpen,
       shareActivity: config.chatShareActivity,
+      hideLocation: config.chatHideLocation,
       hasIdentity: !!(config.chatHandle || config.syncToken),
       hasToken: !!config.syncToken,
       handle: config.chatHandle,
@@ -2204,7 +2216,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
        || url === "/api/chat/dm" || url === "/api/chat/dmlist"
        || url === "/api/chat/pin" || url === "/api/chat/unpin" || url === "/api/chat/report"
        || url === "/api/chat/apply" || url === "/api/chat/application"
-       || url === "/api/chat/color"
+       || url === "/api/chat/color" || url === "/api/chat/hide-location"
        || url === "/api/chat/delete-room") && req.method === "POST") {
     if (!fromThisMachine(req)) {
       res.writeHead(403, { "Content-Type": "application/json" });
@@ -2235,6 +2247,11 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       // Your name colour, as everyone else will see it — so it belongs in the same
       // "acts with the user's identity" group as the rest, not on the LAN.
       : url.endsWith("/color") ? (chat.setColor(body.color === null ? null : Number(body.color)), true)
+      // Persisted, because a privacy choice that forgets itself on restart is not one. The
+      // sidecar owns the socket, so this is also the only place that CAN enforce it.
+      : url.endsWith("/hide-location") ? ((config.chatHideLocation = body.hide !== false),
+                                          chat.setHideLocation(config.chatHideLocation),
+                                          void saveConfig(), true)
       : url.endsWith("/apply") ? chat.apply(String(body.ch ?? ""), body.note ? String(body.note) : undefined)
       : url.endsWith("/application") ? chat.resolveApplication(
         String(body.ch ?? ""), String(body.handle ?? ""), body.accept === true)

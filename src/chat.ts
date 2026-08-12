@@ -363,8 +363,32 @@ export class ChatClient extends EventEmitter {
     this.wsSend({ t: "activity", activity: this.activity });
   }
 
+  /** Be invisible in the channels that identify where you are — your server (region) and Nearby
+   *  (DGS). Sub's ask, 2026-08-12.
+   *
+   *  🔴 IMPLEMENTED BY NOT SENDING, never by asking the server to hide you. A server-side flag
+   *  would mean the shard you are on still travels to a machine you do not own and is merely
+   *  not shown — which is not what "invisible" means to the person ticking it. This way the only
+   *  thing the server ever learns is that you left, and the same reasoning already governs the
+   *  DGS endpoint (hashed client-side because a key is broadcast to everyone in the room).
+   *  🔑 Turning it ON must PUSH a null location, not just stop sending: rooms you are already in
+   *  do not empty themselves, and "it takes effect next time you change shard" is not a privacy
+   *  switch. */
+  setHideLocation(hide: boolean): void {
+    const next = !!hide;
+    if (next === this.hideLocation) return;
+    this.hideLocation = next;
+    if (this.status !== "connected") return;
+    if (next) this.wsSend({ t: "loc", region: null, shard: null, dgs: null });
+    else this.sendLoc();
+  }
+  private hideLocation = false;
+
   private sendLoc(): void {
     if (this.status !== "connected") return;
+    // Nothing about where this player is may leave the process while they are hidden — including
+    // on a reconnect, which is where a flag checked only at the call site would leak it.
+    if (this.hideLocation) return;
     // 🔑 The HASH goes on the wire, never the endpoint. The server keys the room on whatever
     // it is given, so if the raw ip:port ever left this process it would be published to every
     // user of the channel.

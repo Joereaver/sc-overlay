@@ -2823,22 +2823,53 @@ const CHATLINKS = `(async () => {
   ok("...and someone not sharing gets NOTHING in its place, not a placeholder",
      !acRowOf("IMC-Subliminal").querySelector(".act"));
 
-  // The switch is a per-USER privacy choice, so it sits with the rail that shows the effect —
-  // not in the per-channel cog.
+  // ── YOUR settings, as opposed to the per-CHANNEL cog ─────────────────────
+  // Everything in here is about you and applies in every channel — which is the entire reason it
+  // is not beside a channel's mute.
   view.shareActivity = false;
-  renderMembers();
-  ok("the share switch reads off by default",
-     $("shareAct").getAttribute("aria-pressed") === "false", $("shareAct").getAttribute("aria-pressed"));
-  // 🔑 The tooltip must say WHAT would be published. "Share my activity" invites a shrug; the
+  view.hideLocation = false;
+  setMePop(true);
+  const mpRow = (label) => [...document.querySelectorAll("#mePop .mp-row")]
+    .find((r) => r.querySelector(".mp-lbl")?.textContent.indexOf(label) === 0);
+  const mpSw = (label) => mpRow(label)?.querySelector(".sw");
+
+  ok("your settings hold the three per-user choices",
+     !!mpRow("Hide where I am") && !!mpRow("Share what I'm doing") && !!mpRow("My name colour"));
+  ok("sharing what you're doing reads off by default",
+     mpSw("Share what I'm doing").getAttribute("aria-pressed") === "false");
+  // 🔑 The label must say WHAT would be published. "Share my activity" invites a shrug; the
   // contract you are running is something a person can actually decide about.
   ok("...and says what turning it on would publish",
-     /contract/i.test($("shareAct").title), $("shareAct").title);
+     /contract/i.test(mpRow("Share what I'm doing").textContent),
+     mpRow("Share what I'm doing").textContent);
   view.shareActivity = true;
-  renderMembers();
-  ok("...and lights up when it is on",
-     $("shareAct").getAttribute("aria-pressed") === "true"
-       && /Click to stop/i.test($("shareAct").title), $("shareAct").title);
+  renderMePop();
+  ok("...and reads on once it is", mpSw("Share what I'm doing").getAttribute("aria-pressed") === "true");
   view.shareActivity = false;
+
+  // 🔴 Invisible mode. The description has to name the CHANNELS it removes you from — "hide my
+  // location" could mean anything, and this one silently drops you out of two rooms.
+  ok("hiding your location is off by default",
+     mpSw("Hide where I am").getAttribute("aria-pressed") === "false");
+  ok("...and says which channels it takes you out of",
+     /Nearby/i.test(mpRow("Hide where I am").textContent)
+       && /server/i.test(mpRow("Hide where I am").textContent),
+     mpRow("Hide where I am").textContent);
+  view.hideLocation = true;
+  renderMePop();
+  ok("...and reads on once it is", mpSw("Hide where I am").getAttribute("aria-pressed") === "true");
+  view.hideLocation = false;
+  setMePop(false);
+  ok("your settings close again", !document.getElementById("mePop").classList.contains("open"));
+
+  // 🔑 No verified tick anywhere. Chat is RSI-verified accounts only, so a badge saying so is
+  // true of every row and therefore says nothing.
+  view.channels[0].members = [{ handle: "Rytharr", verified: true }, { handle: "IMC-Subliminal", verified: true }];
+  renderMembers();
+  renderLog();
+  ok("no RSI-verified tick on a member row — every row would have one",
+     !document.querySelector("#memList .vf"));
+  ok("...nor in the message log", !document.querySelector("#log .vf"));
 
   // ── the marker means ONLINE now, and the colour means identity ───────────
   // 🔴 The dot used to be a per-handle hash colour and Sub asked what the red one meant. It
@@ -2885,24 +2916,33 @@ const CHATLINKS = `(async () => {
   ];
   renderMembers();
   const orgOf = (h) => acRowOf(h).querySelector(".orgr");
-  ok("a rank shows as that many stars", orgOf("Rytharr").textContent === "★", orgOf("Rytharr").textContent);
-  ok("...and a leader shows five", orgOf("Xan-Man").textContent === "★★★★★", orgOf("Xan-Man").textContent);
-  // 🔑 The org's own word for the tier is real information and is kept — in the TOOLTIP, where
-  // it informs without inviting anything to compare "President" against "SSGT".
-  ok("the org's own name for the rank is on hover",
-     /Expendable Crew Member/.test(orgOf("Rytharr").title) && /PXP/.test(orgOf("Rytharr").title),
-     orgOf("Rytharr").title);
-  ok("...and says which of five, so the stars are unambiguous",
-     /5/.test(orgOf("Xan-Man").title), orgOf("Xan-Man").title);
+  // 🔴 In GLOBAL, nothing. A rank issued by one org means nothing to anyone outside it (Sub:
+  // "does it need to show on the global chat what rank you are? I think it'll be just fine in
+  // the person's org chat").
+  ok("no rank badge outside that org's own channel", !orgOf("Xan-Man"));
+
+  // In the org's OWN room it shows the org's own word for the tier — no asterisks, because
+  // inside the org everybody already knows what that word means.
+  view.channels[0].kind = "org";
+  renderMembers();
+  ok("in org chat, the badge is the org's own name for the rank",
+     orgOf("Rytharr").textContent === "Expendable Crew Member", orgOf("Rytharr").textContent);
+  ok("...with no asterisks anywhere in it", orgOf("Xan-Man").textContent.indexOf("*") < 0
+     && orgOf("Xan-Man").textContent === "President", orgOf("Xan-Man").textContent);
+  // The 1-5 stays in the data and rides the tooltip: it is what makes "who leads this org"
+  // answerable, but it is not what anyone reads.
+  ok("the comparable 1-5 is still there, on hover",
+     /5 of 5/.test(orgOf("Xan-Man").title), orgOf("Xan-Man").title);
   ok("someone with no public org gets no badge at all", !orgOf("Zed"));
+  view.channels[0].kind = "global";
+  renderMembers();
 
   // The picker: eight, plus a way back to no choice at all.
-  setColorPop(true);
-  const swatches = [...document.querySelectorAll("#colorPop button")];
+  setMePop(true);
+  const swatches = [...document.querySelectorAll("#mePop .mp-colors button")];
   ok("the picker offers eight colours plus 'no colour'", swatches.length === 9, swatches.length);
   ok("...and marks which one is yours", swatches.filter((b) => b.classList.contains("sel")).length === 1);
-  setColorPop(false);
-  ok("...and closes again", !document.getElementById("colorPop").classList.contains("open"));
+  setMePop(false);
 
   view.channels[0].members = [{ handle: "Rytharr", verified: true }, { handle: "IMC-Subliminal", verified: true }];
   renderMembers();
