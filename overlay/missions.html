@@ -2462,12 +2462,36 @@
       if (pickup) {
         // The count keeps the "there are others" signal compact; the info icon is what makes it
         // mean something, by naming them.
+        // 🔑 These places are one VARIANT, so they really do draw the pool shown above — but do
+        // NOT generalise that to "it doesn't matter where you take it". For 71 titles the place
+        // is exactly what decides the pool, which is what the Other pools row below is for.
         gRow("Pick up", escapeHtml(pickup.name)
           + (pickup.more
             ? ' <span class="mi-more">+' + pickup.more + "</span>"
-              + info("This contract is also offered at " + listWords(pickup.rest)
-                + ". It is the same contract wherever you take it from.")
+              + info("Also offered at " + listWords(pickup.rest)
+                + " — all of these draw the pool shown above.")
             : ""));
+      }
+      // 🔴 The pools you CANNOT get from here. Same contract name, different region, different
+      // blueprints — and finishing the list above is not finishing the contract (Sub, 2026-08-12:
+      // "I want people to know that they need to go to other places to wrap this pool up").
+      // Only ever present when the pools genuinely differ; 460 of the 540 multi-variant titles
+      // are one pool offered in several places, and sending someone across the system for
+      // blueprints they can already win here would be worse than saying nothing.
+      const others = v.otherPools || [];
+      if (others.length) {
+        const left = others.reduce((a, o) => a + (o.total - o.owned), 0);
+        const where = others
+          .map((o) => (o.places.length ? (o.places.find(isStation) || o.places[0]) : "elsewhere"))
+          .filter((p, i, a) => a.indexOf(p) === i);
+        const detail = others
+          .map((o) => (o.places.length ? listWords(o.places.slice(0, 4)) : "another region")
+            + " — " + o.owned + " of " + o.total + " owned")
+          .join("; ");
+        gRow("Other pools", escapeHtml(where.join(" · "))
+          + (left ? ' <span class="mi-more">' + left + " to go</span>" : "")
+          + info("This contract runs in other regions from a DIFFERENT blueprint pool, so finishing"
+            + " the pool above does not finish the contract. Take it from " + detail + "."));
       }
       const ship = flownShip(v);
       if (ship) gRow("Usually flown", escapeHtml(ship));

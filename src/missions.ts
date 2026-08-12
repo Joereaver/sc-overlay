@@ -294,6 +294,16 @@ export interface TrackedView {
    *  have no record of the mission at all, so treat it as "we are telling you it is illegal",
    *  never as "we are promising it is legal". */
   illegal: boolean;
+  /** Same-title variants of THIS contract whose blueprint pool genuinely differs from the one
+   *  being shown — i.e. the pools you can only reach by taking the contract somewhere else.
+   *  Empty for the common case.
+   *
+   *  🔑 This is the single most useful thing the dataset knows and the app never said. Measured
+   *  over 4,075 contracts: 540 titles have more than one variant, **80** have variants with
+   *  DIFFERENT pools, and for **71** of those the place you accept it decides which pool you
+   *  draw from. Sub, 2026-08-12: "I want people to know that they need to go to other places to
+   *  wrap this pool up." Without it, a completed pool looks like the end of the title. */
+  otherPools: { places: string[]; total: number; owned: number }[];
   /** The reputation rank the GIVER requires before offering this (0,1,2…), or null when the
    *  dataset carries no gate. 🔑 Distinct from `inferredRank`, which is YOUR standing. */
   rankRequired: number | null;
@@ -2502,6 +2512,48 @@ export class MissionTracker extends EventEmitter {
 
   // ---- view for the overlay ----
 
+  /** The pools of same-title variants that are NOT the one being shown — the drops you cannot
+   *  get from where you took this contract.
+   *
+   *  🔑 Compared by pool CONTENT, never by variant count. 540 titles have several variants but
+   *  only 80 have variants whose pools actually differ; the other 460 are the same pool offered
+   *  in several places, and telling someone to fly across the system for blueprints they can
+   *  already win here would be worse than saying nothing.
+   *
+   *  Returns nothing while AMBIGUOUS: the panel is already showing the union of every candidate,
+   *  so "other pools" would be the pools it is currently displaying.
+   */
+  private otherPoolsFor(
+    key: string | null,
+    mission: DatasetMission | undefined,
+    ambiguous: boolean,
+  ): { places: string[]; total: number; owned: number }[] {
+    if (ambiguous || !key || !mission?.title || !this.dataset) return [];
+    const sig = (m: DatasetMission): string =>
+      Object.values(m.pools ?? {})
+        .map((entries) => entries.map((e) => e.blueprint).sort().join("|"))
+        .sort()
+        .join(" || ");
+    const mine = sig(mission);
+    if (!mine) return [];
+    const out: { places: string[]; total: number; owned: number }[] = [];
+    const seen = new Set<string>([mine]);
+    for (const [k, m] of Object.entries(this.dataset.missions)) {
+      if (k === key || m.title !== mission.title) continue;
+      const s = sig(m);
+      // Dedupe by CONTENT: several regions can share one alternative pool, and listing it twice
+      // would read as two separate trips.
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      let total = 0, owned = 0;
+      for (const entries of Object.values(m.pools ?? {})) {
+        for (const e of entries) { total++; if (this.isOwned(e.blueprint).owned) owned++; }
+      }
+      if (total) out.push({ places: m.where ?? [], total, owned });
+    }
+    return out;
+  }
+
   view(): TrackedView {
     // While the completion card is up, keep the just-completed mission on screen
     // (it's already in endedMissionIds, so effectiveMissionId() has moved on).
@@ -2579,6 +2631,7 @@ export class MissionTracker extends EventEmitter {
       whereToGet: ambiguous ? [] : mission?.where ?? [],
       illegal: mission?.illegal === true,
       rankRequired: mission?.rank ?? null,
+      otherPools: this.otherPoolsFor(key, mission, ambiguous),
       reputationGained: mission?.reputationGained ?? [],
       reputationLost: mission?.reputationLost ?? [],
       eventTrack,

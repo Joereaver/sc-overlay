@@ -2099,6 +2099,33 @@ const MISSIONINFO = `(async () => {
   // One place needs no explanation, so it gets no icon to explain.
   const puOne = missionInfoHtml(Object.assign({}, V, { whereToGet: ["Rat's Nest"] }), true);
   ok("a single place gets no count and no icon", puOne.indexOf("mi-more") < 0);
+  // 🔑 The listed places are ONE variant, so they do draw the pool on screen — but that must not
+  // be sold as "it does not matter where you take it". For 71 titles the place is exactly what
+  // decides the pool, which is the row below. Sub caught this claim being both wrong and the
+  // opposite of the useful thing to say.
+  ok("...and the tooltip does not claim the location is irrelevant",
+     puFull.indexOf("same contract wherever") < 0 && puFull.indexOf("draw the pool shown above") >= 0);
+
+  // ── the pools you CANNOT get from here ───────────────────────────────────
+  const withOthers = missionInfoHtml(Object.assign({}, V, {
+    whereToGet: ["Checkmate", "Patch City"],
+    otherPools: [
+      { places: ["Rat's Nest", "Starlight Service Station"], total: 5, owned: 5 },
+      { places: ["Ruin Station", "Terminus"], total: 8, owned: 3 },
+    ] }), true);
+  ok("other regions with a different pool are surfaced", withOthers.indexOf("Other pools") >= 0);
+  ok("...named by a station you can actually fly to", withOthers.indexOf("Rat's Nest") >= 0 && withOthers.indexOf("Ruin Station") >= 0);
+  // 5/5 + 3/8 = 5 still to win somewhere else. That number is the whole point of the row.
+  ok("...with how many are still missing across them", withOthers.indexOf("5 to go") >= 0, strip(withOthers));
+  ok("...and says finishing this pool is not finishing the contract",
+     withOthers.indexOf("does not finish the contract") >= 0);
+  ok("a contract with nothing elsewhere gets no such row",
+     missionInfoHtml(Object.assign({}, V, { otherPools: [] }), true).indexOf("Other pools") < 0);
+  // Nothing left to win elsewhere is still worth naming (you may not have run it there), but it
+  // must not advertise a count of zero.
+  const allOwned = missionInfoHtml(Object.assign({}, V, {
+    otherPools: [{ places: ["Ruin Station"], total: 8, owned: 8 }] }), true);
+  ok("...and no '0 to go' when the other pool is complete", allOwned.indexOf("Other pools") >= 0 && allOwned.indexOf("0 to go") < 0);
 
   // ── the link out to the site ─────────────────────────────────────────────
   ok("a resolved contract links to its page", full.indexOf("subliminal.gg/missions/HH_Test_Contract") >= 0);
