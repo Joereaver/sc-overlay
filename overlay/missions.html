@@ -1469,6 +1469,30 @@
   /* Standing is a DIFFERENT KIND of fact — it is about you, not the contract — so it reads as
      its own group behind a rule rather than as one more row in the list. */
   .mi-standing { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--divider); }
+  /* Difficulty meter: filled segments take the accent, the rest stay neutral. Deliberately the
+     same shape as the site's mission pages (Sub: "these rectangles with rounded corners"), so a
+     rating means the same thing in both places. Not stars — his call. */
+  .mi-meter { display: flex; align-items: center; gap: 8px; padding: 4px 0 2px; }
+  .mi-meter .k { font-size: 9px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase;
+    color: var(--cyan-dim); }
+  .mi-seg { display: flex; gap: 2px; }
+  .mi-seg i { width: 13px; height: 6px; border-radius: 2px; background: rgba(var(--accent-rgb), 0.16);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.14); }
+  .mi-seg i.on { background: var(--cyan); box-shadow: 0 0 5px rgba(var(--accent-rgb), 0.5); }
+  .mi-meter .num { font-family: var(--mono); font-size: 10.5px; color: var(--cyan-text);
+    font-variant-numeric: tabular-nums; }
+  /* The "why should you trust this" affordance. An INLINE SVG, never an emoji: this page carries
+     no bundled emoji face, so a glyph here would be at the mercy of the OS font — the same thing
+     that rendered o7 as a box. Sized in em so it rides the text it annotates. */
+  .mi-eye { display: inline-flex; align-items: center; margin-left: 1px; color: var(--cyan-dim);
+    cursor: help; vertical-align: -1px; }
+  .mi-eye:hover { color: var(--cyan-bright); }
+  .mi-eye svg { width: 1.05em; height: 1.05em; }
+  /* Through to the mission's page on the site, where the full write-up lives. */
+  .mi-link { display: inline-block; margin-top: 8px; font-family: var(--sans); font-size: 10px;
+    font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan);
+    text-decoration: none; border-bottom: 1px solid rgba(var(--accent-rgb), 0.4); padding-bottom: 1px; }
+  .mi-link:hover { color: var(--cyan-bright); border-bottom-color: var(--cyan-bright); }
   .mi-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
   .mi-row .mi-k { min-width: 72px; font-size: 9px; font-weight: 700; letter-spacing: 0.14em;
     text-transform: uppercase; color: var(--cyan-dim); }
@@ -1824,6 +1848,9 @@
   // mission has no pool or you've already collected everything. Forced open (static)
   // when there's no pool at all.
   let infoOpen = true;
+  // Faction Info is its own drawer (Sub, 2026-08-12: "maybe somebody doesn't care about the
+  // Faction Info"). Separate state, so collapsing one never hides the other.
+  let facOpen = true;
   // Event-ladder tier expand/collapse overrides, keyed by tier pct. Default (no
   // entry): fully-collected tiers collapse, incomplete tiers stay open.
   const evOpen = {};
@@ -2258,10 +2285,16 @@
       }
     }
     const standing = rb.noData ? "—" : escapeHtml(rb.standing);
-    return '<div class="mi-row" title="Estimated standing with ' + escapeAttr(rb.faction) +
-      ". Your exact rep isn't in the game log, so this is a lower bound summed from missions you've completed since the 4.8 wipe.\">" +
-      '<span class="mi-k">Standing</span><span class="mi-v">' + standing +
-      ' <span class="mi-hint">' + (rb.noData ? "no data" : "est.") + '</span></span></div>' +
+    // 🔑 An eye rather than the word "est." (Sub, 2026-08-12). The qualifier mattered but the
+    // abbreviation explained nothing — it told you the number was approximate without telling you
+    // WHY, which is the part that stops it looking like a bug. The reason is specific and worth
+    // stating: the game never reports your reputation anywhere the app can read, so this is
+    // reconstructed from your own logs and is a floor, not a reading.
+    const why = rb.noData
+      ? "Star Citizen never reports your reputation in any form the app can read, so standing is worked out from the missions in your own logs. None have been counted for " + rb.faction + " yet — run Verify from logs to read your history."
+      : "Star Citizen never reports your exact reputation in any form the app can read, so this is worked out from the missions in your own logs since the 4.8 wipe. It is a lower bound: anything earned before you installed the app, or since deleted, cannot be counted.";
+    return '<div class="mi-row"><span class="mi-k">Standing</span><span class="mi-v">' + standing +
+      (rb.noData ? ' <span class="mi-hint">no data</span>' : "") + eye(why) + '</span></div>' +
       '<div class="rb' + (empty ? " floor" : "") + '"><div class="rb-track"><div class="rb-fill" style="width:' +
       pct.toFixed(1) + '%"></div></div><div class="rb-cap">' + cap + "</div></div>";
   }
@@ -2322,6 +2355,28 @@
       + '<span class="amt">' + money(p.median) + '</span><span class="cur">' + escapeHtml(cur) + "</span>"
       + '<span class="mi-hint">' + escapeHtml(note + (spread ? " · " + spread : "")) + "</span></div>";
   }
+  // 🔑 An inline SVG, never an emoji glyph. This page bundles no emoji face, so a character here
+  // would render at the mercy of the OS font — the same thing that turned o7 into a box.
+  const EYE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"'
+    + ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M1.6 12S5.7 4.8 12 4.8 22.4 12 22.4 12 18.3 19.2 12 19.2 1.6 12 1.6 12z"/>'
+    + '<circle cx="12" cy="12" r="3.1"/></svg>';
+  const eye = (title) => '<span class="mi-eye" tabindex="0" role="img" aria-label="'
+    + escapeAttr(title) + '" title="' + escapeAttr(title) + '">' + EYE_SVG + "</span>";
+  // A 1–5 meter matching the site's mission pages. The rating is a MEAN, so the bar rounds while
+  // the number beside it keeps the precision — a bar alone would turn 2.4 and 2.6 into the same
+  // picture, and the whole point of the number is telling those apart.
+  function difficultyMeter(f) {
+    if (!f || f.difficulty == null || !f.difficultyAnswers) return "";
+    const lvl = Math.max(1, Math.min(5, Math.round(f.difficulty)));
+    let segs = "";
+    for (let i = 1; i <= 5; i++) segs += '<i class="' + (i <= lvl ? "on" : "") + '"></i>';
+    return '<div class="mi-meter"><span class="k">Difficulty</span>'
+      + '<span class="mi-seg" role="img" aria-label="' + f.difficulty + ' out of 5">' + segs + "</span>"
+      + '<span class="num">' + f.difficulty + "</span>"
+      + eye("Averaged from " + reports(f.difficultyAnswers) + " by players who ran this contract. 1 is easy, 5 is hard.")
+      + "</div>";
+  }
   function chip(text, cls, title) {
     return '<span class="mi-chip' + (cls ? " " + cls : "") + '"'
       + (title ? ' title="' + escapeAttr(title) + '"' : "") + ">" + escapeHtml(text) + "</span>";
@@ -2340,10 +2395,7 @@
     // the thing you need to know.
     const THIN = 2;
     const thin = (n) => (n <= THIN ? " · " + reports(n) : "");
-    if (f.difficulty != null && f.difficultyAnswers) {
-      out.push(chip("Difficulty " + f.difficulty + "/5" + thin(f.difficultyAnswers), "said",
-        "Average of " + reports(f.difficultyAnswers) + " — 1 easy, 5 hard."));
-    }
+    // Difficulty is NOT a chip — it has its own meter row (see difficultyMeter).
     if (f.soloRate != null && f.soloAnswers) {
       // A verdict when it is unanimous, a number when it is not: "100% solo" off two reports is a
       // statistic-shaped way of saying "both of them soloed it".
@@ -2373,28 +2425,28 @@
     const pickup = pickupOf(v);
     if (!giver && !type && !rg.length && !rl.length && !payTxt && !pickup && !(v.community && v.community.payout)) return "";
     const open = !!forceOpen || infoOpen;
-    let body = "";
-    if (open) {
+    const facOpenNow = !!forceOpen || facOpen;
+    let body = "", facBody = "";
+    // Both bodies are built whichever drawer is expanded: it is a few string joins, and the
+    // alternative is two near-identical branches that drift apart. `drawer()` decides what
+    // actually renders.
+    {
       // ── 1. Chips: everything that explains itself in a word or two ──────────────────────
       // 🔑 Absence is not innocence — an unrecognised mission also reads illegal:false — so this
       // only ever asserts that something IS criminal, never that it is safe.
       const chips = [];
       if (v.illegal) chips.push(chip("Illegal", "crime", "Criminal work — expect a CrimeStat for taking this."));
       if (type) chips.push(chip(type));
-      // The rank the GIVER wants, distinct from your own standing in the group below.
-      // 🔑 null means the dataset carries no gate, NOT rank 0: givers use 0 and null side by side.
-      if (v.rankRequired != null) {
-        chips.push(chip("Rank " + v.rankRequired, "",
-          "The giver only offers this contract at rank " + v.rankRequired + " or above."));
-      }
       chips.push(...factChips(v));
 
       // ── 2. The money, given size ────────────────────────────────────────────────────────
       // ── 3. Everything that genuinely needs a label, in a tight two-column grid ──────────
-      const grid = [];
-      const gRow = (k, html, cls) => grid.push('<span class="k">' + escapeHtml(k) + '</span><span class="v'
+      // Two grids now: what the CONTRACT is, and who the FACTION is. Split because they answer
+      // different questions and one of them is skippable (Sub, 2026-08-12).
+      const grid = [], fgrid = [];
+      const mk = (into) => (k, html, cls) => into.push('<span class="k">' + escapeHtml(k) + '</span><span class="v'
         + (cls ? " " + cls : "") + '">' + html + "</span>");
-      if (giver) gRow("Faction", escapeHtml(giver));
+      const gRow = mk(grid), fRow = mk(fgrid);
       // 🔑 Only shown once the VARIANT is resolved. Same-title variants are offered in different
       // regions drawing from DIFFERENT pools, so before the tracker knows which one you took,
       // naming places would send you somewhere that cannot drop what this panel lists —
@@ -2406,6 +2458,14 @@
       const ship = flownShip(v);
       if (ship) gRow("Usually flown", escapeHtml(ship));
 
+      // ── Faction Info ────────────────────────────────────────────────────────────────────
+      // Faction first, then what it costs you to be liked by them, then where you stand.
+      // Reputation sits directly under Faction because it is the same subject (Sub's order).
+      if (giver) fRow("Faction", escapeHtml(giver));
+      // The rank the GIVER wants — a fact about your relationship with them, so it lives here
+      // rather than beside the contract's own details.
+      // 🔑 null means the dataset carries no gate, NOT rank 0: givers use 0 and null side by side.
+      if (v.rankRequired != null) fRow("Rank needed", String(v.rankRequired));
       // Reputation. A single entry that just repeats the faction above becomes a plain amount;
       // several — or rep with a DIFFERENT faction — keep a labelled section with the names.
       const extra = [];
@@ -2421,7 +2481,7 @@
         if (list.length === 1 && (!list[0].faction || list[0].faction === giver)) {
           // No "rep" suffix — the label already said it.
           const amt = (neg ? "−" : "+") + Number(list[0].amount || 0).toLocaleString();
-          gRow(label, amt + extraHint(list[0]), neg ? "neg" : "pos");
+          fRow(label, amt + extraHint(list[0]), neg ? "neg" : "pos");
         } else {
           extra.push('<div class="mi-sec">' + label + "</div>" + repRows(list, neg));
         }
@@ -2441,18 +2501,38 @@
           + '+ <span class="mi-hint">inferred</span></span></div>';
       }
 
+      // Through to the full write-up. Only when we actually resolved WHICH contract this is —
+      // an ambiguous one would link to a page describing a different variant, and the site
+      // 404s on a key it does not know.
+      const link = v.contractKey && !v.ambiguous
+        ? '<a class="mi-link" href="https://subliminal.gg/missions/' + encodeURIComponent(v.contractKey)
+          + '" target="_blank" rel="noopener" title="Open this contract on subliminal.gg">More on the site →</a>'
+        : "";
+
       body = '<div class="mi-body">'
         + (chips.length ? '<div class="mi-chips">' + chips.join("") + "</div>" : "")
         + payBlock(v)
+        + difficultyMeter(v.community && v.community.facts)
         + (grid.length ? '<div class="mi-g">' + grid.join("") + "</div>" : "")
+        + link
+        + "</div>";
+      facBody = '<div class="mi-body">'
+        + (fgrid.length ? '<div class="mi-g">' + fgrid.join("") + "</div>" : "")
         + extra.join("")
         + (standing ? '<div class="mi-standing">' + standing + "</div>" : "")
         + "</div>";
+      // A group with nothing in it is worse than no group — don't draw an empty drawer header.
+      if (!fgrid.length && !extra.length && !standing) facBody = null;
     }
-    const car = forceOpen ? "" : '<span class="car">' + (open ? "▾" : "▸") + "</span>";
-    const title = forceOpen ? "" : ' title="' + (open ? "Hide" : "Show") + ' mission details"';
-    return '<div class="mi"><div class="mi-head' + (forceOpen ? " static" : "") + '" id="miHead"' + title + ">" +
-      car + "Mission Info</div>" + body + "</div>";
+    const drawer = (id, label, isOpen, html) => {
+      if (html === null) return "";
+      const car = forceOpen ? "" : '<span class="car">' + (isOpen ? "▾" : "▸") + "</span>";
+      const t = forceOpen ? "" : ' title="' + (isOpen ? "Hide " : "Show ") + escapeAttr(label) + '"';
+      return '<div class="mi"><div class="mi-head' + (forceOpen ? " static" : "") + '" id="' + id + '"' + t + ">"
+        + car + escapeHtml(label) + "</div>" + (isOpen ? html : "") + "</div>";
+    };
+    return drawer("miHead", "Mission Info", open, body)
+      + drawer("facHead", "Faction Info", facOpenNow, facBody);
   }
 
   // Payout line + ITEM rewards (actual items — not blueprints; display-only).
@@ -2854,6 +2934,19 @@
     // pooled mission — pool-less missions force it open, so a click there is a no-op.
     if (e.target.closest("#miHead")) {
       if (current && current.hasPool) { infoOpen = !infoOpen; render(current); }
+      return;
+    }
+    if (e.target.closest("#facHead")) {
+      if (current && current.hasPool) { facOpen = !facOpen; render(current); }
+      return;
+    }
+    // Through to the mission's page on subliminal.gg. The shell opens it in the real browser —
+    // a second always-on-top window over the game is the last thing anyone wants. Standalone
+    // (OBS source, product page) there is no shell, so the plain href does the work.
+    const site = e.target.closest(".mi-link");
+    if (site && window.overlayApi && window.overlayApi.openUrl) {
+      e.preventDefault();
+      window.overlayApi.openUrl(site.getAttribute("href"));
       return;
     }
     // Blueprint-pool pagination arrows.

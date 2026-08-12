@@ -1997,14 +1997,28 @@ const MISSIONINFO = `(async () => {
   // ── crowdsourced facts ───────────────────────────────────────────────────
   ok("no answers renders nothing", facts(null) === "" && facts({ samples: 0 }) === "");
   // 🔑 The count is shown only while the evidence is thin — always printing it is clutter, never
-  // printing it lets one opinion pass for a fact. Both halves are asserted.
-  const thinD = facts({ samples: 1, difficulty: 4, difficultyAnswers: 1, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
-  ok("a difficulty resting on ONE answer says so on the chip", thinD.indexOf("1 report") >= 0, thinD);
-  const d = facts({ samples: 9, difficulty: 2.7, difficultyAnswers: 9, soloRate: null, soloAnswers: 0, combatTop: null, ships: [] });
-  ok("a well-attested one just states it", d.indexOf("2.7") >= 0 && d.indexOf("report") < 0, d);
-  ok("...and a question nobody answered is absent, not blank", d.indexOf("Soloable") < 0, d);
+  // printing it lets one opinion pass for a fact.
   const thinSolo = facts({ samples: 1, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 1, combatTop: null, ships: [] });
-  ok("a lone solo report is qualified too", thinSolo.indexOf("1 report") >= 0, thinSolo);
+  ok("a lone solo report is qualified on the chip", thinSolo.indexOf("1 report") >= 0, thinSolo);
+  const fatSolo = facts({ samples: 9, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 9, combatTop: null, ships: [] });
+  ok("a well-attested one just states it", fatSolo.indexOf("Soloable") >= 0 && fatSolo.indexOf("report") < 0, fatSolo);
+  ok("...and a question nobody answered is absent, not blank", fatSolo.indexOf("Difficulty") < 0, fatSolo);
+
+  // ── the difficulty meter ─────────────────────────────────────────────────
+  // Rounded segments matching the site's mission pages, not stars (Sub, 2026-08-12).
+  const met = (f) => difficultyMeter(f);
+  ok("no rating, no meter", met(null) === "" && met({ difficulty: null, difficultyAnswers: 0 }) === "");
+  const m3 = met({ difficulty: 2.7, difficultyAnswers: 9 });
+  ok("the meter draws five segments", (m3.match(/<i /g) || []).length === 5, (m3.match(/<i /g) || []).length);
+  ok("...and fills to the rounded rating", (m3.match(/class="on"/g) || []).length === 3, (m3.match(/class="on"/g) || []).length);
+  // 🔑 The bar rounds, so the number has to survive alongside it — otherwise 2.4 and 2.6 become
+  // the same picture and the precision is gone.
+  ok("...while the exact mean is still printed", m3.indexOf("2.7") >= 0);
+  ok("the eye carries the report count", m3.indexOf("9 reports") >= 0);
+  ok("a 1 does not fill zero segments", (met({ difficulty: 1, difficultyAnswers: 1 }).match(/class="on"/g) || []).length === 1);
+  ok("a 5 fills them all", (met({ difficulty: 5, difficultyAnswers: 4 }).match(/class="on"/g) || []).length === 5);
+  // The eye must be drawn, never typed: this page bundles no emoji face.
+  ok("the eye is an inline SVG, not an emoji glyph", m3.indexOf("<svg") >= 0 && !/[\u{1F300}-\u{1FAFF}]/u.test(m3));
   const solo = facts({ samples: 2, difficulty: null, difficultyAnswers: 0, soloRate: 1, soloAnswers: 2, combatTop: null, ships: [] });
   ok("a unanimous solo rate reads as a verdict, not a statistic", solo.indexOf("Soloable") >= 0 && solo.indexOf("100%") < 0, solo);
   const split = facts({ samples: 5, difficulty: null, difficultyAnswers: 0, soloRate: 0.6, soloAnswers: 5, combatTop: null, ships: [] });
@@ -2044,19 +2058,42 @@ const MISSIONINFO = `(async () => {
   const info = (v) => strip(missionInfoHtml(Object.assign({ giver: "Headhunters", missionType: "Bounty Hunter", reputationGained: [], reputationLost: [], whereToGet: [] }, v), true));
   ok("an illegal contract is flagged", info({ illegal: true }).indexOf("Illegal") >= 0);
   ok("...and a legal one is not", info({ illegal: false }).indexOf("Illegal") < 0);
-  ok("a rank gate is shown", info({ rankRequired: 2 }).indexOf("Rank 2") >= 0);
+  ok("a rank gate is shown", info({ rankRequired: 2 }).indexOf("Rank needed 2") >= 0, info({ rankRequired: 2 }));
   // 🔑 null is "the dataset carries no gate", NOT rank 0 — givers use 0 and null side by side.
-  ok("...but an absent gate is not rendered as rank 0", info({ rankRequired: null }).indexOf("Rank 0") < 0);
-  ok("rank 0 IS a real gate and shows", info({ rankRequired: 0 }).indexOf("Rank 0") >= 0);
+  ok("...but an absent gate is not rendered as rank 0", info({ rankRequired: null }).indexOf("Rank needed") < 0);
+  ok("rank 0 IS a real gate and shows", info({ rankRequired: 0 }).indexOf("Rank needed 0") >= 0);
 
-  // ── layout: standing is its own group, and labels are not repeated ───────
-  const full = missionInfoHtml({ giver: "Headhunters", missionType: "Bounty Hunter", illegal: true, rankRequired: 1,
+  // ── two groups, so the faction half can be collapsed on its own ──────────
+  const V = { giver: "Headhunters", missionType: "Bounty Hunter", illegal: true, rankRequired: 1,
+    contractKey: "HH_Test_Contract", ambiguous: false,
     reputationGained: [{ faction: "Headhunters", amount: 50 }], reputationLost: [], whereToGet: ["Checkmate", "Monox"],
-    repBar: { noData: true, faction: "Headhunters", standing: "" } }, true);
+    repBar: { noData: true, faction: "Headhunters", standing: "" } };
+  const full = missionInfoHtml(V, true);
+  ok("Mission Info and Faction Info are SEPARATE drawers",
+     full.indexOf("miHead") >= 0 && full.indexOf("facHead") >= 0);
+  ok("...each with its own header", (full.match(/mi-head/g) || []).length === 2, (full.match(/mi-head/g) || []).length);
+  // Sub's order: reputation belongs under the faction it is with, not beside the contract.
+  const facHalf = full.slice(full.indexOf("facHead"));
+  ok("faction, rank and reputation are all in the FACTION group",
+     facHalf.indexOf("Faction") >= 0 && facHalf.indexOf("Rank needed") >= 0 && facHalf.indexOf("Reputation") >= 0);
+  ok("...and reputation comes after faction", facHalf.indexOf("Reputation") > facHalf.indexOf("Headhunters"));
+  const missionHalf = full.slice(0, full.indexOf("facHead"));
+  ok("the contract's own details stay in the MISSION group",
+     missionHalf.indexOf("Pick up") >= 0 && missionHalf.indexOf("Illegal") >= 0);
   ok("standing sits in its own group behind a rule", full.indexOf("mi-standing") >= 0);
   ok("the facts that explain themselves are chips, not rows", full.indexOf("mi-chips") >= 0);
-  ok("the labelled ones share one grid", full.indexOf("mi-g") >= 0);
   ok("the reputation value does not repeat its own label", strip(full).indexOf("+50 rep") < 0, strip(full));
+  ok("standing explains itself through the eye, not the word est.", strip(full).indexOf("est.") < 0);
+  ok("...and the eye says WHY it is an estimate", full.indexOf("never reports your reputation") >= 0);
+
+  // ── the link out to the site ─────────────────────────────────────────────
+  ok("a resolved contract links to its page", full.indexOf("subliminal.gg/missions/HH_Test_Contract") >= 0);
+  // 🔑 An ambiguous mission must NOT link: the tracker does not yet know WHICH variant you took,
+  // so the page would describe a different one — and the site 404s on a key it does not know.
+  const amb = missionInfoHtml(Object.assign({}, V, { ambiguous: true }), true);
+  ok("an ambiguous one does not", amb.indexOf("mi-link") < 0);
+  const noKey = missionInfoHtml(Object.assign({}, V, { contractKey: null }), true);
+  ok("nor does one we cannot name", noKey.indexOf("mi-link") < 0);
   return out;
 })()`;
 
