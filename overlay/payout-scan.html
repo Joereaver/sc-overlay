@@ -42,6 +42,18 @@
   .stat.good b { color:var(--ok); } .stat.warn b { color:var(--warn); } .stat.bad b { color:var(--bad); }
   h2 { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim);
        margin:18px 0 7px; }
+  /* The current screenful is boxed and tinted so it reads as "this, now" at a glance
+     rather than blurring into the history below it. */
+  #now { background:rgba(255,178,49,.05); border:1px solid rgba(255,178,49,.22); border-radius:10px; }
+  #now td { border-bottom-color:rgba(255,178,49,.12); }
+  #feed { opacity:.72; }
+  /* Sized for the Web Page widget over the game, not just a desktop browser tab. */
+  @media (max-width:560px) {
+    body { padding:10px; font-size:13px; }
+    .stat b { font-size:17px; }
+    .why { display:none; }
+    pre { max-height:120px; }
+  }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   td { padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
   tr td:first-child { white-space:nowrap; color:var(--dim); font-variant-numeric:tabular-nums; }
@@ -69,7 +81,10 @@
 </div>
 <div class="grid" id="stats"></div>
 
-<h2>What it's seeing <span id="feedcount" class="hint"></span></h2>
+<h2>On screen right now <span id="nowcount" class="hint"></span></h2>
+<table id="now"><tbody></tbody></table>
+
+<h2>Earlier this session</h2>
 <table id="feed"><tbody></tbody></table>
 
 <h2>Raw OCR from the last capture</h2>
@@ -153,20 +168,32 @@
       cell(n(t.noPrice), "no price"),
     ].join("");
 
+    // 🔑 SPLIT BY CAPTURE, not one long list. Sub: "let's say I hover over five different
+    // missions — when it ticks again it should still show those five things and have them
+    // in a different group than the rest. That way it's easy to tell what it literally is
+    // looking at right in that moment." Every row from one capture shares an `at`, so the
+    // newest timestamp IS the current screenful; everything older is history.
     const evs = d.events || [];
-    $("feedcount").textContent = evs.length ? `· newest first` : "";
-    $("feed").querySelector("tbody").innerHTML = evs.length
-      ? evs
-          .map(
-            (e) => `<tr>
-              <td>${new Date(e.at).toLocaleTimeString()}</td>
-              <td><span class="tag t-${e.outcome.replace("-", "")}">${esc(e.outcome)}</span></td>
-              <td class="money">${e.kind === "fee" ? "fee " : ""}${n(e.amount)}</td>
-              <td>${esc(e.title)}<div class="why">${esc(e.giver || "unknown giver")} · ${esc(e.detail)}</div></td>
-            </tr>`,
-          )
-          .join("")
-      : '<tr><td colspan="4" class="empty">Nothing yet. Open mobiGlas → Contracts and expand a category.</td></tr>';
+    const newestAt = evs.length ? evs[0].at : 0;
+    const current = evs.filter((e) => e.at === newestAt);
+    const earlier = evs.filter((e) => e.at !== newestAt);
+
+    const rowHtml = (e) => `<tr>
+      <td>${new Date(e.at).toLocaleTimeString()}</td>
+      <td><span class="tag t-${e.outcome.replace("-", "")}">${esc(e.outcome)}</span></td>
+      <td class="money">${e.kind === "fee" ? "fee " : ""}${n(e.amount)}</td>
+      <td>${esc(e.title)}<div class="why">${esc(e.giver || "unknown giver")} · ${esc(e.detail)}</div></td>
+    </tr>`;
+
+    $("nowcount").textContent = current.length
+      ? `· ${current.length} row${current.length > 1 ? "s" : ""}, read ${ago(newestAt)}`
+      : "";
+    $("now").querySelector("tbody").innerHTML = current.length
+      ? current.map(rowHtml).join("")
+      : '<tr><td colspan="4" class="empty">Nothing on screen. Open mobiGlas → Contracts and expand a category.</td></tr>';
+    $("feed").querySelector("tbody").innerHTML = earlier.length
+      ? earlier.map(rowHtml).join("")
+      : '<tr><td colspan="4" class="empty">—</td></tr>';
 
     $("raw").textContent = (d.panelLines || []).join("\n") || "nothing in the calibrated panel yet";
     $("foot").textContent =

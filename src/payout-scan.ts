@@ -9,6 +9,7 @@
 // travel, disconnects and shard changes without either spamming duplicates or quietly
 // stopping.
 
+import { readFileSync, writeFileSync } from "node:fs";
 import type { ContractRow } from "./contract-list.js";
 import type { ContractMatcher, MatchOutcome } from "./contract-match.js";
 
@@ -123,10 +124,44 @@ export class PayoutScanner {
     if (this.eventRing.length > 300) this.eventRing.length = 300;
   }
 
+  /** 🔴 THE QUEUE IS PERSISTED, AND IT WAS NOT AT FIRST. On the feature's first real
+   *  session Sub swept his entire contract board while the parser was still being fixed;
+   *  every fix meant restarting the app, and each restart silently threw away everything
+   *  gathered so far, because the queue lived only in memory. He finished the night with
+   *  nothing to show for it. An app that CAN restart mid-sweep — for an update, a crash,
+   *  a developer — must not treat its unsent work as disposable. */
   constructor(
     private matcher: ContractMatcher,
     private changelist: string,
-  ) {}
+    private queuePath?: string,
+  ) {
+    if (!queuePath) return;
+    try {
+      const saved = JSON.parse(readFileSync(queuePath, "utf8")) as PayoutObservation[];
+      if (Array.isArray(saved)) {
+        this.queue = saved;
+        this.tally.queued = saved.length;
+        // Re-seed the dedup from what's already waiting, or a restart re-queues every
+        // row the moment the same board is read again.
+        for (const o of saved) {
+          const set = this.seenPrices.get(o.contractKey) ?? new Set<number>();
+          set.add(o.amount);
+          this.seenPrices.set(o.contractKey, set);
+        }
+      }
+    } catch {
+      /* no queue yet, or it was unreadable — start clean rather than refusing to run */
+    }
+  }
+
+  private persist(): void {
+    if (!this.queuePath) return;
+    try {
+      writeFileSync(this.queuePath, JSON.stringify(this.queue));
+    } catch {
+      /* a failed write must never break a scan; the in-memory queue still works */
+    }
+  }
 
   /** Feed one capture's rows. Everything it decides is visible in `tally` and
    *  `events()`; nothing is returned, because the caller acts on neither. */
@@ -244,6 +279,7 @@ export class PayoutScanner {
       wrote++;
     }
     if (!wrote) return false;
+    this.persist();
     this.tally.recorded++;
     this.tally.queued = this.queue.length;
     ev(
@@ -273,6 +309,7 @@ export class PayoutScanner {
       return 0;
     }
     this.queue = this.queue.slice(batch.length);
+    this.persist();
     this.tally.queued = this.queue.length;
     this.tally.flushed += batch.length;
     this.tally.lastFlushError = null;

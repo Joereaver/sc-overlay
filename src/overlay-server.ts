@@ -129,12 +129,21 @@ interface Config {
    *  Set by dragging the "scan read area" box (Mining Scanner cog) — the only way to cope with a
    *  HUD that doesn't sit where we assume. */
   scanRegion: ScanRegion | null;
-  /** OPT-IN, OFF BY DEFAULT: read the mobiGlas Contract Manager's offers list and record
-   *  what each contract PAYS. For the ~1,000 CalculatedReward contracts that number exists
-   *  nowhere else — not in the datacore, not in game.log any more — so the board is the
-   *  only source. Toggled with POST /api/payout-scan; deliberately not a config screen
-   *  yet, because it is a sit-down data-gathering task rather than something you leave on.
-   *  🔑 Persisted, so a crash mid-sweep doesn't silently stop collecting. */
+  /** OPT-IN, OFF BY DEFAULT, and 🔑 DELIBERATELY NOT PERSISTED — it is reset to false on
+   *  every launch. Sub's call (2026-08-11): "I want it to be more like they can
+   *  temporarily turn this thing on."
+   *
+   *  That is the right shape for this specifically. Every other opt-in here (fabCapture,
+   *  missionOcr, miningAssistant) is a standing preference you tick once, and those read
+   *  the screen for YOUR benefit, live. This one reads the screen to gather data for a
+   *  shared dataset, which is a different bargain — nobody should discover months later
+   *  that a box they ticked once has been quietly screen-reading ever since. You turn it
+   *  on for a sweep and it is off again next launch.
+   *
+   *  ⚠️ It stays in the config OBJECT (rather than a bare module variable) so every
+   *  existing reader — capture.cjs polls the config each tick — keeps working unchanged;
+   *  it is simply stripped on save. The QUEUE is persisted separately, so ending a session
+   *  never loses gathered observations. */
   payoutScan: boolean;
   /** Where the offers PANEL sits, as fractions of the frame. Null = not calibrated, and
    *  the scan will not run without it: the parser needs the panel to tell the title column
@@ -405,9 +414,17 @@ const DEFAULTS: Config = {
 
 function loadConfig(): Config {
   // Prefer the user's saved config; fall back to the bundled default on first run.
+  //
+  // 🔑 `payoutScan` is forced OFF here regardless of what any file says. Stripping it on
+  // SAVE is not enough on its own: a config written before that rule existed still carries
+  // `true`, and would silently arm screen-reading on the next launch — which is precisely
+  // the outcome a temporary mode exists to prevent. Belt and braces, because the failure
+  // is invisible.
   for (const p of [configPath, seedConfigPath]) {
     try {
-      if (existsSync(p)) return { ...DEFAULTS, ...JSON.parse(readFileSync(p, "utf8")) };
+      if (existsSync(p)) {
+        return { ...DEFAULTS, ...JSON.parse(readFileSync(p, "utf8")), payoutScan: false };
+      }
     } catch {
       /* corrupt — try the next source */
     }
@@ -558,7 +575,13 @@ let overlayGeometry: Record<string, unknown> | null = null;
 const saveConfig = async (): Promise<void> => {
   try {
     mkdirSync(userDir, { recursive: true });
-    await writeFile(configPath, JSON.stringify(config, null, 2));
+    // 🔑 `payoutScan` is stripped on the way out — it is a MODE you enter for a sweep, not
+    // a preference you tick once. Written here rather than at every call site so no future
+    // route can persist it by accident; a screen-reading feature that survives a restart
+    // nobody remembers arming is the exact outcome this avoids. Its calibrated region IS
+    // kept: that is a measurement, not consent.
+    const { payoutScan: _omit, ...persisted } = config;
+    await writeFile(configPath, JSON.stringify(persisted, null, 2));
     lastSaveOk = new Date().toISOString();
     lastSaveError = null;
   } catch (e) {
@@ -867,7 +890,7 @@ function ensurePayoutScanner(): PayoutScanner | null {
   if (!candidates.length) return null;
   payoutMatcher = new ContractMatcher(candidates);
   payoutMatcherFor = patch;
-  payoutScanner = new PayoutScanner(payoutMatcher, patch);
+  payoutScanner = new PayoutScanner(payoutMatcher, patch, join(userDir, "payout-queue.json"));
   console.log(`[payout] matcher built for ${patch || "(unknown patch)"} over ${candidates.length} contracts`);
   return payoutScanner;
 }
@@ -2156,6 +2179,49 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
 
   // The diagnostic ring (see noteMiningRead). Read-only, in-memory, no persistence — it answers
   // "what did the scanner actually see in the last minute, and how fast was it looking".
+  // Replay board rows captured earlier — same matcher, same dedup, same credential as a
+  // live scan, so a replayed row is indistinguishable from one read off the screen.
+  // Exists because a sweep's worth of good reads was lost to app restarts before the
+  // queue was persisted; see tools/payout-replay.mjs.
+  if (url === "/api/payout-scan/replay" && req.method === "POST") {
+    if (!fromThisMachine(req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "loopback_only" }));
+      return;
+    }
+    const body = await readBody(req);
+    const rows = Array.isArray(body.rows) ? body.rows : [];
+    const sc = ensurePayoutScanner();
+    if (!sc || !rows.length) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: sc ? "no_rows" : "no_dataset" }));
+      return;
+    }
+    const before = sc.events(1000).length;
+    sc.ingest(
+      rows.map((r: Record<string, unknown>) => ({
+        category: (r.category as string) ?? null,
+        title: String(r.title ?? ""),
+        giver: (r.giver as string) ?? null,
+        amount: typeof r.amount === "number" ? r.amount : null,
+        kind: (r.kind as "payout" | "fee" | null) ?? null,
+        rounded: r.rounded !== false,
+        y: 0,
+      })),
+      currentSystem(),
+    );
+    const events = sc.events(1000).slice(0, sc.events(1000).length - before);
+    let uploaded: number | null = null;
+    if (body.dry !== true) {
+      const pending = sc.pending();
+      await flushPayouts();
+      uploaded = pending - sc.pending();
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ events, tally: sc.tally, queued: sc.pending(), uploaded }));
+    return;
+  }
+
   // ── Payout scanner: on/off + what it has seen ────────────────────────────
   // A MODE, not a hotkey. Sub drives it by saying "turn it on" and later "turn it off",
   // because gathering these means flying to another system for a different board — so it
