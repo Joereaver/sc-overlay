@@ -1380,9 +1380,14 @@ function syncFull(): void {
 
 /** One-time read of the current log so the overlay knows the tracked mission +
  *  collected state immediately on start (the watcher then tails from the end). */
-function seedTrackerFromLog(): void {
+function seedTrackerFromLog(): number | null {
   try {
-    const text = readFileSync(config.logPath, "utf8");
+    // 🔑 Read as a BUFFER so the exact byte count is known. `text.length` is CHARACTERS, and the
+    // watcher seeks by bytes — any non-ASCII in the log (handles, ship names) would make the two
+    // disagree and re-emit or skip lines at the seam.
+    const buf = readFileSync(config.logPath);
+    seedEndsAt = buf.length;
+    const text = buf.toString("utf8");
     party.setSelf(ownHandleFromLog(text)); // you're always in your own party — pre-fill the roster
     // Also seed the CURRENT ship (last board still in effect) so theme="auto" matches on a cold
     // start while already seated — the watcher only tails NEW lines, so it wouldn't otherwise see it.
@@ -1404,14 +1409,28 @@ function seedTrackerFromLog(): void {
     shipManufacturer = seedMfr; shipName = seedShip;
   } catch {
     /* log not present yet */
+    seedEndsAt = null;
   }
+  return seedEndsAt;
 }
 
 // ── Log watcher → auto ship-switch ──────────────────────────────────────────
 let watcher: LogWatcher | null = null;
+/** Byte offset the seed read stopped at, so the watcher can pick up exactly there.
+ *  Null when there was no seed (no log yet, or a mid-session log-path change). */
+let seedEndsAt: number | null = null;
 function startWatcher(): void {
   watcher?.stop();
-  watcher = new LogWatcher(config.logPath, { pollInterval: 1000 });
+  // 🔴 Hand over from the seed read at its exact byte, not at whatever the file measures NOW.
+  // The two used to be independent, and everything the game logged in between belonged to
+  // neither — see the startPosition note in watcher.ts for what that costs.
+  watcher = new LogWatcher(config.logPath, {
+    pollInterval: 1000,
+    ...(seedEndsAt != null ? { startPosition: seedEndsAt } : {}),
+  });
+  // One handover only: a later restart of the watcher (log-path change) must not rewind to a
+  // stale offset from this boot's seed.
+  seedEndsAt = null;
   watcher.on("event", (e) => {
     // Feed the mission/blueprint tracker on every line (independent of ship auto-switch).
     tracker.detectPatch(e.raw);
