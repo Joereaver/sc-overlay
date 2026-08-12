@@ -1774,13 +1774,24 @@ const IDLEPAINT = `(async () => {
   }).join(", ");
   ok("NOTHING animates on an idle overlay", running().length === 0, names() || "nothing running");
 
-  // ...but the two states that carry information still do.
+  // ...but the two states that carry information still do — and specifically the CHEAP pulse.
+  // A plain "something is animating" assertion would pass just as happily for the 60fps version
+  // this replaced, which is the regression actually worth catching.
+  const cheap = (w) => {
+    const cs = getComputedStyle(dot);
+    ok(w + " still pulses", running().length === 1, names());
+    ok("..." + w + " uses the slow keyframes", cs.animationName === "pulse-slow", cs.animationName);
+    // steps() is what quantises the PAINTS, not just the values — it is the frame-rate dial CSS
+    // does not otherwise give you, and dropping it silently costs ~20x the redraws.
+    ok("..." + w + " is stepped, not continuous", cs.animationTimingFunction.indexOf("steps") === 0, cs.animationTimingFunction);
+    ok("..." + w + " holds still for most of its cycle", parseFloat(cs.animationDuration) >= 5, cs.animationDuration);
+  };
   dot.classList.add("live");
   await sleep(120);
-  ok("live on Twitch still pulses", running().length === 1, names());
+  cheap("live on Twitch");
   dot.classList.remove("live"); dot.classList.add("fab");
   await sleep(120);
-  ok("at the fabricator still pulses", running().length === 1, names());
+  cheap("at the fabricator");
   dot.classList.remove("fab");
   await sleep(120);
   ok("...and it stops again when the state clears", running().length === 0, names() || "nothing running");

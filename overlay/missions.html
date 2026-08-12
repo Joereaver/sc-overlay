@@ -887,24 +887,35 @@
     letter-spacing: 0.22em; text-transform: uppercase; color: var(--cyan); }
   /* diamond glyph
      🔴 THIS 7px ELEMENT USED TO REPAINT THE WHOLE TRACKER AT 60FPS, FOREVER. Measured
-     2026-08-11 by counting a page's composited frames at rest: 240 paints in 4s with the
+     2026-08-11 by counting a page's composited frames at rest: 240 paints in 4s with the old
      pulse running, ZERO with it stopped — an infinite `opacity` animation on an always-on-top
      transparent window makes the desktop compositor redraw the overlay, and the game under it,
      every single frame even though nothing is happening. A user with a 5080 measured the
      overlay costing 5fps in the hangar with GPU acceleration on, and 35fps with it off.
-     So the pulse now runs ONLY in the two states that actually mean something — at the
-     fabricator (.fab) and live on Twitch (.live). Idle, the diamond is simply lit, which is
-     what it looked like for half of every cycle anyway. Do not put `animation` back on the
-     bare .dot; if a resting animation is ever wanted here, measure the paint rate first. */
+
+     Three things fix it, and all three were measured rather than assumed:
+     1. It runs ONLY in the two states that mean something — at the fabricator (.fab) and live
+        on Twitch (.live). Idle, the diamond is simply lit. Do not put `animation` back on the
+        bare .dot.
+     2. It HOLDS at full for most of the cycle. Chromium paints nothing while an animated value
+        is constant, so the hold is genuinely free: 60/s fell to 17/s on that change alone.
+     3. `steps()` quantises the PAINTS, not just the values — this is the frame-rate dial CSS
+        otherwise does not give you. 12 steps per fade took it to ~3.4/s, about 6% of a 60Hz
+        redraw, i.e. 94% off. Raising the step count buys smoothness back linearly (paints per
+        cycle is 2x the step count); lowering it is cheaper and steppier.
+     🔑 Deliberately its own keyframe. `pulse` is still used by the arrange-mode banner, which
+     is on screen only while you are arranging and should keep its original quicker rhythm. */
   .dot { position: relative; width: 7px; height: 7px; background: var(--cyan-bright); transform: rotate(45deg);
     box-shadow: 0 0 8px var(--cyan);
     transition: background 0.2s ease, box-shadow 0.2s ease; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  /* Lit for ~5s, then one slow dip and back. */
+  @keyframes pulse-slow { 0%,70%{opacity:1} 85%{opacity:.45} 100%{opacity:1} }
   /* In the fabricator: diamond glows gold (matches the collected count). SubliminalsTV live: purple. */
   .dot.fab { background: var(--gold); box-shadow: 0 0 11px var(--gold), 0 0 4px var(--gold);
-    animation: pulse 1.9s ease-in-out infinite; }
+    animation: pulse-slow 7s steps(12) infinite; }
   .dot.live { background: #9146FF; box-shadow: 0 0 11px #9146FF, 0 0 4px #9146FF;
-    animation: pulse 1.9s ease-in-out infinite; }
+    animation: pulse-slow 7s steps(12) infinite; }
   .dot.clickable { cursor: pointer; -webkit-app-region: no-drag; }
   .dot.clickable::after { content: ""; position: absolute; inset: -8px; } /* bigger click target */
   /* Live-on-Twitch hover invite */
