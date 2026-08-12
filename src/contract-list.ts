@@ -67,6 +67,26 @@ export interface PanelRect { x: number; y: number; w: number; h: number }
 
 /** "63k" -> 63000, "1.5k" -> 1500, "Fee:13500" -> 13500. Returns null for anything that
  *  isn't a money value, which is most of the HUD. */
+/** Turn the letters OCR substitutes for digits back into digits, but ONLY inside something
+ *  that is already numeric.
+ *
+ *  🔑 THE GUARD IS THE WHOLE DESIGN: at least one genuine digit must already be present.
+ *  Without it this converts WORDS into numbers — the mining scanner learned that when "IIOO"
+ *  parsed as 1,100 — and the amount column would start inventing payouts out of stray text.
+ *  With it, "4lk" becomes "41k" (a real 41,000 that Sub's 2026-08-12 sweep threw away twice
+ *  as no-price, while "4lk" stayed glued to the title and broke the match too) and "SLUGGERS"
+ *  is left alone because it carries no digit to anchor on.
+ *
+ *  Safe HERE in a way it would not be elsewhere on screen, because this column is known to be
+ *  money by POSITION — right of the half-panel split — rather than guessed at from content.
+ *  Deliberately only the substitutions actually observed plus their obvious twins; the
+ *  signature repair's rule applies just as much here — do not add pairs without measuring,
+ *  since each one widens the chance of turning a misread into a wrong-but-plausible number. */
+export function rescueAmountDigits(raw: string): string {
+  if (!/\d/.test(raw)) return raw;
+  return raw.replace(/[lI|]/g, "1").replace(/[Oo]/g, "0");
+}
+
 export function parseAmount(raw: string): { amount: number; kind: AmountKind; rounded: boolean } | null {
   const t = raw.trim();
 
@@ -90,10 +110,12 @@ export function parseAmount(raw: string): { amount: number; kind: AmountKind; ro
   if (/s/i.test(t) && !/^fee/i.test(t)) return null;
   if (/\s/.test(t) && !/^fee/i.test(t)) return null;
 
+  const r = rescueAmountDigits(t);
+
   // A fee is labelled outright, and the label is the ONLY thing distinguishing a cost
   // from a reward — the number itself looks identical.
-  const fee = /^fee\s*[:.]?\s*([\d,.]+)\s*([km])?$/i.exec(t);
-  const plain = /^([\d,.]+)\s*([km])?$/i.exec(t);
+  const fee = /^fee\s*[:.]?\s*([\d,.]+)\s*([km])?$/i.exec(r);
+  const plain = /^([\d,.]+)\s*([km])?$/i.exec(r);
   const m = fee ?? plain;
   if (!m) return null;
   const digits = m[1].replace(/,/g, "");
@@ -159,7 +181,12 @@ export function splitTrailingAmount(text: string): { head: string; money: Return
   const t = text.trim();
   // Try progressively longer tails: "103k", "Fee:13500", "52m 8s" (rejected as a duration
   // by parseAmount, which is what keeps a timer out of the money slot).
-  const m = /^(.*?)[\s]+((?:fee\s*[:.]?\s*)?[\d][\d,.]*\s*[kKM]?)$/i.exec(t);
+  // The interior of the number tolerates the letters OCR swaps for digits (see
+  // rescueAmountDigits) — without that this regex could not even REACH "PILOT IN DISTRESS 4lk",
+  // so the 41,000 was lost AND "4lk" stayed in the title and broke the dataset match as well.
+  // The tail must still START with a real digit: letting it begin with a letter would let the
+  // "OF" in "SMALL SUPPLY OF RMC" volunteer as an amount before parseAmount could refuse it.
+  const m = /^(.*?)[\s]+((?:fee\s*[:.]?\s*)?[\d][\dlIO|,.]*\s*[kKM]?)$/i.exec(t);
   if (m) {
     const money = parseAmount(m[2]);
     if (money) return { head: m[1].trim(), money };
@@ -359,6 +386,32 @@ function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: Co
     return bestD <= tol ? best : null;
   };
 
+  // 🔴 DROP THE PANEL'S OWN CHROME ABOVE THE FIRST CATEGORY. Both real captures carry a
+  // detection wedged at the very top of the calibrated region — "1:USERLOG ATFU OIBM" (h=11)
+  // in the 2026-08-11 fixture, and in Sub's 2026-08-12 sweep the same thing read four
+  // different ways ("1:USEN LOO", "1:USFR LOO", "I:USER LOO", "T:USEN LOG", h=9). It fuses
+  // onto the first title of whichever category is expanded — "1:USFR LOO NEED A HITTER" —
+  // and kills the match. Five rows lost in one sweep.
+  //
+  // ⚠️ NOT a height floor, which is the obvious fix and is WRONG. It was tried: this
+  // fixture's Rayari giver is 12px against the artifact's 11px, one pixel apart, so any
+  // threshold that removes the chrome also removes a real giver. That is the same wall the
+  // header of this file already describes — height bands worked for Windows OCR and collapsed
+  // on RapidOCR — and it is worth restating that the trap catches you again from a new angle.
+  //
+  // The invariant that DOES hold is structural: the board is a list of categories, so nothing
+  // real precedes the first category header. Anchoring on the vocabulary is the same move the
+  // rest of this parser already makes.
+  //
+  // 🔑 Only when a header is actually visible. Scrolled deep into one long category there may
+  // be none in frame, and "drop everything above the first category" would then drop the
+  // entire board — trading five lost rows for all of them.
+  const firstCategoryY = lines.reduce<number | null>((acc, l) => {
+    if (acc !== null) return acc;
+    return closest(squash(stripCount(l.text)), cats) ? l.y : null;
+  }, null);
+  const body = firstCategoryY === null ? lines : lines.filter((l) => l.y + l.h / 2 >= firstCategoryY);
+
   const rows: ContractRow[] = [];
   // 🔑 Seeded from the PREVIOUS capture. Scrolling a long category takes its HEADER off
   // the top of the panel long before its contracts run out, so within one capture the
@@ -403,7 +456,7 @@ function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: Co
   const panelW = region ? region.w : Math.max(...lines.map((l) => l.x + l.w)) - panelX;
   const amountColX = panelX + panelW * 0.5;
 
-  for (const l of lines) {
+  for (const l of body) {
     const text = l.text.trim();
 
     // Right-hand column: a price, or a category's row count. Never words.

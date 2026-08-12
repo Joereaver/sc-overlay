@@ -115,6 +115,17 @@ export function sameName(a: string, b: string): boolean {
   return cap > 0 && editDistance(x, y, cap) <= cap;
 }
 
+/** Turn system votes into an answer, or null. Two-thirds AND at least two rows agreeing —
+ *  one row is an anecdote, and a single mis-parsed title should never relocate the player.
+ *  Pure, and shared by the one-shot and accumulated paths so they cannot disagree about what
+ *  counts as enough evidence. */
+export function decideSystem(votes: Map<string, number>): string | null {
+  if (!votes.size) return null;
+  const ranked = [...votes].sort((a, b) => b[1] - a[1]);
+  const total = ranked.reduce((a, [, n]) => a + n, 0);
+  return ranked[0][1] >= 2 && ranked[0][1] / total >= 0.67 ? ranked[0][0] : null;
+}
+
 export class ContractMatcher {
   /** 🔑 Indexed by TITLE, not bucketed by giver. The giver WAS the bucket key until the
    *  first live run discarded two perfectly-read rows over one mis-OCR'd character in the
@@ -160,7 +171,15 @@ export class ContractMatcher {
    *  a stale reading. Only rows whose candidates agree on ONE system get a vote (a row
    *  spanning several says nothing about location), and a clear majority is required, so
    *  a board that genuinely straddles systems yields null rather than a coin flip. */
-  inferSystem(rows: ContractRow[]): string | null {
+  /** The single-system votes one screenful casts. Only a row whose candidates ALL sit in one
+   *  system is evidence; a contract that exists in Stanton, Pyro and Nyx says nothing about
+   *  where you are.
+   *
+   *  🔑 Split out from inferSystem() so a caller can ACCUMULATE across a whole sweep. One
+   *  screenful is often no evidence at all — a board showing nothing but REFUELING casts zero
+   *  votes, because every refuel contract exists in all three systems — and the per-capture
+   *  version therefore answered "unknown" constantly. See PayoutScanner.ingest. */
+  systemVotes(rows: ContractRow[]): Map<string, number> {
     const votes = new Map<string, number>();
     for (const row of rows) {
       const systems = new Set(this.hitsFor(row).flatMap((h) => h.c.systems ?? []));
@@ -168,11 +187,11 @@ export class ContractMatcher {
       const s = [...systems][0];
       votes.set(s, (votes.get(s) ?? 0) + 1);
     }
-    if (!votes.size) return null;
-    const ranked = [...votes].sort((a, b) => b[1] - a[1]);
-    const total = ranked.reduce((a, [, n]) => a + n, 0);
-    // Two-thirds, and at least two rows agreeing — one row is an anecdote.
-    return ranked[0][1] >= 2 && ranked[0][1] / total >= 0.67 ? ranked[0][0] : null;
+    return votes;
+  }
+
+  inferSystem(rows: ContractRow[]): string | null {
+    return decideSystem(this.systemVotes(rows));
   }
 
   /** @param system the star system the player is currently in, when known. */

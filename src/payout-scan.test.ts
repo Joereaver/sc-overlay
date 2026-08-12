@@ -112,5 +112,34 @@ const drain = (sc: PayoutScanner): PayoutObservation[] => {
   check("...and clears the error", sc.tally.lastFlushError === null);
 }
 
+// ── The deduced system must STICK for the session ──────────────────────────
+// 🔴 It used to be recomputed from each screenful and reassigned every capture, null included.
+// Measured on Sub's 2026-08-12 sweep: the system was never known once, and all 8 ambiguous
+// rows were refuel contracts that resolve the moment it is — 19 same-titled variants collapse
+// to 6 for Pyro, under the 12-variant cap. A board showing one category casts no votes at all
+// when those contracts exist in every system, so "this screenful" is the wrong unit of
+// evidence; the sweep is.
+{
+  const sc = new PayoutScanner(matcher, "12344265");
+
+  // A screenful with nothing system-specific on it. Two rows, both Pyro-only in this fixture,
+  // so this is the evidence-bearing capture.
+  sc.ingest([
+    row("DEEP SPACE HIT", "HEADHUNTERS", 63000),
+    row("PILOT IN DISTRESS", "CITIZENS FOR PROSPERITY", 41000),
+  ], null);
+  check("the board deduces the system", sc.inferredSystem === "Pyro", String(sc.inferredSystem));
+
+  // Now a capture that says nothing — the case that used to wipe it. Scrolling to a category
+  // whose contracts exist everywhere is not evidence you have left the system.
+  sc.ingest([row("TRAINEE RANK SMALL CARGO HAUL", "COVALEX INDEPENDENT CONTRACTORS", 12000)], null);
+  check("a later screenful with no evidence does not un-know it",
+    sc.inferredSystem === "Pyro", String(sc.inferredSystem));
+
+  // And an empty capture — the board closed, or mobiGlas shut — likewise.
+  sc.ingest([], null);
+  check("...nor does an empty capture", sc.inferredSystem === "Pyro", String(sc.inferredSystem));
+}
+
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

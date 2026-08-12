@@ -8,7 +8,7 @@
 //
 //   npx tsx src/contract-list.test.ts
 
-import { cleanCategory, parseAmount, parseContractList, normalizeTitle, stripTrailingDuration } from "./contract-list.js";
+import { cleanCategory, parseAmount, parseContractList, normalizeTitle, splitTrailingAmount, stripTrailingDuration } from "./contract-list.js";
 import type { OcrResult } from "./screen-read.js";
 
 let failures = 0;
@@ -265,6 +265,53 @@ check("fused countdown stripped from the title", liveHungry?.title === "VERY HUN
 check("items-only row still has no amount", liveHungry?.amount == null, String(liveHungry?.amount));
 check("standalone countdown never becomes a title", !lv.some((r) => /\d+\s*m\b/i.test(r.title)));
 check("panel chrome above the first category is dropped", !lv.some((r) => r.title.includes("USERLOG")));
+// ── The panel chrome, sitting CLOSE to the first category ──────────────────────────────
+// The existing "above the first category" check passes on the 2026-08-11 fixture without any
+// help, because an 86px gap there flushes the stray on its own. Sub's 2026-08-12 sweep proved
+// the gap cannot be relied on: the same chrome fused into titles four times
+// ("1:USFR LOO NEED A HITTER", "T:USEN LOG KEEP ASTEROID MINING BASE SAFE"). This packs it
+// tight against the board so distance cannot do the work, leaving the structural rule to.
+const tight = mk([
+  [45, 13, 50, 9, "1:USEN LOO"],             // the chrome, 9px, hard against the region top
+  [126, 30, 427, 21, "MERCENARY 24"],        // category only 17px below it
+  [102, 58, 507, 22, "NEED A HITTER 42k"],
+  [105, 84, 172, 16, "HEADHUNTERS"],
+]);
+const tv = parseContractList(tight, { x: 0, y: 0, w: 654, h: 1008 },
+  { categories: ["Mercenary"], givers: ["Headhunters"] });
+check("chrome packed against the board still does not reach a title",
+  tv.length === 1 && tv[0].title === "NEED A HITTER", tv.map((r) => r.title).join(" | "));
+check("...and the row it would have broken parses whole",
+  tv[0]?.amount === 42000 && tv[0]?.giver === "Headhunters", `${tv[0]?.amount} / ${tv[0]?.giver}`);
+
+// 🔑 The escape hatch. Scrolled deep into one long category there may be no header in frame,
+// and dropping "everything above the first category" would then drop the whole board.
+const noHeader = mk([
+  [102, 58, 507, 22, "NEED A HITTER 42k"],
+  [105, 84, 172, 16, "HEADHUNTERS"],
+]);
+const nh = parseContractList(noHeader, { x: 0, y: 0, w: 654, h: 1008 },
+  { categories: ["Mercenary"], givers: ["Headhunters"] });
+check("with no category header in frame, nothing is dropped", nh.length === 1, String(nh.length));
+
+// ── Digit confusions in the money column ───────────────────────────────────────────────
+// "PILOT IN DISTRESS 4lk" cost twice over in one sweep: the 41,000 was lost AND "4lk" stayed
+// in the title, so the dataset match failed too. splitTrailingAmount could not even reach it.
+check("4lk reads as 41,000", parseAmount("4lk")?.amount === 41000, String(parseAmount("4lk")?.amount));
+check("O for zero is rescued too", parseAmount("6O000")?.amount === 60000, String(parseAmount("6O000")?.amount));
+const pd = splitTrailingAmount("PILOT IN DISTRESS 4lk");
+check("...and it is split off the title, not left in it",
+  pd.head === "PILOT IN DISTRESS" && pd.money?.amount === 41000, `${pd.head} / ${pd.money?.amount}`);
+// 🔑 The guard that makes this safe: a real digit must already be present, or the rescue turns
+// WORDS into money. "IIOO" parsing as 1,100 is a bug the mining scanner already paid for.
+check("a word with no digit is never rescued into a number", parseAmount("IIOO") === null,
+  JSON.stringify(parseAmount("IIOO")));
+check("...nor one that would become a plausible amount", parseAmount("lOOk") === null,
+  JSON.stringify(parseAmount("lOOk")));
+// Still a duration, still refused — the rescue must not smuggle a countdown into the money slot.
+check("a countdown is still not money after rescue", parseAmount("5m l7s") === null,
+  JSON.stringify(parseAmount("5m l7s")));
+
 check("stripTrailingDuration handles the mangled form", stripTrailingDuration("SOMETHING 59m SSS") === "SOMETHING");
 check("stripTrailingDuration leaves a real title alone", stripTrailingDuration("SMALL COVALEX SHIPMENT") === "SMALL COVALEX SHIPMENT");
 

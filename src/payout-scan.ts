@@ -11,6 +11,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import type { ContractRow } from "./contract-list.js";
+import { decideSystem } from "./contract-match.js";
 import type { ContractMatcher, MatchOutcome } from "./contract-match.js";
 
 export interface PayoutObservation {
@@ -112,8 +113,24 @@ export class PayoutScanner {
   /** Rows in the most recent capture — 0 means the panel wasn't visible or wasn't parsed. */
   lastCaptureRows = 0;
   /** System deduced from the board when the log couldn't say. Surfaced so the page can
-   *  show it as deduced rather than as fact. */
+   *  show it as deduced rather than as fact.
+   *
+   *  🔴 STICKY FOR THE SESSION, and it was not before — which is what made the whole deduction
+   *  useless in practice. It used to be reassigned on EVERY capture, `null` included, from that
+   *  one screenful's rows. A board showing nothing but REFUELING casts zero votes (every refuel
+   *  contract exists in all three systems), so the answer was null far more often than not, and
+   *  a Pyro deduced from one screenful was thrown away by the next. Measured on Sub's
+   *  2026-08-12 sweep: the system was NEVER known, and all 8 ambiguous rows were refuel
+   *  contracts that would have resolved with it — 19 same-titled variants collapse to 6 once
+   *  you know it is Pyro, comfortably under the 12-variant cap.
+   *
+   *  🔑 It never downgrades to null, because you cannot leave a system without a long quantum
+   *  trip. A momentary lack of evidence is not evidence of having moved. */
   inferredSystem: string | null = null;
+  /** Votes accumulated across the whole sweep, not one screenful. In memory only: a restart
+   *  genuinely might be on the other side of a jump, and re-earning the deduction costs one
+   *  system-specific contract scrolling past. */
+  private systemVotes = new Map<string, number>();
 
   events(limit = 60): ScanEvent[] {
     return this.eventRing.slice(0, limit);
@@ -171,8 +188,14 @@ export class PayoutScanner {
     // log's terrain report only fires about every ten minutes, which for a scanning
     // session means "unknown" almost always. Measured worth on one real capture: three of
     // eight otherwise-ambiguous rows resolved once the system was known.
-    const sys = system ?? this.matcher.inferSystem(rows);
-    this.inferredSystem = system ? null : sys;
+    // Accumulate this screenful's votes into the session's, then re-decide. Deliberately NOT
+    // `inferSystem(rows)`, which judges one capture in isolation and is why this never fired.
+    for (const [s, n] of this.matcher.systemVotes(rows)) {
+      this.systemVotes.set(s, (this.systemVotes.get(s) ?? 0) + n);
+    }
+    const deduced = decideSystem(this.systemVotes);
+    if (deduced) this.inferredSystem = deduced;   // never back to null — see the field's note
+    const sys = system ?? this.inferredSystem;
     const now = Date.now();
     this.lastCaptureAt = now;
     this.lastCaptureRows = rows.length;
