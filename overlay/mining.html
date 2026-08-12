@@ -209,7 +209,7 @@
   /* visor sheen — part of the SURFACE, so its alpha follows --wsurf (see widget-theme.css) */
   #panel::after { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
     background: linear-gradient(180deg, var(--sheen), transparent 36%);
-    opacity: var(--wsurf, 1); transition: opacity 0.18s ease; }
+    opacity: var(--wsurf, 1); transition: opacity var(--wfade-ms, 0.18s) ease; }
 
   /* AMD compatibility "lite" skin (added on <html> via ?lite): strip everything that forces
      continuous GPU recompositing over the game's Vulkan surface — backdrop blur, the blend-mode

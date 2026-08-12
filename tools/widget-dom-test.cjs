@@ -455,6 +455,12 @@ const REACH = `(async () => {
         }
       }
     }
+    // 🔑 Close what this iteration opened. Removing cfgopen only closes the LOCAL popover — a
+    // page's own sheet stayed open for the rest of the suite, so the later "the cog opens its own
+    // sheet" check was really asserting that it was already open. That went unnoticed until the
+    // cog learned to toggle, at which point the same click correctly CLOSED it and the check
+    // failed. The stale state was the bug; the toggle just exposed it.
+    wCloseSettings(w);
     el.classList.remove("cfgopen");
     el.classList.remove("touched");
   }
@@ -1704,12 +1710,32 @@ const SPLITFADE = `(async () => {
   document.documentElement.classList.remove("no-dim"); applyAllFades();
   ok("...and lifting it fades them again", bgOf(fdoc(party)) !== bgFull);
 
-  // ── inheritance, so one slider still behaves like the control it replaces ───
+  // ── inheritance is a DEFAULT, never visible coupling ────────────────────────
+  // The panel slider used to drag the text slider along with it, because text inherits the panel
+  // value until it is set and the readouts showed the inherited number. It appeared to fix itself
+  // once you touched Text, which is exactly what an inheritance bug looks like from outside.
   bp.s.dim = null; bp.s.dimText = null;
+  const inherited = wDimText(bp);
+  ok("text inherits the PANEL value while nothing is set", Math.abs(inherited - wDim(bp)) < 0.001, inherited);
   setWidgetDim(bp, 40);
-  ok("text inherits the PANEL value when it has no opinion", Math.abs(wDimText(bp) - 0.4) < 0.001, wDimText(bp));
+  ok("moving the PANEL slider leaves the text alpha where it was",
+     Math.abs(wDimText(bp) - inherited) < 0.001, "panel=" + wDim(bp) + " text=" + wDimText(bp));
+  ok("...and the panel actually moved", Math.abs(wDim(bp) - 0.4) < 0.001, wDim(bp));
   setWidgetDimText(bp, 100);
-  ok("...and stops inheriting the moment it is set", wDimText(bp) === 1 && Math.abs(wDim(bp) - 0.4) < 0.001);
+  ok("the text slider still moves only itself", wDimText(bp) === 1 && Math.abs(wDim(bp) - 0.4) < 0.001);
+
+  // ── dragging must not be transitioned ───────────────────────────────────────
+  // A 0.18s transition is right for idle <-> hover and exactly wrong under a continuously
+  // changing value: each input restarts it, so the panel trails the thumb and only arrives once
+  // you let go. Sub reported it as "it does nothing, then catches up".
+  const fadeMs = () => fdoc(party).documentElement.style.getPropertyValue("--wfade-ms");
+  const partySlider = el(party).querySelector(".wcfg-dim");
+  ok("the panel has a fade slider in its popover", !!partySlider);
+  partySlider.value = "50";
+  partySlider.dispatchEvent(new Event("input", { bubbles: true }));
+  ok("dragging drops the transition to zero", fadeMs() === "0ms", fadeMs());
+  partySlider.dispatchEvent(new Event("change", { bubbles: true }));
+  ok("...and releasing gives it back", fadeMs() === "0.18s", fadeMs());
 
   // The tracker is local to THIS document, which hosts every other widget too.
   ok("the tracker fades on its own panel, never on :root",
@@ -1823,6 +1849,18 @@ const WCFGIDLE = `(async () => {
   await sleep(30);
   ok("the cog opens the settings popover", open());
   ok("...and it masks the native view while up", masked.length > 0 && masked[masked.length - 1] === true, JSON.stringify(masked.slice(-1)));
+
+  // 🔑 THE COG TOGGLES. It used to only ever open: the handler cleared the open class from every
+  // widget and then immediately put it back on this one, so a second click was a no-op and the
+  // 15s idle timer was the only way to dismiss the panel. Sub hit this on the chat widget, which
+  // has no settings sheet of its own and therefore uses this popover.
+  cog().click();
+  await sleep(30);
+  ok("clicking the cog again CLOSES it", !open());
+  ok("...and the native view is unmasked again", masked[masked.length - 1] === false, JSON.stringify(masked.slice(-1)));
+  cog().click();
+  await sleep(30);
+  ok("...and a third click reopens it", open());
 
   await sleep(500);
   ok("it closes itself once idle", !open());

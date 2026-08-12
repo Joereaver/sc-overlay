@@ -326,8 +326,10 @@
     /* A ghosted panel that still blurs the game behind it reads as broken. */
     -webkit-backdrop-filter: blur(calc(3px * var(--wsurf, 1)));
     backdrop-filter: blur(calc(3px * var(--wsurf, 1)));
-    transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease,
-      backdrop-filter 0.18s ease;
+    /* --wfade-ms is 0ms while a slider is being dragged — see widget-theme.css for why a
+       transition is exactly wrong under a continuously changing value. */
+    transition: background var(--wfade-ms, 0.18s) ease, border-color var(--wfade-ms, 0.18s) ease,
+      box-shadow var(--wfade-ms, 0.18s) ease, backdrop-filter var(--wfade-ms, 0.18s) ease;
     /* Subtle helmet-projection tilt (matches the stream overlays). Y-axis ONLY: rotateX
        tilts around the horizontal axis, so with perspective the horizontal scale varies
        down the panel — a tall pool projected wider at the bottom, overflowing the
@@ -341,16 +343,16 @@
      scanlines crossing the text is what the CRT look actually is. */
   #panel::before { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
     background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px); mix-blend-mode: screen;
-    opacity: var(--wsurf, 1); transition: opacity 0.18s ease; }
+    opacity: var(--wsurf, 1); transition: opacity var(--wfade-ms, 0.18s) ease; }
   /* visor sheen */
   #panel::after { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
     background: linear-gradient(180deg, var(--sheen), transparent 36%);
-    opacity: var(--wsurf, 1); transition: opacity 0.18s ease; }
+    opacity: var(--wsurf, 1); transition: opacity var(--wfade-ms, 0.18s) ease; }
 
   /* The content side. Skin decoration follows the SURFACE (a trinket is the skin's
      identity, not information); the canvas's own chrome never fades, because a control
      you cannot see is a control you cannot use. */
-  #panel > * { opacity: var(--wtext, 1); transition: opacity 0.18s ease; }
+  #panel > * { opacity: var(--wtext, 1); transition: opacity var(--wfade-ms, 0.18s) ease; }
   #panel > .brandtab, #panel > .corner, #panel > .stitch,
   #panel > .tape, #panel > .bolt { opacity: var(--wsurf, 1); }
   #panel > .whood, #panel > #moveBanner, #panel > #resizeHandle { opacity: 1; }
@@ -548,22 +550,29 @@
      the bar is clipped to nothing (this is the third time that trap has bitten: mining's cog menu
      and the trinket z-order were the same shape of bug). It hangs off the WIDGET, inside its rect,
      which also means the shell's cursor hit-test already covers it without a new region. */
+  /* 🔑 This popover lives in the CANVAS document, not the widget's, so the per-widget text-size
+     control cannot reach it — that control is a `zoom` on the embedded document. Which is why it
+     reads small next to a widget scaled up, and why the fix is a bigger base size rather than
+     wiring it to that slider (Sub, 2026-08-11). If overlay chrome should scale with the display,
+     that is a separate job covering the bar, the tabs and every popover — doing it here alone
+     would just make the chrome inconsistent with itself. */
   .wcfg { display: none; position: absolute; right: 6px; bottom: 6px; z-index: 34;
-    min-width: 176px; padding: 8px 9px; border-radius: 8px; background: var(--menu-bg);
+    min-width: 208px; padding: 10px 12px; border-radius: 8px; background: var(--menu-bg);
     border: 1px solid var(--border); box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6); }
   .widget.cfgopen .wcfg { display: block; }
-  .wcfg-row { display: flex; align-items: center; gap: 6px; }
-  .wcfg-row + .wcfg-row { margin-top: 7px; }
-  .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-text); }
-  .wcfg-val, .wcfg-angv, .wcfg-dimv, .wcfg-dimtextv { font-family: var(--mono); font-size: 10px;
-    color: var(--faint); min-width: 34px; text-align: right; }
-  .wcfg-ang, .wcfg-dim, .wcfg-dimtext { flex: none; width: 84px; accent-color: var(--cyan);
-    height: 4px; cursor: pointer; }
-  .wcfg-hover { flex: none; accent-color: var(--cyan); cursor: pointer; margin: 0; }
+  .wcfg-row { display: flex; align-items: center; gap: 8px; }
+  .wcfg-row + .wcfg-row { margin-top: 8px; }
+  .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan-text); }
+  .wcfg-val, .wcfg-angv, .wcfg-dimv, .wcfg-dimtextv { font-family: var(--mono); font-size: 11.5px;
+    color: var(--cyan-dim); min-width: 38px; text-align: right; }
+  .wcfg-ang, .wcfg-dim, .wcfg-dimtext { flex: none; width: 92px; accent-color: var(--cyan);
+    height: 5px; cursor: pointer; }
+  .wcfg-hover { flex: none; accent-color: var(--cyan); cursor: pointer; margin: 0;
+    width: 14px; height: 14px; }
   /* A section heading, because "Fade" is now two sliders and a switch rather than one control. */
-  .wcfg-sec { font-family: var(--sans); font-size: 8.5px; font-weight: 700; letter-spacing: 0.18em;
-    text-transform: uppercase; color: var(--faint); margin: 9px 0 -1px; }
+  .wcfg-sec { font-family: var(--sans); font-size: 10px; font-weight: 700; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--faint); margin: 11px 0 1px; }
   label.wcfg-row { cursor: pointer; }
   /* The tilt only means anything on the free-floating canvas; an OBS browser source is flat. */
   body:not(.canvas) .wcfg-angrow { display: none; }
@@ -3380,6 +3389,10 @@
   const fadeOverridden = () => document.documentElement.classList.contains("no-dim");
   const isHovered = (el) => { try { return !!el && el.matches(":hover"); } catch { return false; } };
 
+  // True while a fade slider is under the thumb. The 0.18s transition is right for a STATE change
+  // (idle <-> hover should glide) and exactly wrong under a continuously changing value, where it
+  // makes the panel trail the slider and only arrive after you stop.
+  let fadeDragging = false;
   function applyFade(w) {
     const el = wEl(w); if (!el) return;
     // A notifier has no widget panel to split, so it keeps the original single-opacity path.
@@ -3401,6 +3414,7 @@
       if (!root) return;
       root.style.setProperty("--wsurf", String(surf));
       root.style.setProperty("--wtext", String(text));
+      root.style.setProperty("--wfade-ms", fadeDragging ? "0ms" : "0.18s");
     };
     // The tracker is local to THIS document, which hosts every other widget too — so its values
     // go on its own panel. On :root they would fade the entire overlay at once.
@@ -3422,15 +3436,29 @@
   }
   const dimLabel = (v) => (v >= 1 ? "Off" : Math.round(v * 100) + "%");
   function showFade(w) {
-    for (const i of fadeControls(w, ".wcfg-dim")) i.value = String(Math.round(wDim(w) * 100));
+    // 🔑 Never write back into the control being dragged. Assigning `.value` to the input under
+    // the thumb fights the drag, and it is redundant — the browser already has the value.
+    const live = document.activeElement;
+    const set = (i, v) => { if (i !== live) i.value = v; };
+    for (const i of fadeControls(w, ".wcfg-dim")) set(i, String(Math.round(wDim(w) * 100)));
     for (const o of fadeControls(w, ".wcfg-dimv")) o.textContent = dimLabel(wDim(w));
-    for (const i of fadeControls(w, ".wcfg-dimtext")) i.value = String(Math.round(wDimText(w) * 100));
+    for (const i of fadeControls(w, ".wcfg-dimtext")) set(i, String(Math.round(wDimText(w) * 100)));
     for (const o of fadeControls(w, ".wcfg-dimtextv")) o.textContent = dimLabel(wDimText(w));
     for (const c of fadeControls(w, ".wcfg-hover")) c.checked = wHoverFull(w);
   }
   // 100% means "never fade" for THIS widget — stored explicitly rather than as null, so it stays
   // opaque even if the global default is later turned down.
-  function setWidgetDim(w, pct) { w.s.dim = clampDim(Number(pct) / 100); applyFade(w); }
+  //
+  // 🔑 Moving the PANEL slider pins the text value first. Text inherits the panel number until it
+  // is set, which is right for a widget nobody has configured — but with both sliders on screen it
+  // read as the panel slider dragging the text one along with it, and it appeared to "fix itself"
+  // the moment you happened to touch Text (Sub, 2026-08-11). Materialising the inherited value on
+  // the first panel drag keeps the inheritance as a DEFAULT without ever showing it as coupling.
+  function setWidgetDim(w, pct) {
+    if (typeof w.s.dimText !== "number") w.s.dimText = wDimText(w);
+    w.s.dim = clampDim(Number(pct) / 100);
+    applyFade(w);
+  }
   function setWidgetDimText(w, pct) { w.s.dimText = clampDim(Number(pct) / 100); applyFade(w); }
   function setWidgetHoverFull(w, on) { w.s.hoverFull = !!on; applyFade(w); }
 
@@ -3745,23 +3773,25 @@
     const doc = root.ownerDocument;
     const box = doc.createElement("div");
     box.className = "wfade-rows";
-    const rowCss = "display:flex;align-items:center;gap:6px;padding:6px 12px;";
-    const lblCss = "flex:1;font-size:11px;letter-spacing:.06em;opacity:.85";
-    const rngCss = "width:84px;height:4px;cursor:pointer;accent-color:var(--cyan,#45D0E0)";
-    const valCss = "min-width:34px;text-align:right;font-size:10px;opacity:.75";
+    // These rows go INSIDE the widget's document, so unlike the .wcfg popover they do follow the
+    // per-widget text-size control (it is a zoom on that document). Sized to match it at 100%.
+    const rowCss = "display:flex;align-items:center;gap:8px;padding:7px 12px;";
+    const lblCss = "flex:1;font-size:12px;letter-spacing:.05em;opacity:.9";
+    const rngCss = "width:92px;height:5px;cursor:pointer;accent-color:var(--cyan,#45D0E0)";
+    const valCss = "min-width:38px;text-align:right;font-size:11.5px;opacity:.8";
     const slider = (cls, label, title) => '<div style="' + rowCss + '">'
       + '<span style="' + lblCss + '">' + label + '</span>'
       + '<input type="range" class="' + cls + '" min="20" max="100" step="5" style="' + rngCss + '"'
       + ' title="' + title + '" />'
       + '<b class="' + cls + 'v" style="' + valCss + '"></b></div>';
     box.innerHTML =
-      '<div style="padding:6px 12px 2px;font-size:9px;font-weight:700;letter-spacing:.18em;'
-      + 'text-transform:uppercase;opacity:.6">Fade when idle</div>'
+      '<div style="padding:8px 12px 3px;font-size:10px;font-weight:700;letter-spacing:.16em;'
+      + 'text-transform:uppercase;opacity:.65">Fade when idle</div>'
       + slider("wcfg-dim", "Panel", "How faint this widget's panel goes while you are not using it. 100% never fades.")
       + slider("wcfg-dimtext", "Text", "How faint this widget's text goes while you are not using it. 100% never fades.")
       + '<label style="' + rowCss + 'cursor:pointer">'
       + '<span style="' + lblCss + '">Full on hover</span>'
-      + '<input type="checkbox" class="wcfg-hover" style="accent-color:var(--cyan,#45D0E0);cursor:pointer"'
+      + '<input type="checkbox" class="wcfg-hover" style="accent-color:var(--cyan,#45D0E0);cursor:pointer;width:14px;height:14px"'
       + ' title="Bring this widget back to full opacity while the cursor is over it." /></label>';
     wireFadeControls(w, box);
     root.appendChild(box);
@@ -3773,10 +3803,17 @@
   function wireFadeControls(w, root) {
     const bind = (sel, set) => {
       const el = root.querySelector(sel); if (!el) return;
-      el.addEventListener("input", (e) => { e.stopPropagation(); set(el); });
-      el.addEventListener("change", (e) => { e.stopPropagation(); set(el); persistW(w); });
+      // `input` fires while dragging, `change` on release. The drag flag drops the transition to
+      // 0ms for the duration, so the panel tracks the thumb exactly instead of chasing it, and
+      // the glide comes back for the state changes it was meant for.
+      el.addEventListener("input", (e) => { e.stopPropagation(); fadeDragging = true; set(el); });
+      el.addEventListener("change", (e) => { e.stopPropagation(); set(el); fadeDragging = false; applyFade(w); persistW(w); });
       el.addEventListener("click", (e) => e.stopPropagation());
-      el.addEventListener("pointerdown", (e) => e.stopPropagation()); // don't start a widget drag
+      // Don't start a widget drag — and make sure a pointer released anywhere clears the flag,
+      // since `change` never fires for a drag that ends outside the control.
+      el.addEventListener("pointerdown", (e) => e.stopPropagation());
+      el.addEventListener("pointerup", () => { fadeDragging = false; applyFade(w); });
+      el.addEventListener("blur", () => { fadeDragging = false; });
     };
     bind(".wcfg-dim", (el) => setWidgetDim(w, el.value));
     bind(".wcfg-dimtext", (el) => setWidgetDimText(w, el.value));
@@ -4249,12 +4286,28 @@
       const bar = el.querySelector(".whead");
       el.querySelector(".wh-cog")?.addEventListener("click", (e) => {
         e.stopPropagation();
+        // 🔑 THE COG TOGGLES. It used to only ever OPEN, so clicking it a second time re-opened an
+        // already-open sheet and read as a dead button — the 15s idle timer was the only way to
+        // dismiss one (Sub, 2026-08-11: "I can't get the settings menu to go away"). Both
+        // destinations had it: the popover branch cleared `cfgopen` from every widget and then
+        // immediately put it back on this one, and the pages expose no close at all.
+        // Whether THIS widget was open has to be read BEFORE the clear below wipes the evidence.
+        let wasOpen = el.classList.contains("cfgopen");
+        if (el.classList.contains("has-settings")) {
+          try { wasOpen = !!wSettingsRoot(w)?.classList.contains("open"); } catch { /* iframe gone */ }
+        }
         document.querySelectorAll(".widget.cfgopen").forEach((b) => b.classList.remove("cfgopen"));
+        if (wasOpen) {
+          wCloseSettings(w);
+          cancelWidgetSettingsIdle();
+          syncViewMask();
+          return;
+        }
         touchWidget(w);
         // ONE destination. A page with its own settings opens THAT (the Text size row was injected
         // into it); everything else opens the local popover, which carries Text size itself.
         if (el.classList.contains("has-settings")) {
-          try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); showFade(w); } catch { /* iframe gone */ }
+          try { wOpenSettings(w); showTextScale(w); showAngle(w); showFade(w); } catch { /* iframe gone */ }
           syncViewMask();
           armWidgetSettingsIdle(w);
           return;

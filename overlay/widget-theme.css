@@ -225,8 +225,14 @@
      goes with the fade. Pages that want a different strength set --panel-blur. */
   -webkit-backdrop-filter: blur(calc(var(--panel-blur, 9px) * var(--wsurf, 1)));
   backdrop-filter: blur(calc(var(--panel-blur, 9px) * var(--wsurf, 1)));
-  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease,
-    backdrop-filter 0.18s ease;
+  /* 🔑 --wfade-ms is 0ms WHILE A SLIDER IS BEING DRAGGED. A 0.18s ease is right for the fade
+     itself (idle <-> hover is a state change and should glide), but it is exactly wrong under a
+     continuously changing value: every input event restarts the transition from wherever the
+     last one had got to, so the panel permanently trails the thumb and only arrives once you
+     stop moving. Sub reported that as "sometimes it does nothing and takes a while to catch up",
+     which is precisely the shape of a transition chasing an input. */
+  transition: background var(--wfade-ms, 0.18s) ease, border-color var(--wfade-ms, 0.18s) ease,
+    box-shadow var(--wfade-ms, 0.18s) ease, backdrop-filter var(--wfade-ms, 0.18s) ease;
 }
 /* The AMD-lite skin trades the translucent glass for a near-opaque fill (it exists to stop
    continuous recompositing over the game's Vulkan surface). It still fades. */
@@ -241,7 +247,7 @@ html.amd-lite #panel.wpanel {
    Trinkets are the skin's IDENTITY, not content, so they follow the SURFACE. (A page's
    own copies are hidden when embedded — the canvas injects its own onto the wrapper —
    but they are live on the product page and in a plain browser.) */
-.wpanel > * { opacity: var(--wtext, 1); transition: opacity 0.18s ease; }
+.wpanel > * { opacity: var(--wtext, 1); transition: opacity var(--wfade-ms, 0.18s) ease; }
 .wpanel > .tape, .wpanel > .bolt, .wpanel > .corner { opacity: var(--wsurf, 1); }
 
 /* ── Universal surface treatments ───────────────────────────────────────────────
@@ -261,7 +267,7 @@ html.amd-lite #panel.wpanel {
 .wpanel::before {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 3;
   background: repeating-linear-gradient(0deg, transparent 0 2px, var(--scan) 2px 3px);
-  opacity: calc(0.5 * var(--wsurf, 1)); transition: opacity 0.18s ease;
+  opacity: calc(0.5 * var(--wsurf, 1)); transition: opacity var(--wfade-ms, 0.18s) ease;
 }
 html.amd-lite .wpanel::before { display: none; }
 
