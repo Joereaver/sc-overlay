@@ -8,7 +8,7 @@
 //
 //   npx tsx src/contract-list.test.ts
 
-import { cleanCategory, parseAmount, parseContractList, normalizeTitle } from "./contract-list.js";
+import { cleanCategory, parseAmount, parseContractList, normalizeTitle, stripTrailingDuration } from "./contract-list.js";
 import type { OcrResult } from "./screen-read.js";
 
 let failures = 0;
@@ -218,6 +218,48 @@ check("two delivery rows", r3.length === 2, r3.map((r) => `${r.title}=${r.amount
 check("31k on the right row", r3.find((r) => r.title.includes("ICC"))?.amount === 31000);
 check("small 8k parsed", r3.find((r) => r.title.includes("GASLIGHT"))?.amount === 8000);
 check("category applies to both", r3.every((r) => r.category === "DELIVERY"));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RAPIDOCR, off the LIVE board (2026-08-11). A different engine and a different
+// problem. PP-OCR reads the characters far better than Windows OCR — which is why the
+// board was switched to it — but it FUSES the columns, returning
+// "INTERESTED IN BUILDING A BETTER 103k" as one detection. Column geometry cannot
+// separate what the engine already joined, so this path matches against the game's own
+// VOCABULARY (29 category names, 65 givers) instead of guessing from pixel heights.
+// Height bands were hopeless here anyway: a title's wrapped second line ("FUTURe?", 17px)
+// is the same size as a giver ("WIKELO", 16px).
+// ═══════════════════════════════════════════════════════════════════════════
+const VOCAB = {
+  categories: ["Collection", "Delivery", "Investigation", "Mercenary", "Bounty Hunter", "Hauling", "Hand Mining", "Salvage"],
+  givers: ["Rayari Incorporated", "Wikelo", "Ling Family Hauling", "Rough & Ready", "Bit Zeros"],
+};
+const liveOcr = mk([
+  [36, 7, 618, 11, "1:USERLOG ATFU OIBM"],   // the panel's own chrome, decoded as garbage
+  [116, 93, 428, 22, "COLLECTION 2"],        // category fused with its count
+  [102, 182, 507, 27, "INTERESTED IN BUILDING A BETTER 103k"], // title fused with the price
+  [104, 205, 87, 17, "FUTURe?"],             // wrapped line, same height as a giver
+  [529, 216, 81, 19, "27m 29s"],             // a countdown on its own line
+  [105, 229, 172, 12, "RAYARIINCORPORATED"], // giver, spaces lost
+  [108, 304, 504, 26, "VERY HUNGRY 52m 8s"], // title fused with a countdown, no price at all
+  [107, 328, 58, 16, "WIKELO"],
+  [130, 419, 424, 22, "DELIVERY 2"],
+  [123, 593, 430, 23, "MERCENARY 24"],
+]);
+const lv = parseContractList(liveOcr, { x: 0, y: 0, w: 654, h: 1008 }, VOCAB);
+check("live board yields exactly the two real rows", lv.length === 2, lv.map((r) => r.title).join(" | "));
+const better = lv.find((r) => r.title.startsWith("INTERESTED"));
+check("fused price is split off the title", better?.amount === 103000, String(better?.amount));
+check("wrapped second line joined, not read as a giver", (better?.title ?? "").includes("FUTUR"), better?.title);
+check("giver recovered from spaceless OCR", better?.giver === "Rayari Incorporated", String(better?.giver));
+check("category recovered from a fused count", better?.category === "COLLECTION", String(better?.category));
+// 🔴 The countdown must reach neither the money nor the words.
+const liveHungry = lv.find((r) => r.title.startsWith("VERY HUNGRY"));
+check("fused countdown stripped from the title", liveHungry?.title === "VERY HUNGRY", hungry?.title);
+check("items-only row still has no amount", liveHungry?.amount == null, String(liveHungry?.amount));
+check("standalone countdown never becomes a title", !lv.some((r) => /\d+\s*m\b/i.test(r.title)));
+check("panel chrome above the first category is dropped", !lv.some((r) => r.title.includes("USERLOG")));
+check("stripTrailingDuration handles the mangled form", stripTrailingDuration("SOMETHING 59m SSS") === "SOMETHING");
+check("stripTrailingDuration leaves a real title alone", stripTrailingDuration("SMALL COVALEX SHIPMENT") === "SMALL COVALEX SHIPMENT");
 
 console.log(failures ? `
 ${failures} FAILED` : `

@@ -135,12 +135,72 @@ export function normalizeTitle(s: string | null | undefined): string {
     .trim();
 }
 
+/** The category and giver names the dataset actually contains. Supplying these turns the
+ *  parse from geometry-guessing into vocabulary matching — see parseContractList. */
+export interface ContractVocab {
+  categories: string[];
+  givers: string[];
+}
+
+/** Strip a trailing money token off a line and hand back both halves.
+ *
+ *  🔴 REQUIRED FOR RAPIDOCR, WHICH FUSES THE COLUMNS. Windows OCR returns the title and
+ *  the amount as separate lines, so they can be told apart by x. PP-OCR returns the whole
+ *  visual row as ONE detection — "INTERESTED IN BUILDING A BETTER 103k" — and no amount
+ *  of column geometry can separate what the engine has already joined. (The fabricator
+ *  reader already notes PP-OCR fusing adjacent panels; same behaviour, different screen.) */
+export function splitTrailingAmount(text: string): { head: string; money: ReturnType<typeof parseAmount> } {
+  const t = text.trim();
+  // Try progressively longer tails: "103k", "Fee:13500", "52m 8s" (rejected as a duration
+  // by parseAmount, which is what keeps a timer out of the money slot).
+  const m = /^(.*?)[\s]+((?:fee\s*[:.]?\s*)?[\d][\d,.]*\s*[kKM]?)$/i.exec(t);
+  if (m) {
+    const money = parseAmount(m[2]);
+    if (money) return { head: m[1].trim(), money };
+  }
+  return { head: t, money: null };
+}
+
+/** Strip a trailing 1–3 digit count, which is how a category header carries its size
+ *  ("COLLECTION 2", "MERCENARY 24"). Only ever applied to a line already believed to be a
+ *  category, so it cannot eat a real payout. */
+function stripCount(text: string): string {
+  return text.replace(/\s+\d{1,3}$/, "").trim();
+}
+
+/** Strip a trailing expiry countdown.
+ *
+ *  🔴 THE TIMER GETS FUSED INTO THE TITLE. PP-OCR returned "VERY HUNGRY 52m 8s" as one
+ *  detection, and a standalone "27m 29s" on its own line got swept up as a second title
+ *  line — either way the countdown ends up inside the text we try to match against the
+ *  dataset, and nothing matches. parseAmount already refuses to read a duration as money
+ *  (which is what stops 52m becoming 52 million); this is the other half, removing it
+ *  from the words.
+ *
+ *  Tolerant of the mangling this size of text produces: "59m 55s" came back as
+ *  "59m SSS". */
+export function stripTrailingDuration(text: string): string {
+  return text.replace(/\s*\b\d{1,3}\s*[mhMH]\s*[\dsS]{0,4}\s*$/, "").trim();
+}
+
 /** Split the OCR of a Contract Manager capture into rows.
+ *
+ *  🔑 VOCABULARY FIRST, GEOMETRY SECOND. When `vocab` is supplied, a line is a category
+ *  because it IS one of the game's category names and a line is a giver because it IS one
+ *  of the 65 known givers — not because its text happens to be 22px tall. Height bands
+ *  worked for Windows OCR and fell apart on RapidOCR, where a title's second line
+ *  ("FUTURe?", 17px) is indistinguishable from a giver ("WIKELO", 16px). The names are
+ *  data we already have; inferring them from pixel heights was solving a problem we had
+ *  the answer to.
+ *
+ *  Without `vocab` it falls back to the height/column heuristics, which is what the
+ *  Windows-OCR fixtures exercise.
  *
  *  Deliberately tolerant: it returns what it could read and leaves fields null rather
  *  than dropping a row. A row with a title and no amount is still useful (it proves the
  *  contract is on the board); a row with an amount and no title is not, and is discarded. */
-export function parseContractList(ocr: OcrResult, region?: PanelRect): ContractRow[] {
+export function parseContractList(ocr: OcrResult, region?: PanelRect, vocab?: ContractVocab): ContractRow[] {
+  if (vocab) return parseWithVocab(ocr, region, vocab);
   const giverMaxH = GIVER_MAX_H * ocr.h;
   const titleMaxH = TITLE_MAX_H * ocr.h;
 
@@ -254,4 +314,107 @@ export function parseContractList(ocr: OcrResult, region?: PanelRect): ContractR
   }
   flush();
   return rows;
+}
+
+/** The vocabulary-driven parse. See parseContractList's header for why this exists. */
+function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: ContractVocab): ContractRow[] {
+  const inRegion = region
+    ? ocr.lines.filter(
+        (l) =>
+          l.x + l.w > region.x && l.x < region.x + region.w &&
+          l.y + l.h > region.y && l.y < region.y + region.h,
+      )
+    : ocr.lines;
+  const lines = inRegion.filter((l) => l.text.trim()).sort((a, b) => a.y - b.y);
+  if (!lines.length) return [];
+
+  const squash = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const cats = vocab.categories.map((c) => ({ raw: c, key: squash(c) })).filter((c) => c.key);
+  const givers = vocab.givers.map((g) => ({ raw: g, key: squash(g) })).filter((g) => g.key);
+
+  /** Names come back with a character or two wrong at this size ("RAYARIINCORPORATED" is
+   *  clean, but "UNG FAMILY HAULING" was not), so matching allows a small slip that scales
+   *  with length — and requires a near-complete overlap, not a substring, so "HAULING"
+   *  cannot claim "LING FAMILY HAULING". */
+  const closest = (key: string, pool: { raw: string; key: string }[]): string | null => {
+    if (!key) return null;
+    let best: string | null = null;
+    let bestD = Infinity;
+    for (const p of pool) {
+      if (Math.abs(p.key.length - key.length) > 3) continue;
+      let d = 0;
+      const n = Math.max(p.key.length, key.length);
+      for (let i = 0; i < n; i++) if (p.key[i] !== key[i]) d++;
+      // Positional mismatch is a cheap upper bound on edit distance and is enough here,
+      // because these are the same string with a character misread rather than shifted.
+      if (d < bestD) { bestD = d; best = p.raw; }
+    }
+    const tol = Math.max(1, Math.floor(key.length / 8));
+    return bestD <= tol ? best : null;
+  };
+
+  const rows: ContractRow[] = [];
+  let category: string | null = null;
+  let titles: string[] = [];
+  let giver: string | null = null;
+  let money: ReturnType<typeof parseAmount> = null;
+  let top = 0;
+  let bottom = 0;
+
+  const flush = () => {
+    if (titles.length) {
+      rows.push({
+        category,
+        title: titles.join(" ").replace(/\s+/g, " ").trim(),
+        giver,
+        amount: money ? money.amount : null,
+        kind: money ? money.kind : null,
+        rounded: money ? money.rounded : false,
+        y: Math.round((top + bottom) / 2),
+      });
+    }
+    titles = [];
+    giver = null;
+    money = null;
+  };
+
+  for (const l of lines) {
+    const text = l.text.trim();
+    // A category header may carry a count; a contract row may carry its price. Both are
+    // fused onto the end of the line by PP-OCR, so both are peeled off before matching.
+    const cat = closest(squash(stripCount(text)), cats);
+    if (cat) {
+      flush();
+      category = cat.toUpperCase();
+      continue;
+    }
+    const split = splitTrailingAmount(text);
+    const gv = closest(squash(split.head), givers);
+    if (gv) {
+      // The giver is the last line of a row; it closes it.
+      giver = gv;
+      bottom = l.y + l.h;
+      flush();
+      continue;
+    }
+    // Anything else is title text — once the countdown is taken off it.
+    const head = stripTrailingDuration(split.head);
+    // A line that was ONLY a countdown ("27m 29s" on its own) is not title text and must
+    // not be appended, or the row can never match the dataset.
+    if (!head) {
+      if (split.money) money = split.money;
+      continue;
+    }
+    // 🔑 Nothing before the first category header is a contract. The panel's own chrome
+    // decodes as garbage at this size ("1:USERLOG ATFU OIBM") and would otherwise become
+    // a row of its own, and later a spurious "unknown title" report.
+    if (!category) continue;
+    if (!titles.length) top = l.y;
+    titles.push(head);
+    bottom = l.y + l.h;
+    if (split.money) money = split.money;
+  }
+  flush();
+  // A row with no title is not a contract, whatever else was read off it.
+  return rows.filter((r) => r.title.length > 3);
 }

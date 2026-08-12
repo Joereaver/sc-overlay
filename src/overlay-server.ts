@@ -885,6 +885,22 @@ function ensurePayoutScanner(): PayoutScanner | null {
  *  the only moment it can silently stop being true. */
 let lastSystem: string | null = null;
 
+/** The category and giver names the dataset actually holds — what turns the board parse
+ *  from geometry-guessing into vocabulary matching. Cached: it is the same two lists every
+ *  tick, and rebuilding them from 4,075 contracts per capture would be pure waste. */
+let vocabCache: { patch: string; v: { categories: string[]; givers: string[] } } | null = null;
+function payoutVocab(): { categories: string[]; givers: string[] } {
+  const patch = tracker.view().patch ?? "";
+  if (vocabCache && vocabCache.patch === patch) return vocabCache.v;
+  const cands = tracker.matchCandidates();
+  const v = {
+    categories: [...new Set(cands.map((c) => c.missionType).filter(Boolean))],
+    givers: [...new Set(cands.map((c) => c.giver).filter(Boolean))],
+  };
+  vocabCache = { patch, v };
+  return v;
+}
+
 function currentSystem(): string | null {
   // `place` is declared further down; this only runs at request time, well after init.
   const p = place.current();
@@ -1931,7 +1947,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       if (config.payoutScan) {
         try {
           const sc = ensurePayoutScanner();
-          if (sc) sc.ingest(parseContractList(ocr, { x: 0, y: 0, w: ocr.w, h: ocr.h }), currentSystem());
+          if (sc) {
+            sc.ingest(
+              parseContractList(ocr, { x: 0, y: 0, w: ocr.w, h: ocr.h }, payoutVocab()),
+              currentSystem(),
+            );
+          }
         } catch (e) {
           console.log(`[payout] scan error: ${(e as Error).message}`);
         }
