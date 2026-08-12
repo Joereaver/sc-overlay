@@ -19,7 +19,32 @@ export interface PayoutObservation {
   source: "ocr";
   observedAt: string;
   changelist: string;
+  /** How the contract was identified. `unique` = the board row resolved to exactly one
+   *  contract. `title-group` = it resolved to several same-titled variants and the price
+   *  was applied to all of them, on the rule below. Sent so the site can weight or
+   *  separate them later; nothing depends on it today. */
+  attribution: "unique" | "title-group";
+  /** How many variants shared this observation (1 when unique). */
+  variants: number;
 }
+
+/** 🔑 SAME TITLE MEANS SAME PRICE. Sub, after scanning his whole board: "we have a lot of
+ *  that, so if it has that title, then that's the price... the only missions that seem to
+ *  be genuinely different with the same title are the Pyro ones with a different mission
+ *  pool based on where you're located, and the price you get paid is the same."
+ *
+ *  That is domain knowledge no amount of dataset analysis would have produced, and it
+ *  turns the biggest limitation of this feature into a non-issue. Same-titled variants
+ *  differ in reward POOL and LOCATION — which is what cost him a week on Deep space hit,
+ *  and why the blueprint tracker must never merge them — but they do NOT differ in aUEC.
+ *  So a price read off one of them is a price for all of them.
+ *
+ *  ⚠️ Bounded anyway. Above this many variants the title has stopped identifying a
+ *  contract at all: 148 dataset entries share "Trainee Rank Small Cargo Haul", and hauling
+ *  is the one category whose pay plausibly scales with the run rather than the title. A
+ *  group that large records nothing and says so, rather than writing one number 148 times.
+ */
+const TITLE_GROUP_CAP = 12;
 
 export interface ScanTally {
   /** Rows the OCR produced, ever, this session. */
@@ -103,9 +128,9 @@ export class PayoutScanner {
     private changelist: string,
   ) {}
 
-  /** Feed one capture's rows. Returns the observations newly queued. */
-  ingest(rows: ContractRow[], system: string | null): PayoutObservation[] {
-    const fresh: PayoutObservation[] = [];
+  /** Feed one capture's rows. Everything it decides is visible in `tally` and
+   *  `events()`; nothing is returned, because the caller acts on neither. */
+  ingest(rows: ContractRow[], system: string | null): void {
     // 🔑 If the log hasn't said where we are, ask the BOARD. A contract board only offers
     // contracts for the system you're in, so the rows themselves are evidence — and the
     // log's terrain report only fires about every ten minutes, which for a scanning
@@ -148,8 +173,17 @@ export class PayoutScanner {
 
       const out: MatchOutcome = this.matcher.match(row, sys);
       if (out.status === "ambiguous") {
-        this.tally.ambiguous++;
-        ev(row, "ambiguous", `${out.candidates.length} contracts share this title${sys ? "" : " — system unknown"}`);
+        if (out.candidates.length > TITLE_GROUP_CAP) {
+          this.tally.ambiguous++;
+          ev(row, "ambiguous", `${out.candidates.length} contracts share this title — too many to attribute`);
+          continue;
+        }
+        // Same title, same price. Record it against every variant.
+        const wrote = this.record(row, out.candidates, "title-group", ev);
+        if (!wrote) {
+          this.tally.duplicate++;
+          ev(row, "duplicate", `already have ${row.amount.toLocaleString("en-US")} for all ${out.candidates.length} variants`);
+        }
         continue;
       }
       if (out.status === "unknown") {
@@ -166,35 +200,60 @@ export class PayoutScanner {
         continue;
       }
 
-      // 🔑 Dedup on (contract, price), not on contract alone. The board is re-read every
-      // few seconds while the panel is open, so without this one sitting session would
-      // queue the same contract hundreds of times and drown the median in a single
-      // player's repeats. But the SAME contract at a DIFFERENT price is a real second
-      // observation — that spread is the thing worth capturing.
-      const prices = this.seenPrices.get(out.debugName) ?? new Set<number>();
-      if (prices.has(row.amount)) {
+      const wroteOne = this.record(row, [out.debugName], "unique", ev, out.via);
+      if (!wroteOne) {
         this.tally.duplicate++;
         ev(row, "duplicate", `already recorded ${row.amount.toLocaleString("en-US")} for ${out.debugName}`);
-        continue;
       }
-      prices.add(row.amount);
-      this.seenPrices.set(out.debugName, prices);
+    }
+  }
 
-      const obs: PayoutObservation = {
-        contractKey: out.debugName,
-        amount: row.amount,
+  /** Queue one price against one or more contracts. Returns false when every one of them
+   *  already had this exact price.
+   *
+   *  🔑 Dedup on (contract, PRICE), not on contract alone. The board is re-read every few
+   *  seconds while the panel is open, so keying on the contract alone would queue one
+   *  sitting hundreds of times and drown the median in a single player's repeats. But the
+   *  same contract at a DIFFERENT price is a real second observation, and that spread is
+   *  the thing worth having. */
+  private record(
+    row: ContractRow,
+    keys: string[],
+    attribution: PayoutObservation["attribution"],
+    ev: (row: ContractRow, outcome: ScanEvent["outcome"], detail: string) => void,
+    via?: string,
+  ): boolean {
+    const amount = row.amount as number;
+    const at = new Date().toISOString();
+    let wrote = 0;
+    for (const key of keys) {
+      const prices = this.seenPrices.get(key) ?? new Set<number>();
+      if (prices.has(amount)) continue;
+      prices.add(amount);
+      this.seenPrices.set(key, prices);
+      this.queue.push({
+        contractKey: key,
+        amount,
         currency: "UEC",
         source: "ocr",
-        observedAt: new Date().toISOString(),
+        observedAt: at,
         changelist: this.changelist,
-      };
-      this.queue.push(obs);
-      fresh.push(obs);
-      this.tally.recorded++;
-      this.tally.queued = this.queue.length;
-      ev(row, "recorded", `→ ${out.debugName}${out.via === "system" ? " (resolved by system)" : ""}`);
+        attribution,
+        variants: keys.length,
+      });
+      wrote++;
     }
-    return fresh;
+    if (!wrote) return false;
+    this.tally.recorded++;
+    this.tally.queued = this.queue.length;
+    ev(
+      row,
+      "recorded",
+      keys.length === 1
+        ? `→ ${keys[0]}${via === "system" ? " (resolved by system)" : ""}`
+        : `→ ${wrote} variants of this title (same title, same price)`,
+    );
+    return true;
   }
 
   /** Push what's queued. The queue is only cleared on a confirmed 2xx — a failed flush
