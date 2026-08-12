@@ -2202,6 +2202,12 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       patch: tracker.view().patch ?? null,
       system: currentSystem(),
       tally: sc ? sc.tally : null,
+      // Per-row feed + freshness, for overlay/payout-scan.html. A stalled scanner and an
+      // idle one look identical in a total, so the page needs to know WHEN the last
+      // capture landed, not just how many rows have ever been seen.
+      events: sc ? sc.events(60) : [],
+      lastCaptureAt: sc ? sc.lastCaptureAt : 0,
+      lastCaptureRows: sc ? sc.lastCaptureRows : 0,
       frame: lastFrame,
       panelLines: lastPanelLines,
     }));

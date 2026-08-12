@@ -49,6 +49,23 @@ export interface ScanTally {
   lastRows: { category: string | null; title: string; giver: string | null; amount: number | null; kind: string | null }[];
 }
 
+/** One row's fate, with the reason. Sub, going into a scanning session: "I'm kind of
+ *  going IN blind." He was — everything above is a COUNTER, and a counter cannot tell you
+ *  whether the thing is working or merely running. This is the per-row story the live
+ *  dashboard renders. */
+export interface ScanEvent {
+  at: number;
+  title: string;
+  giver: string | null;
+  category: string | null;
+  amount: number | null;
+  kind: AmountKindLike;
+  outcome: "recorded" | "duplicate" | "ambiguous" | "unknown" | "fee" | "no-price";
+  /** Human-readable why: the contract it matched, or what stopped it. */
+  detail: string;
+}
+type AmountKindLike = "payout" | "fee" | null;
+
 const MAX_UNKNOWN = 200;
 /** One flush cannot legitimately carry more than a few boards' worth. */
 const MAX_BATCH = 200;
@@ -62,6 +79,21 @@ export class PayoutScanner {
   private seenPrices = new Map<string, Set<number>>();
   private queue: PayoutObservation[] = [];
   private unknownSet = new Set<string>();
+  /** Rolling per-row feed for the live dashboard. Newest first. */
+  private eventRing: ScanEvent[] = [];
+  /** When the last capture arrived, so the page can say "reading" vs "nothing on screen". */
+  lastCaptureAt = 0;
+  /** Rows in the most recent capture — 0 means the panel wasn't visible or wasn't parsed. */
+  lastCaptureRows = 0;
+
+  events(limit = 60): ScanEvent[] {
+    return this.eventRing.slice(0, limit);
+  }
+
+  private note(e: ScanEvent): void {
+    this.eventRing.unshift(e);
+    if (this.eventRing.length > 300) this.eventRing.length = 300;
+  }
 
   constructor(
     private matcher: ContractMatcher,
@@ -71,26 +103,48 @@ export class PayoutScanner {
   /** Feed one capture's rows. Returns the observations newly queued. */
   ingest(rows: ContractRow[], system: string | null): PayoutObservation[] {
     const fresh: PayoutObservation[] = [];
+    const now = Date.now();
+    this.lastCaptureAt = now;
+    this.lastCaptureRows = rows.length;
     if (rows.length) {
       this.tally.lastRows = rows.slice(-8).map((r) => ({
         category: r.category, title: r.title, giver: r.giver, amount: r.amount, kind: r.kind,
       }));
     }
+    const ev = (row: ContractRow, outcome: ScanEvent["outcome"], detail: string) =>
+      this.note({
+        at: now, title: row.title, giver: row.giver, category: row.category,
+        amount: row.amount, kind: row.kind, outcome, detail,
+      });
+
     for (const row of rows) {
       this.tally.seen++;
 
       // A fee row is a COST. Its reward is still unknown, and recording the fee as a
       // payout would be the single worst thing this feature could do.
-      if (row.kind === "fee") { this.tally.feeOnly++; continue; }
+      if (row.kind === "fee") {
+        this.tally.feeOnly++;
+        ev(row, "fee", "shows a fee, not a reward — payout still unknown");
+        continue;
+      }
       // No price is a legitimate outcome, not an error: some contracts pay only in items
       // delivered to your hangar (Sub's "Very Hungry"), and OCR sometimes drops a short
       // glyph like "1M" entirely.
-      if (row.amount == null) { this.tally.noPrice++; continue; }
+      if (row.amount == null) {
+        this.tally.noPrice++;
+        ev(row, "no-price", "no price on the row (items-only reward, or OCR missed it)");
+        continue;
+      }
 
       const out: MatchOutcome = this.matcher.match(row, system);
-      if (out.status === "ambiguous") { this.tally.ambiguous++; continue; }
+      if (out.status === "ambiguous") {
+        this.tally.ambiguous++;
+        ev(row, "ambiguous", `${out.candidates.length} contracts share this title${system ? "" : " — no system known yet"}`);
+        continue;
+      }
       if (out.status === "unknown") {
         this.tally.unknown++;
+        ev(row, "unknown", "no contract in the dataset matches this title");
         // Worth keeping even though nothing is recorded: ~70 contracts have titles our
         // extraction never resolved, and the board is the only place the real name is
         // visible. Every unknown here is a candidate fix for the DATASET.
@@ -108,7 +162,11 @@ export class PayoutScanner {
       // player's repeats. But the SAME contract at a DIFFERENT price is a real second
       // observation — that spread is the thing worth capturing.
       const prices = this.seenPrices.get(out.debugName) ?? new Set<number>();
-      if (prices.has(row.amount)) { this.tally.duplicate++; continue; }
+      if (prices.has(row.amount)) {
+        this.tally.duplicate++;
+        ev(row, "duplicate", `already recorded ${row.amount.toLocaleString("en-US")} for ${out.debugName}`);
+        continue;
+      }
       prices.add(row.amount);
       this.seenPrices.set(out.debugName, prices);
 
@@ -124,6 +182,7 @@ export class PayoutScanner {
       fresh.push(obs);
       this.tally.recorded++;
       this.tally.queued = this.queue.length;
+      ev(row, "recorded", `→ ${out.debugName}${out.via === "system" ? " (resolved by system)" : ""}`);
     }
     return fresh;
   }
