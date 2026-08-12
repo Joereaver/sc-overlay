@@ -85,6 +85,9 @@ export class PayoutScanner {
   lastCaptureAt = 0;
   /** Rows in the most recent capture — 0 means the panel wasn't visible or wasn't parsed. */
   lastCaptureRows = 0;
+  /** System deduced from the board when the log couldn't say. Surfaced so the page can
+   *  show it as deduced rather than as fact. */
+  inferredSystem: string | null = null;
 
   events(limit = 60): ScanEvent[] {
     return this.eventRing.slice(0, limit);
@@ -103,6 +106,13 @@ export class PayoutScanner {
   /** Feed one capture's rows. Returns the observations newly queued. */
   ingest(rows: ContractRow[], system: string | null): PayoutObservation[] {
     const fresh: PayoutObservation[] = [];
+    // 🔑 If the log hasn't said where we are, ask the BOARD. A contract board only offers
+    // contracts for the system you're in, so the rows themselves are evidence — and the
+    // log's terrain report only fires about every ten minutes, which for a scanning
+    // session means "unknown" almost always. Measured worth on one real capture: three of
+    // eight otherwise-ambiguous rows resolved once the system was known.
+    const sys = system ?? this.matcher.inferSystem(rows);
+    this.inferredSystem = system ? null : sys;
     const now = Date.now();
     this.lastCaptureAt = now;
     this.lastCaptureRows = rows.length;
@@ -136,10 +146,10 @@ export class PayoutScanner {
         continue;
       }
 
-      const out: MatchOutcome = this.matcher.match(row, system);
+      const out: MatchOutcome = this.matcher.match(row, sys);
       if (out.status === "ambiguous") {
         this.tally.ambiguous++;
-        ev(row, "ambiguous", `${out.candidates.length} contracts share this title${system ? "" : " — no system known yet"}`);
+        ev(row, "ambiguous", `${out.candidates.length} contracts share this title${sys ? "" : " — system unknown"}`);
         continue;
       }
       if (out.status === "unknown") {

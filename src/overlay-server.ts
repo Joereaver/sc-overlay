@@ -2201,6 +2201,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       syncReady: !!config.syncToken && config.syncEnabled,
       patch: tracker.view().patch ?? null,
       system: currentSystem(),
+      inferredSystem: payoutScanner ? payoutScanner.inferredSystem : null,
       tally: sc ? sc.tally : null,
       // Per-row feed + freshness, for overlay/payout-scan.html. A stalled scanner and an
       // idle one look identical in a total, so the page needs to know WHEN the last

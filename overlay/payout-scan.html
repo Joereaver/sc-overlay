@@ -28,6 +28,13 @@
   .off  { background:rgba(255,154,144,.15); color:var(--bad); }
   .live { background:rgba(255,178,49,.15); color:var(--gold); }
   .wait { background:rgba(122,167,255,.15); color:var(--idle); }
+  .btn { font:inherit; font-weight:800; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+         border:1px solid var(--line); border-radius:999px; padding:7px 18px; cursor:pointer;
+         background:var(--panel); color:var(--fg); transition:background .12s,color .12s; }
+  .btn:hover { border-color:var(--gold); }
+  .btn[data-on="1"] { background:rgba(255,154,144,.14); color:var(--bad); border-color:rgba(255,154,144,.35); }
+  .btn[data-on="0"] { background:rgba(110,231,168,.14); color:var(--ok); border-color:rgba(110,231,168,.35); }
+  .btn:disabled { opacity:.5; cursor:default; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); gap:8px; margin-bottom:16px; }
   .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:9px 11px; }
   .stat b { display:block; font-size:21px; font-weight:800; line-height:1.1; }
@@ -56,7 +63,10 @@
 </style>
 
 <h1>Contract payout scanner</h1>
-<div class="bar" id="bar"></div>
+<div class="bar">
+  <button id="toggle" class="btn">…</button>
+  <span id="bar" style="display:contents"></span>
+</div>
 <div class="grid" id="stats"></div>
 
 <h2>What it's seeing <span id="feedcount" class="hint"></span></h2>
@@ -76,12 +86,26 @@
   };
   const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
+  // 🔑 Works whether this page is SERVED by the sidecar or opened straight off disk.
+  // The first thing that happened when Sub opened it was "sidecar unreachable" — because
+  // the file had been opened as file://, where a relative /api/ path resolves to nothing.
+  // A dashboard whose failure mode is indistinguishable from the failure it exists to
+  // diagnose is worse than no dashboard, so it falls back to the known port and, if that
+  // is blocked too, says exactly what to do instead of just going red.
+  const API = location.protocol.startsWith("http") ? "" : "http://localhost:8778";
+
   async function tick() {
     let d;
     try {
-      d = await (await fetch("/api/payout-scan", { cache: "no-store" })).json();
+      d = await (await fetch(API + "/api/payout-scan", { cache: "no-store" })).json();
     } catch {
-      $("bar").innerHTML = '<span class="pill off">sidecar unreachable</span>';
+      $("bar").innerHTML =
+        '<span class="pill off">can&rsquo;t reach the app</span>' +
+        '<span class="pill wait">open <b>http://localhost:8778/payout-scan.html</b> in a browser</span>';
+      $("foot").textContent =
+        location.protocol.startsWith("http")
+          ? "The overlay app isn't running, or its sidecar isn't on port 8778."
+          : "This page was opened from disk (" + location.protocol + "), not from the app. Use the URL above.";
       return;
     }
     const t = d.tally || {};
@@ -89,8 +113,14 @@
     // one look identical in a total. Anything inside ~12s means captures are arriving.
     const fresh = d.lastCaptureAt && Date.now() - d.lastCaptureAt < 12000;
 
+    // The button carries the state, so no separate on/off pill — two things saying the
+    // same thing is how a dashboard starts lying when one of them lags.
+    const btn = $("toggle");
+    btn.dataset.on = d.on ? "1" : "0";
+    btn.textContent = d.on ? "Stop scanning" : "Start scanning";
+    btn.disabled = false;
+
     const pills = [];
-    pills.push(d.on ? '<span class="pill on">scanning on</span>' : '<span class="pill off">scanning off</span>');
     if (!d.calibrated) pills.push('<span class="pill off">not calibrated</span>');
     if (!d.syncReady) pills.push('<span class="pill off">no sync token</span>');
     pills.push(
@@ -99,7 +129,15 @@
         : '<span class="pill wait">no board on screen</span>',
     );
     pills.push(`<span class="pill wait">${esc(d.patch || "no patch")}</span>`);
-    pills.push(`<span class="pill wait">system: ${esc(d.system || "unknown")}</span>`);
+    // The system is worth a lot — it's what separates same-titled variants — so the page
+    // says where it came from. "deduced" means it was read off the board itself because
+    // the log's terrain report (every ~10 min) hadn't spoken yet.
+    const sys = d.system || d.inferredSystem;
+    pills.push(
+      `<span class="pill wait">system: ${esc(sys || "unknown")}${
+        !d.system && d.inferredSystem ? " (deduced)" : ""
+      }</span>`,
+    );
     $("bar").innerHTML = pills.join("");
 
     const cell = (v, label, cls) => `<div class="stat ${cls || ""}"><b>${v}</b><span>${label}</span></div>`;
@@ -135,6 +173,25 @@
       `last capture ${ago(d.lastCaptureAt)} · ${d.lastCaptureRows ?? 0} rows in it · frame ${d.frame || "—"}` +
       (t.lastFlushError ? ` · UPLOAD ERROR: ${t.lastFlushError}` : "");
   }
+  // Optimistic flip, then let the next poll confirm — the route persists the flag, so if
+  // the POST failed the button snaps back within a second rather than lying about it.
+  $("toggle").addEventListener("click", async () => {
+    const btn = $("toggle");
+    const want = btn.dataset.on !== "1";
+    btn.disabled = true;
+    btn.textContent = want ? "starting…" : "stopping…";
+    try {
+      await fetch(API + "/api/payout-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: want }),
+      });
+    } catch {
+      /* the poll will show the real state */
+    }
+    tick();
+  });
+
   tick();
   setInterval(tick, 1000);
 </script>

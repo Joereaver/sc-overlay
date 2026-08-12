@@ -50,11 +50,24 @@ export function titlePattern(datasetTitle: string): RegExp | null {
   // "[TargetName] needs stomping" (NEEDS STOMPING) while refusing the vacuous ones.
   const literal = norm.replace(/\[[^\]]*\]/g, "").replace(/\s+/g, " ").trim();
   if (literal.length < 8 || literal.split(" ").filter(Boolean).length < 2) return null;
+  // 🔑 MATCHED WITH THE SPACES REMOVED. OCR loses word breaks at this size — the live
+  // board returned "EXTRA SMALLCOVALEXSHIPMENT" and "COVALEXINDEPENDENT CONTRACTORS" —
+  // and a space is the one character whose absence carries no meaning here. Stripping it
+  // from both sides costs nothing and recovers every one of those rows.
   const escaped = norm
     .split(/(\[[^\]]*\])/)
-    .map((part) => (part.startsWith("[") ? "(.+?)" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .map((part) =>
+      part.startsWith("[")
+        ? "(.+?)"
+        : part.replace(/\s+/g, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+    )
     .join("");
   return new RegExp(`^${escaped}$`);
+}
+
+/** The form a title is compared in: normalised, then stripped of every space. */
+export function titleKey(s: string): string {
+  return normalizeTitle(s).replace(/\s+/g, "");
 }
 
 /** Loose equality for names the OCR may have mangled — "ROUGH & READY" comes back as
@@ -117,9 +130,54 @@ export class ContractMatcher {
     }
   }
 
+  /** Candidates whose title (and, where it narrows, giver and category) fit this row. */
+  private hitsFor(row: ContractRow): { re: RegExp; c: MatchCandidate }[] {
+    const title = titleKey(row.title);
+    if (!title) return [];
+    let hits = this.all.filter((b) => b.re.test(title));
+    if (row.giver && hits.length > 1) {
+      const byGiver = hits.filter((b) => sameName(b.c.giver, row.giver!));
+      if (byGiver.length) hits = byGiver;
+    }
+    if (row.category && hits.length > 1) {
+      const byType = hits.filter((b) => sameName(b.c.missionType, row.category!));
+      if (byType.length) hits = byType;
+    }
+    return hits;
+  }
+
+  /** Work out which star system the player is in FROM THE BOARD ITSELF.
+   *
+   *  🔑 Why this is worth having: the system is the difference between a quarter of rows
+   *  recording and most of them. On one real capture, three of eight ambiguous rows
+   *  resolved to a single contract the moment "Pyro" was supplied. But the app's only
+   *  other source is the terrain-streaming report, which the log emits about every TEN
+   *  MINUTES — so for most of a scanning session it has nothing, and every same-titled
+   *  variant stays unresolved.
+   *
+   *  A contract board only offers contracts for where you are. So if the rows on screen
+   *  overwhelmingly belong to one system, that is the system — no waiting, no guessing at
+   *  a stale reading. Only rows whose candidates agree on ONE system get a vote (a row
+   *  spanning several says nothing about location), and a clear majority is required, so
+   *  a board that genuinely straddles systems yields null rather than a coin flip. */
+  inferSystem(rows: ContractRow[]): string | null {
+    const votes = new Map<string, number>();
+    for (const row of rows) {
+      const systems = new Set(this.hitsFor(row).flatMap((h) => h.c.systems ?? []));
+      if (systems.size !== 1) continue;
+      const s = [...systems][0];
+      votes.set(s, (votes.get(s) ?? 0) + 1);
+    }
+    if (!votes.size) return null;
+    const ranked = [...votes].sort((a, b) => b[1] - a[1]);
+    const total = ranked.reduce((a, [, n]) => a + n, 0);
+    // Two-thirds, and at least two rows agreeing — one row is an anecdote.
+    return ranked[0][1] >= 2 && ranked[0][1] / total >= 0.67 ? ranked[0][0] : null;
+  }
+
   /** @param system the star system the player is currently in, when known. */
   match(row: ContractRow, system?: string | null): MatchOutcome {
-    const title = normalizeTitle(row.title);
+    const title = titleKey(row.title);
     if (!title) return { status: "unknown" };
     let hits = this.all.filter((b) => b.re.test(title));
     if (!hits.length) return { status: "unknown" };

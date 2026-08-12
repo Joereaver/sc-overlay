@@ -378,8 +378,31 @@ function parseWithVocab(ocr: OcrResult, region: PanelRect | undefined, vocab: Co
     money = null;
   };
 
+  // 🔑 THE AMOUNT COLUMN, BY POSITION. Sub, watching it glue prices onto titles: "there is
+  // a limit to how wide the text for the mission can go, and a limit to how wide the
+  // payout can go, and they'll never overlap." Exactly right, and it is the half the
+  // vocabulary can't supply — PP-OCR sometimes fuses the price into the title line
+  // ("YANG'S PLACE FROM OUTLAWS 63k") and sometimes leaves it as its own detection off to
+  // the right ("27k" at x=561). The fused case was handled; the standalone case was being
+  // appended as more title text, which is why almost nothing matched.
+  //
+  // Measured on the live 654-wide panel: titles start at x 39-101, amounts at 545-562.
+  // Half the panel width separates them with enormous margin, and it is a FRACTION so the
+  // perspective drift and any resolution change ride along.
+  const panelX = region ? region.x : Math.min(...lines.map((l) => l.x));
+  const panelW = region ? region.w : Math.max(...lines.map((l) => l.x + l.w)) - panelX;
+  const amountColX = panelX + panelW * 0.5;
+
   for (const l of lines) {
     const text = l.text.trim();
+
+    // Right-hand column: a price, or a category's row count. Never words.
+    if (l.x >= amountColX) {
+      const m = parseAmount(text);
+      if (m) money = m;
+      continue;
+    }
+
     // A category header may carry a count; a contract row may carry its price. Both are
     // fused onto the end of the line by PP-OCR, so both are peeled off before matching.
     const cat = closest(squash(stripCount(text)), cats);

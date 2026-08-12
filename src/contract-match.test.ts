@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ContractMatcher, titlePattern, sameName, type MatchCandidate } from "./contract-match.js";
+import { ContractMatcher, titlePattern, titleKey, sameName, type MatchCandidate } from "./contract-match.js";
 import type { ContractRow } from "./contract-list.js";
 
 let failures = 0;
@@ -45,9 +45,14 @@ const row = (title: string, giver: string, category: string): ContractRow => ({
 });
 
 // ── titlePattern ───────────────────────────────────────────────────────────
+// 🔑 Patterns match against titleKey(), which strips SPACES from both sides. OCR loses
+// word breaks at this size — the live board returned "EXTRA SMALLCOVALEXSHIPMENT" and
+// "COVALEXINDEPENDENT CONTRACTORS" — and a space is the one character whose absence
+// carries no meaning here.
 const re = titlePattern("Defend Remote Outpost near [NearbyLocation] from Outlaws")!;
-check("placeholder becomes a wildcard", re.test("DEFEND REMOTE OUTPOST NEAR YANGS PLACE FROM OUTLAWS"));
-check("wrong suffix does not match", !re.test("DEFEND REMOTE OUTPOST NEAR YANGS PLACE FROM MERCS"));
+check("placeholder becomes a wildcard", re.test(titleKey("DEFEND REMOTE OUTPOST NEAR YANGS PLACE FROM OUTLAWS")));
+check("wrong suffix does not match", !re.test(titleKey("DEFEND REMOTE OUTPOST NEAR YANGS PLACE FROM MERCS")));
+check("a title OCR ran together still matches", re.test(titleKey("DEFENDREMOTE OUTPOSTNEAR YANGSPLACE FROMOUTLAWS")));
 // 🔴 ~70 dataset titles are themselves unresolved placeholders. As patterns they would
 // swallow half the board.
 check("an all-placeholder title is refused", titlePattern("[Destination] Errand") === null);
