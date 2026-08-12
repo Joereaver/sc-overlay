@@ -46,17 +46,19 @@ const portal = createServer((req, res) => {
 });
 await new Promise((r) => portal.listen(MOD_PORT, "127.0.0.1", r));
 
-// A scratch word list. Deliberately NOT the shipped one: a nonsense term cannot collide with
-// anything else this suite says, and the shipped list's own behaviour is covered by
-// automod.test.mjs (which is also where its false-positive surface is written down).
-const scratchList = join(scratchData, "words.txt");
-writeFileSync(scratchList, "# scratch\nflarnwibble\nvoid harvester\n");
+// Scratch word lists. Deliberately NOT the shipped ones: nonsense terms cannot collide with
+// anything else this suite says, and the shipped lists' own behaviour is covered by
+// automod.test.mjs (which is also where their false-positive surface is written down).
+const scratchBan = join(scratchData, "ban.txt");
+const scratchCensor = join(scratchData, "censor.txt");
+writeFileSync(scratchBan, "# scratch\nflarnwibble\nvoid harvester\n");
+writeFileSync(scratchCensor, "# scratch\nblorptastic\n");
 
 const server = spawn(process.execPath, [join(here, "server.mjs")], {
   env: { ...process.env, CHAT_PORT: String(PORT), CHAT_AUTH: "dev", CHAT_DATA_DIR: scratchData,
          // Dev auth trusts any handle, so the server refuses to boot with it unless told.
          CHAT_ALLOW_DEV_AUTH: "1",
-         AUTOMOD_MODE: "ban", AUTOMOD_LIST: scratchList,
+         AUTOMOD_MODE: "on", AUTOMOD_BAN_LIST: scratchBan, AUTOMOD_CENSOR_LIST: scratchCensor,
          REPORT_WEBHOOK_URL: `http://127.0.0.1:${MOD_PORT}/events`,
          MOD_ACTION_URL: `http://127.0.0.1:${MOD_PORT}/actions`,
          MOD_SHARED_SECRET: MOD_SECRET, MOD_POLL_MS: "200" },
@@ -709,6 +711,22 @@ try {
   watcher.send({ t: "hello", handle: "Watcher" });
   await watcher.next((f) => f.t === "joined" && f.ch === "global", "Watcher joins global");
 
+  // 🔴 The CENSOR tier is the whole point of the split (Sub: "I really don't care if an adult
+  // uses profanity amongst other adults… we could just censor it"). The message must SURVIVE —
+  // masked, delivered, sender untouched.
+  badMouth.send({ t: "msg", ch: "global", text: "this run was blorptastic honestly" });
+  const masked = await badMouth.next((f) => f.t === "msg" && /honestly/.test(f.text ?? ""),
+    "a censor-list word still delivers the message");
+  assert.equal(masked.text, "this run was b" + "*".repeat("blorptastic".length - 1) + " honestly",
+    "the word is masked in place, first letter and length kept");
+  assert(!badMouth.frames.some((f) => f.t === "error" && f.code === "banned"),
+    "and nobody is banned for profanity");
+  const beforeCensorEvents = modEvents.length;
+  await wait(300);
+  assert.equal(modEvents.length, beforeCensorEvents,
+    "ordinary profanity pushes NOTHING at the mod channel — one event per swear and the reports "
+    + "that matter get scrolled past");
+
   badMouth.send({ t: "msg", ch: "global", text: "you absolute flarnwibble" });
   // 🔴 The message must not reach the room in ANY mode. A "flag" that still published it would
   // be surveillance rather than moderation, and a ban that published it first is worse.
@@ -726,6 +744,17 @@ try {
   // if I want to unban." A ban with no message attached cannot be reviewed at all.
   assert.equal(autoban.text, "you absolute flarnwibble", "the triggering message rides with it");
   assert(/flarnwibble/.test(autoban.reason ?? ""), "and the reason names the term that matched");
+  // The masked message is a normal message in the room; only the BAN tier refuses one.
+  assert(!watcher.frames.some((f) => f.t === "msg" && /blorptastic/.test(f.text ?? "")),
+    "the raw profanity never reached the room either — it was masked, not passed through");
+  assert(watcher.frames.some((f) => f.t === "msg" && /b\*+ honestly/.test(f.text ?? "")),
+    "the room saw the masked version");
+
+  // /admin/health counts what it masked, so "is it doing anything?" has an answer that is not a
+  // stream of notifications.
+  const health = await (await fetch(`http://127.0.0.1:${PORT}/admin/health`)).json();
+  assert.equal(health.automod.mode, "on");
+  assert(health.automod.masked >= 1, "masked words are counted, not announced");
 
   // It is a real ban, not a refusal: reconnecting does not get you back in.
   const rebanned = client();

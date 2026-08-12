@@ -45,8 +45,9 @@ attack surface is unchanged by any of it.
 
 | env | default | what it does |
 |---|---|---|
-| `AUTOMOD_MODE` | `off` | `off` · `flag` (refuse the message + notify) · `ban` (also bans the sender) |
-| `AUTOMOD_LIST` | `chat-server/wordlist.txt` | one term per line, `#` comments a line out |
+| `AUTOMOD_MODE` | `censor` | `off` · `censor` (both lists mask, nobody banned) · `on` (ban tier bans) |
+| `AUTOMOD_BAN_LIST` | `chat-server/wordlist-ban.txt` | slurs + hate speech → refuse the message, ban |
+| `AUTOMOD_CENSOR_LIST` | `chat-server/wordlist-censor.txt` | profanity → asterisk it, deliver the message |
 | `REPORT_WEBHOOK_URL` | — | where report / auto-ban events are POSTed |
 | `MOD_ACTION_URL` | — | the portal's ban/unban queue, polled and acked |
 | `MOD_SHARED_SECRET` | — | `Authorization: Bearer` on both. **Unset ⇒ the whole link is off** |
@@ -55,11 +56,23 @@ attack surface is unchanged by any of it.
 Every one of them is optional, and every default is the behaviour that existed before the
 feature: no list means no auto-moderation, no URL means no push, no secret means no link.
 
-🔴 **`AUTOMOD_MODE` defaults to `off` deliberately.** `wordlist.txt` ships as LDNOOBW verbatim —
-a published list carrying ordinary vocabulary alongside slurs, and `escort`, `ass`, `shit`,
-`suck` and `sex` are all on it. Chat identities are RSI-verified, so a match bans a real person
-by name, and *both* enforcing modes refuse the message. Prune the list before arming it; the
-false-positive surface is asserted in `automod.test.mjs` so it can't be forgotten.
+🔴 **TWO LISTS, TWO ANSWERS — Sub's policy, 2026-08-11:** *"I'm worried about racial slurs, hate
+speech, that type of stuff. As far as the auto mod banning someone. Otherwise, I really don't care
+if an adult uses profanity amongst other adults… we could just censor it."* So `wordlist-ban.txt`
+is slurs and hate speech only and gets a ban; `wordlist-censor.txt` is profanity and gets
+asterisked in place with the message delivered. A term in **neither** file fires nowhere.
+
+🔴 **`escort` is in neither list, and that is the rule the whole design came from.** It was on the
+published LDNOOBW list, it is an SC mission type, and *"need an escort"* is close to the
+most-typed sentence in an LFG channel. 23 more ordinary words were pulled out for the same reason
+(`hardcore`, `sexy`, `sucks`, `poof`, `how to kill`, …) — each one is listed in the censor file's
+header with its reason. **If another turns out to be SC vocabulary, DELETE it rather than moving
+it: a censored mission word is a bug, not a milder ban.** All of this is asserted in
+`automod.test.mjs` against real SC sentences.
+
+🔑 **Ordinary profanity is COUNTED, never announced** (`/admin/health` → `automod.masked`). One
+mod-channel event per "shit" and the reports that matter get scrolled past. A ban-list term in
+`censor` mode *does* report, because that is a slur somebody said.
 
 🔑 **Queued actions are delivered at least once** — an action applied but not acked comes back on
 the next poll — so `ban` and `unban` are both idempotent no-ops the second time.

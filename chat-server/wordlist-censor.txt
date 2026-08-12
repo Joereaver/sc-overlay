@@ -1,24 +1,54 @@
-# SC Overlay chat — auto-moderation word list
+# SC Overlay chat — CENSOR list. A match here is ASTERISKED in place and the message goes
+# through. Nobody is banned for anything in this file.
+#
+# 🔴 SUB'S POLICY, 2026-08-11: "I really don't care if an adult uses profanity amongst other
+# adults. I don't need to censor that. Or I don't need to ban for that. We could just censor it,
+# maybe." Slurs and hate speech are a different file — wordlist-ban.txt — and a different answer.
 #
 # SOURCE: LDNOOBW "List of Dirty, Naughty, Obscene and Otherwise Bad Words", English list
-# (github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words), fetched
-# 2026-08-11, 403 terms, unedited. Sub asked for an existing public list to review rather
-# than one written from scratch — this is that list, exactly as published.
+# (github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words), fetched 2026-08-11,
+# minus everything moved to the ban list, minus the removals noted below.
 #
-# HOW TO EDIT IT: one term per line. A line starting with # is ignored, so a term can be
-# switched off by commenting it out instead of deleting it — the list stays a record of what
-# was considered. Terms are matched case-insensitively on WORD BOUNDARIES (see automod.mjs),
-# never as substrings, so "ass" cannot fire on "class" or "Cassius". A term containing spaces
-# matches across any run of whitespace.
+# HOW TO EDIT: one term per line, "#" comments a line out. Matching is case-insensitive and on
+# WORD BOUNDARIES, never substrings — "ass" cannot fire on "class", "Cassius" or "Cutlass",
+# "cock" cannot fire on "cockpit", "tit" cannot fire on "Titan". A term with spaces matches
+# across any run of whitespace. Masking keeps the first letter and the length: s***.
 #
-# 🔴 READ THIS BEFORE SWITCHING AUTOMOD_MODE TO "ban". The published list is much broader than
-# a slur list: it carries ordinary anatomical and sexual vocabulary ("anal", "ass", "sex",
-# "hooker", "babeland"). Chat identities are RSI-VERIFIED, so a match bans a real person by
-# name — on this list, unedited, a player saying "that fight was ass" is banned. Both enforcing
-# modes also REFUSE the message, so either one changes what real players can say the moment it
-# deploys. That is why AUTOMOD_MODE defaults to "off": nothing here is consulted until this file
-# has been pruned down to what Sub actually means by zero tolerance. Then AUTOMOD_MODE=flag
-# (refuse + notify, ban nobody) for a while, and AUTOMOD_MODE=ban once the list has earned it.
+# 🔴 REMOVED OUTRIGHT — this fires nowhere, in either list:
+#   escort   Sub, 2026-08-11: "Escort for sure cannot be censored. Somebody might be using that
+#            word to describe a mission." It is an SC mission type, and "need an escort" is close
+#            to the most-typed sentence in an LFG channel. This is the whole reason the list got
+#            split rather than armed as published.
+#
+# 🔑 If a term in here turns out to be ordinary Star Citizen vocabulary the same way escort was,
+# DELETE it rather than moving it — a censored mission word is a bug, not a milder ban.
+
+# ── REMOVED as ordinary vocabulary (the escort rule). Reasons kept on purpose. ──
+#   big black       a size and a colour
+#   domination      ordinary gaming word
+#   girl on         a two-word fragment that matches inside ordinary sentences
+#   girl on top     same
+#   hard core       ordinary gaming word — "hardcore mining run"
+#   hardcore        ordinary gaming word
+#   how to kill     a legitimate SC question — "how to kill a Hammerhead"
+#   how to murder   same
+#   pikey           an ethnic slur — belongs in the ban list, not here
+#   poof            plain English — "and then poof, it was gone"
+#   santorum        a surname
+#   sexy            ordinary praise — "that ship is sexy"
+#   sexual          neutral descriptive word
+#   sexually        neutral descriptive word
+#   sexuality       neutral descriptive word
+#   snatch          cargo-theft idiom in SC — "snatch and grab"
+#   suck            ordinary complaint — "this mission sucks"
+#   sucks           ordinary complaint
+#   taste my        same
+#   tight white     same
+#   tongue in a     same
+#   twinkie         a snack
+#   wrapping men    same
+#   xx              matches a standalone kiss
+
 2g1c
 2 girls 1 cup
 acrotomophilia
@@ -53,13 +83,10 @@ bastardo
 bastinado
 bbw
 bdsm
-beaner
-beaners
 beaver cleaver
 beaver lips
 beastiality
 bestiality
-big black
 big breasts
 big knockers
 big tits
@@ -84,7 +111,6 @@ booty call
 brown showers
 brunette action
 bukkake
-bulldyke
 bullet vibe
 bullshit
 bung hole
@@ -97,8 +123,6 @@ camel toe
 camgirl
 camslut
 camwhore
-carpet muncher
-carpetmuncher
 chocolate rosebuds
 cialis
 circlejerk
@@ -112,8 +136,6 @@ cocks
 coprolagnia
 coprophilia
 cornhole
-coon
-coons
 creampie
 cum
 cumming
@@ -121,7 +143,6 @@ cumshot
 cumshots
 cunnilingus
 cunt
-darkie
 date rape
 daterape
 deep throat
@@ -139,7 +160,6 @@ doggy style
 doggystyle
 dog style
 dolcett
-domination
 dominatrix
 dommes
 donkey punch
@@ -153,10 +173,7 @@ ecchi
 ejaculation
 erotic
 erotism
-escort
 eunuch
-fag
-faggot
 fecal
 felch
 fellatio
@@ -175,16 +192,12 @@ fuck buttons
 fuckin
 fucking
 fucktards
-fudge packer
-fudgepacker
 futanari
 gangbang
 gang bang
 gay sex
 genitals
 giant cock
-girl on
-girl on top
 girls gone wild
 goatcx
 goatse
@@ -200,32 +213,21 @@ g-spot
 guro
 hand job
 handjob
-hard core
-hardcore
 hentai
 homoerotic
-honkey
 hooker
 horny
 hot carl
 hot chick
-how to kill
-how to murder
 huge fat
 humping
 incest
 intercourse
 jack off
-jail bait
-jailbait
 jelly donut
 jerk off
-jigaboo
-jiggaboo
-jiggerboo
 jizz
 juggs
-kike
 kinbaku
 kinkster
 kinky
@@ -244,19 +246,13 @@ masturbation
 menage a trois
 milf
 missionary position
-mong
 motherfucker
 mound of venus
 mr hands
 muff diver
 muffdiving
-nambla
 nawashi
 negro
-neonazi
-nigga
-nigger
-nig nog
 nimphomania
 nipple
 nipples
@@ -274,24 +270,19 @@ one guy one jar
 orgasm
 orgy
 paedophile
-paki
 panties
 panty
-pedobear
 pedophile
 pegging
 penis
 phone sex
 piece of shit
-pikey
 pissing
 piss pig
 pisspig
 playboy
 pleasure chest
-pole smoker
 ponyplay
-poof
 poon
 poontang
 punany
@@ -301,13 +292,11 @@ porn
 porno
 pornography
 prince albert piercing
-pthc
 pubes
 pussy
 queaf
 queef
 quim
-raghead
 raging boner
 rape
 raping
@@ -320,7 +309,6 @@ rosy palm
 rosy palm and her 5 sisters
 rusty trombone
 sadism
-santorum
 scat
 schlong
 scissoring
@@ -328,13 +316,8 @@ semen
 sex
 sexcam
 sexo
-sexy
-sexual
-sexually
-sexuality
 shaved beaver
 shaved pussy
-shemale
 shibari
 shit
 shitblimp
@@ -342,16 +325,12 @@ shitty
 shota
 shrimping
 skeet
-slanteye
 slut
 s&m
 smut
-snatch
 snowballing
 sodomize
 sodomy
-spastic
-spic
 splooge
 splooge moose
 spooge
@@ -362,36 +341,28 @@ strapon
 strappado
 strip club
 style doggy
-suck
-sucks
 suicide girls
 sultry women
 swastika
 swinger
 tainted love
-taste my
 tea bagging
 threesome
 throating
 thumbzilla
 tied up
-tight white
 tit
 tits
 titties
 titty
-tongue in a
 topless
 tosser
-towelhead
-tranny
 tribadism
 tub girl
 tubgirl
 tushy
 twat
 twink
-twinkie
 two girls one cup
 undressing
 upskirt
@@ -408,14 +379,10 @@ voyeurweb
 voyuer
 vulva
 wank
-wetback
 wet dream
-white power
 whore
 worldsex
-wrapping men
 wrinkled starfish
-xx
 xxx
 yaoi
 yellow showers

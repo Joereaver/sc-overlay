@@ -108,10 +108,16 @@ const loaded = await store.init();
 // before this feature: no list means no auto-moderation, no URL means no push, no secret means
 // no link at all. Nothing about a plain `docker run` of this server changes.
 const automod = createAutomod({
-  file: process.env.AUTOMOD_LIST,
-  mode: process.env.AUTOMOD_MODE || "off",
+  banFile: process.env.AUTOMOD_BAN_LIST,
+  censorFile: process.env.AUTOMOD_CENSOR_LIST,
+  // "censor" is the safe default: both lists mask, nobody is banned. "on" arms the ban tier.
+  mode: process.env.AUTOMOD_MODE || "censor",
   log: console,
 });
+/** Words masked since boot. Ordinary profanity must NOT reach the mod channel — one event per
+ *  "shit" and the reports that matter get scrolled past — but "is it doing anything?" still
+ *  needs an answer, so it is a number on /admin/health rather than a stream of notifications. */
+let censored = 0;
 const modlink = createModLink({
   webhookUrl: process.env.REPORT_WEBHOOK_URL,
   actionUrl: process.env.MOD_ACTION_URL,
@@ -409,25 +415,40 @@ function deliver(conn, ch, raw) {
   const text = [...cleaned].slice(0, MSG_MAX).join("");
   if (!text) { conn.send({ t: "error", code: "bad_msg", message: "Empty message." }); return null; }
   // Auto-moderation runs on the FINAL text, after cleaning and truncation, so what is judged is
-  // exactly what would have been broadcast. A hit never reaches the room in either mode — a
-  // "flag" that still published the message would be surveillance rather than moderation.
-  // 🔑 The rate stamp is pushed FIRST so a refused message still costs its quota; without that,
-  // matching text is the one thing you can send as fast as you like.
+  // exactly what would have been broadcast.
+  //
+  // 🔴 The two tiers do genuinely different things, which is Sub's policy and not an
+  // implementation detail: a slur REFUSES the message and bans, ordinary profanity is asterisked
+  // and the message goes through. "I really don't care if an adult uses profanity amongst other
+  // adults. I don't need to ban for that."
   const hit = automod.scan(text);
+  let body = text;
   if (hit) {
-    conn.stamps.push(now);
-    const willBan = automod.mode === "ban";
-    recordModEvent({
-      kind: willBan ? "autoban" : "autoflag",
-      ch, about: conn.handleLower, by: "automod",
-      reason: `word list: ${hit.term}`, text, banned: willBan,
-    });
-    if (willBan) applyBan(conn.handleLower);
-    else conn.send({ t: "error", code: "bad_msg", message: "That message wasn't sent." });
-    return null;
+    // 🔑 The rate stamp is pushed FIRST so a refused message still costs its quota; without
+    // that, matching text is the one thing you can send as fast as you like.
+    if (hit.action === "ban") {
+      conn.stamps.push(now);
+      recordModEvent({
+        kind: "autoban", ch, about: conn.handleLower, by: "automod",
+        reason: `ban list: ${hit.term}`, text, banned: true,
+      });
+      applyBan(conn.handleLower);   // sends the eviction itself
+      return null;
+    }
+    body = hit.text ?? text;
+    // 🔑 Which LIST matched decides whether a moderator hears about it, never what was done.
+    // A slur masked in "censor" mode is exactly what a mod wants to see; ordinary profanity is
+    // not, and pushing one event per "shit" would make the mod channel unreadable inside a day —
+    // at which point the reports that matter get scrolled past. Counted instead, on /admin/health.
+    if (hit.tier === "ban") {
+      recordModEvent({
+        kind: "autoflag", ch, about: conn.handleLower, by: "automod",
+        reason: `ban list: ${hit.term} (censor mode — no ban applied)`, text, banned: false,
+      });
+    } else { censored++; }
   }
   conn.stamps.push(now);
-  const msg = { ch, id: nextMsgId++, from: { handle: conn.handle, verified: conn.verified }, text, at: new Date().toISOString() };
+  const msg = { ch, id: nextMsgId++, from: { handle: conn.handle, verified: conn.verified }, text: body, at: new Date().toISOString() };
   const r = room(ch);
   r.history.push(msg);
   if (r.history.length > HISTORY_KEEP) r.history.splice(0, r.history.length - HISTORY_KEEP);
@@ -640,7 +661,10 @@ const server = createServer(async (req, res) => {
     const roomStats = {};
     for (const [ch, r] of rooms) roomStats[ch] = r.members.size;
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, mode: AUTH_MODE, connections: wss.clients.size, rooms: roomStats }));
+    res.end(JSON.stringify({
+      ok: true, mode: AUTH_MODE, connections: wss.clients.size, rooms: roomStats,
+      automod: { mode: automod.mode, ban: automod.banSize, censor: automod.censorSize, masked: censored },
+    }));
     return;
   }
   // Ban admin is loopback-only — same rule as the sidecar's /api/twitch/*: an endpoint
@@ -1158,7 +1182,8 @@ if (AUTH_MODE === "dev" && process.env.CHAT_ALLOW_DEV_AUTH !== "1") {
 
 server.listen(PORT, () => {
   console.log(`[chat-server] listening on :${PORT} (auth=${AUTH_MODE}, store=${store.mode}, `
-    + `rooms=${customDir.size}, bans=${bans.size}, automod=${automod.mode}/${automod.size})`);
+    + `rooms=${customDir.size}, bans=${bans.size}, `
+    + `automod=${automod.mode} ban:${automod.banSize} censor:${automod.censorSize})`);
   // Started AFTER listen so a poll can never race the boot, and no-op unless both the queue URL
   // and the shared secret are set.
   modlink.start();
