@@ -1744,6 +1744,56 @@ const SPLITFADE = `(async () => {
   return out;
 })()`;
 
+// ── Suite: nothing animates at rest ────────────────────────────────────────────
+// 🔴 An infinite CSS animation on an always-on-top TRANSPARENT window makes the desktop
+// compositor redraw the overlay — and the game under it — every single frame, forever,
+// even with nothing happening. Measured 2026-08-11: the tracker sat at 240 composited
+// frames per 4s at rest and ONE 7px element, the `.eyebrow` diamond, was 100% of it.
+// A user with a 5080 independently measured the overlay costing 5fps in the hangar with
+// GPU acceleration on and 35fps with it off, and volunteered that infinite animations
+// force redraws.
+// The pulse now runs only in the two states that mean something. This suite is the guard,
+// because the cost is completely invisible in every other kind of test.
+const IDLEPAINT = `(async () => {
+  ${PRELUDE}
+  const dot = document.querySelector(".dot");
+  ok("the tracker has its diamond", !!dot);
+  // The real page may genuinely be live on Twitch or at a fabricator while the suite runs, and
+  // both are legitimate reasons to be animating — so drive it to a known state first rather
+  // than asserting whatever today happens to be.
+  dot.classList.remove("live", "fab");
+  await sleep(120);
+  // 🔑 CSS ANIMATIONS only, never transitions. A transition ENDS, so it cannot hold the
+  // compositor open the way an infinite animation does — and in this hidden window it would
+  // never end at all, because a window that never composites never advances one. Counting
+  // getAnimations() raw made this suite fail on the .dot's own 0.2s colour transition.
+  const running = () => document.getAnimations().filter((a) => a.playState === "running" && a.animationName);
+  const names = () => running().map((a) => {
+    const t = a.effect && a.effect.target;
+    return a.animationName + " on " + (t ? t.tagName.toLowerCase() + "." + String(t.className || "").trim().split(" ").join(".") : "?");
+  }).join(", ");
+  ok("NOTHING animates on an idle overlay", running().length === 0, names() || "nothing running");
+
+  // ...but the two states that carry information still do.
+  dot.classList.add("live");
+  await sleep(120);
+  ok("live on Twitch still pulses", running().length === 1, names());
+  dot.classList.remove("live"); dot.classList.add("fab");
+  await sleep(120);
+  ok("at the fabricator still pulses", running().length === 1, names());
+  dot.classList.remove("fab");
+  await sleep(120);
+  ok("...and it stops again when the state clears", running().length === 0, names() || "nothing running");
+
+  // The fade is transitioned rather than animated, precisely so it cannot become another
+  // permanent redraw. Nothing it does may start an animation.
+  setWidgetDim(WBY.party, 40);
+  await sleep(300);
+  ok("fading a widget starts no animation", running().length === 0, names() || "nothing running");
+  resetWidget(WBY.party);
+  return out;
+})()`;
+
 // A widget's settings popover closes itself after 15s of not being used (Sub, 2026-08-03). Not just
 // tidiness: an open popover is in RSEL, so it is a permanently CLICKABLE box over the game, and it
 // masks the Web Page widget's native view for as long as it is up.
@@ -3058,6 +3108,7 @@ app.whenReady().then(async () => {
     fails += await run("lifecycle: closed = idle", LIFECYCLE, null);
     fails += await run("per-widget angle", ANGLE, null);
     fails += await run("split fade: panel vs text", SPLITFADE, null);
+    fails += await run("nothing animates at rest", IDLEPAINT, null);
     fails += await run("cog auto-hide on game focus", COGHIDE,
       path.join(__dirname, "widget-dom-stub-preload.cjs"), "coghide=250");
     fails += await run("unlock notifier", UNLOCK, null, null, "unlockalert.html");

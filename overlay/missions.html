@@ -305,10 +305,29 @@
 
   #panel {
     position: relative; width: 380px; margin: 50px 16px 16px; border-radius: 12px; /* extra top margin for the brand folder-tab */
-    background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
-    border: 1px solid var(--border);
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.08), 0 8px 34px rgba(0, 0, 0, 0.45), 0 0 30px rgba(var(--accent-rgb), 0.16);
-    -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+    /* ── Panel surface vs panel content: two independent alphas ──────────────────────
+       The same model as widget-theme.css (read the long note there for why a layer or a
+       second opacity cannot express this), written out again because this page
+       deliberately does NOT link that stylesheet — it carries its own token set and the
+       shared panel rules would collide.
+       Every painted property has its alpha multiplied by --wsurf in place, so at the
+       default of 1 this renders exactly as it always has. --wsurf and --wtext are set on
+       #panel ITSELF by applyFade(), not on :root — the tracker is local to the canvas
+       document, which hosts every other widget too, so a root-level value would fade the
+       whole overlay at once. */
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--panel-top) calc(var(--wsurf, 1) * 100%), transparent),
+      color-mix(in srgb, var(--panel-bot) calc(var(--wsurf, 1) * 100%), transparent));
+    border: 1px solid rgba(var(--accent-rgb), calc(0.38 * var(--wsurf, 1)));
+    box-shadow:
+      inset 0 0 0 1px rgba(var(--accent-rgb), calc(0.08 * var(--wsurf, 1))),
+      0 8px 34px rgba(0, 0, 0, calc(0.45 * var(--wsurf, 1))),
+      0 0 30px rgba(var(--accent-rgb), calc(0.16 * var(--wsurf, 1)));
+    /* A ghosted panel that still blurs the game behind it reads as broken. */
+    -webkit-backdrop-filter: blur(calc(3px * var(--wsurf, 1)));
+    backdrop-filter: blur(calc(3px * var(--wsurf, 1)));
+    transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease,
+      backdrop-filter 0.18s ease;
     /* Subtle helmet-projection tilt (matches the stream overlays). Y-axis ONLY: rotateX
        tilts around the horizontal axis, so with perspective the horizontal scale varies
        down the panel — a tall pool projected wider at the bottom, overflowing the
@@ -317,12 +336,24 @@
     transform: perspective(1700px) rotateY(var(--twist, 0deg));
     transform-origin: 60% center;
   }
-  /* CRT scanlines */
+  /* CRT scanlines and the visor sheen are part of the SURFACE, so their alpha follows
+     --wsurf. They stay ABOVE the content (z-index 3) rather than moving behind it —
+     scanlines crossing the text is what the CRT look actually is. */
   #panel::before { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
-    background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px); mix-blend-mode: screen; }
+    background: repeating-linear-gradient(0deg, var(--scan) 0 1px, transparent 1px 3px); mix-blend-mode: screen;
+    opacity: var(--wsurf, 1); transition: opacity 0.18s ease; }
   /* visor sheen */
   #panel::after { content: ""; position: absolute; inset: 0; border-radius: 12px; pointer-events: none; z-index: 3;
-    background: linear-gradient(180deg, var(--sheen), transparent 36%); }
+    background: linear-gradient(180deg, var(--sheen), transparent 36%);
+    opacity: var(--wsurf, 1); transition: opacity 0.18s ease; }
+
+  /* The content side. Skin decoration follows the SURFACE (a trinket is the skin's
+     identity, not information); the canvas's own chrome never fades, because a control
+     you cannot see is a control you cannot use. */
+  #panel > * { opacity: var(--wtext, 1); transition: opacity 0.18s ease; }
+  #panel > .brandtab, #panel > .corner, #panel > .stitch,
+  #panel > .tape, #panel > .bolt { opacity: var(--wsurf, 1); }
+  #panel > .whood, #panel > #moveBanner, #panel > #resizeHandle { opacity: 1; }
   #panel.empty .pool, #panel.empty .catbar, #panel.empty .head .progress { display: none; }
 
   /* AMD compatibility "lite" skin (added on <html> via ?lite): strip everything that forces
@@ -398,13 +429,20 @@
      global setting acting only as the DEFAULT each widget inherits.
      🔑 Hovering a widget brings THAT widget back to full: "drawn out until you actually want to
      read it" is exactly a hover. Arrange mode and the override hotkey force everything to full.
-     🔑 `opacity` creates a stacking context, so the widget composites as ONE unit against the
-     game — a group's members can't show through each other. */
-  .widget, #panel.canvas { opacity: var(--wdim, 1); transition: opacity 0.18s ease; }
-  .widget:hover, .widget.touched, .widget.grouped:hover, #panel.canvas:hover, #panel.canvas.touched { opacity: 1; }
-  /* Never fade while arranging (you cannot place what you cannot see), while the override
-     hotkey is held on, or while a notifier is actually saying something. */
-  html.no-dim .widget, html.no-dim #panel.canvas, .widget.notifier.live, .widget.moving { opacity: 1 !important; }
+
+     🔑 THE WRAPPER NO LONGER FADES (2026-08-11). The panel and its text now carry SEPARATE
+     alphas so a faint panel can hold readable text, and an opacity here would multiply with
+     both — which is exactly what made that combination unreachable before. Everything about
+     the fade for a panelled widget now happens INSIDE its own document; see applyFade().
+     Notifiers are the exception: a notifier is a bare card with no widget panel, so it keeps
+     the original single-opacity path (and is forced to full while it is saying something). */
+  .widget.notifier { opacity: var(--wdim, 1); transition: opacity 0.18s ease; }
+  .widget.notifier:hover, .widget.notifier.touched { opacity: 1; }
+  html.no-dim .widget.notifier, .widget.notifier.live, .widget.moving { opacity: 1 !important; }
+  /* Canvas-drawn skin trinkets hang on the WRAPPER, outside the iframe (which clips), so they
+     cannot inherit the panel's fade — applyFade hands them the surface alpha directly. */
+  .widget > .tape, .widget > .bolt, .widget > .corner {
+    opacity: var(--wsurf, 1); transition: opacity 0.18s ease; }
   .widget { position: absolute; left: var(--wx, 40px); top: var(--wy, 60px); z-index: var(--wz, 20);
     transform-origin: 0 0; /* top-left anchor, so tilting doesn't walk the widget off its corner */
     transform: perspective(1700px) rotateY(var(--wangle, 0deg)); }
@@ -518,9 +556,15 @@
   .wcfg-row + .wcfg-row { margin-top: 7px; }
   .wcfg-lbl { flex: 1; font-family: var(--sans); font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan-text); }
-  .wcfg-val, .wcfg-angv { font-family: var(--mono); font-size: 10px; color: var(--faint);
-    min-width: 34px; text-align: right; }
-  .wcfg-ang { flex: none; width: 84px; accent-color: var(--cyan); height: 4px; cursor: pointer; }
+  .wcfg-val, .wcfg-angv, .wcfg-dimv, .wcfg-dimtextv { font-family: var(--mono); font-size: 10px;
+    color: var(--faint); min-width: 34px; text-align: right; }
+  .wcfg-ang, .wcfg-dim, .wcfg-dimtext { flex: none; width: 84px; accent-color: var(--cyan);
+    height: 4px; cursor: pointer; }
+  .wcfg-hover { flex: none; accent-color: var(--cyan); cursor: pointer; margin: 0; }
+  /* A section heading, because "Fade" is now two sliders and a switch rather than one control. */
+  .wcfg-sec { font-family: var(--sans); font-size: 8.5px; font-weight: 700; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--faint); margin: 9px 0 -1px; }
+  label.wcfg-row { cursor: pointer; }
   /* The tilt only means anything on the free-floating canvas; an OBS browser source is flat. */
   body:not(.canvas) .wcfg-angrow { display: none; }
 
@@ -841,14 +885,26 @@
 
   .eyebrow { position: relative; display: flex; align-items: center; gap: 9px; font-size: 10px; font-weight: 600;
     letter-spacing: 0.22em; text-transform: uppercase; color: var(--cyan); }
-  /* diamond glyph */
+  /* diamond glyph
+     🔴 THIS 7px ELEMENT USED TO REPAINT THE WHOLE TRACKER AT 60FPS, FOREVER. Measured
+     2026-08-11 by counting a page's composited frames at rest: 240 paints in 4s with the
+     pulse running, ZERO with it stopped — an infinite `opacity` animation on an always-on-top
+     transparent window makes the desktop compositor redraw the overlay, and the game under it,
+     every single frame even though nothing is happening. A user with a 5080 measured the
+     overlay costing 5fps in the hangar with GPU acceleration on, and 35fps with it off.
+     So the pulse now runs ONLY in the two states that actually mean something — at the
+     fabricator (.fab) and live on Twitch (.live). Idle, the diamond is simply lit, which is
+     what it looked like for half of every cycle anyway. Do not put `animation` back on the
+     bare .dot; if a resting animation is ever wanted here, measure the paint rate first. */
   .dot { position: relative; width: 7px; height: 7px; background: var(--cyan-bright); transform: rotate(45deg);
-    box-shadow: 0 0 8px var(--cyan); animation: pulse 1.9s ease-in-out infinite;
+    box-shadow: 0 0 8px var(--cyan);
     transition: background 0.2s ease, box-shadow 0.2s ease; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   /* In the fabricator: diamond glows gold (matches the collected count). SubliminalsTV live: purple. */
-  .dot.fab { background: var(--gold); box-shadow: 0 0 11px var(--gold), 0 0 4px var(--gold); }
-  .dot.live { background: #9146FF; box-shadow: 0 0 11px #9146FF, 0 0 4px #9146FF; }
+  .dot.fab { background: var(--gold); box-shadow: 0 0 11px var(--gold), 0 0 4px var(--gold);
+    animation: pulse 1.9s ease-in-out infinite; }
+  .dot.live { background: #9146FF; box-shadow: 0 0 11px #9146FF, 0 0 4px #9146FF;
+    animation: pulse 1.9s ease-in-out infinite; }
   .dot.clickable { cursor: pointer; -webkit-app-region: no-drag; }
   .dot.clickable::after { content: ""; position: absolute; inset: -8px; } /* bigger click target */
   /* Live-on-Twitch hover invite */
@@ -1716,7 +1772,7 @@
     if (typeof PREFS.unfocusedOpacity === "number" && PREFS.unfocusedOpacity !== lastOpacityPref) {
       lastOpacityPref = PREFS.unfocusedOpacity;
       globalDim = PREFS.unfocusedOpacity;
-      if (typeof applyAllDims === "function") applyAllDims();
+      if (typeof applyAllFades === "function") applyAllFades();
     }
     // Manufacturer theme (mobiglas default, drake, or the auto-resolved theme from the
     // server) + left↔right HUD-align angle. A ?theme= query param overrides for testing.
@@ -3086,10 +3142,18 @@
           + '<input type="range" class="wcfg-ang" min="-' + ANGLE_MAX + '" max="' + ANGLE_MAX + '" step="1" value="0"'
           + ' title="Tilt this widget left or right" />'
           + '<span class="wcfg-angv"></span></div>')
-        + '<div class="wcfg-row wcfg-dimrow"><span class="wcfg-lbl">Fade when idle</span>'
+        + '<div class="wcfg-sec">Fade when idle</div>'
+        + '<div class="wcfg-row wcfg-dimrow"><span class="wcfg-lbl">Panel</span>'
         + '<input type="range" class="wcfg-dim" min="20" max="100" step="5" value="100"'
-        + ' title="How faint this widget goes while you are not using it. 100% never fades." />'
+        + ' title="How faint the panel goes while you are not using it. 100% never fades." />'
         + '<span class="wcfg-dimv"></span></div>'
+        + '<div class="wcfg-row wcfg-dimrow"><span class="wcfg-lbl">Text</span>'
+        + '<input type="range" class="wcfg-dimtext" min="20" max="100" step="5" value="100"'
+        + ' title="How faint the text goes while you are not using it. Independent of the panel." />'
+        + '<span class="wcfg-dimtextv"></span></div>'
+        + '<label class="wcfg-row"><span class="wcfg-lbl">Full on hover</span>'
+        + '<input type="checkbox" class="wcfg-hover"'
+        + ' title="Bring this widget back to full opacity while the cursor is over it." /></label>'
         + '</div>'
         + '<div class="wmove"><div class="movebox">' + label + '<button type="button" class="wdone">Done</button></div></div>'
         + '<div class="wresize" title="Drag to resize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M8 20 L20 8 M14 20 L20 14"/></svg></div>'
@@ -3265,33 +3329,99 @@
   // 🔑 `angle` is saved for BOTH shapes. It used to be written only in the scaled branch, so a box
   // widget's tilt was forgotten on restart even once it applied.
   function persistW(w) {
+    // `dim` is the PANEL alpha; `dimText` and `hoverFull` ride alongside it. All three save as
+    // null when untouched, which is what "inherit the global default" is stored as.
+    const fade = { dim: w.s.dim, dimText: w.s.dimText, hoverFull: w.s.hoverFull };
     const layout = w.shape === "scaled"
-      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text, dim: w.s.dim }
-      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text, dim: w.s.dim };
+      ? { x: w.s.x, y: w.s.y, scale: w.s.scale, angle: w.s.angle, text: w.s.text, ...fade }
+      : { x: w.s.x, y: w.s.y, w: w.s.w, h: w.s.h, angle: w.s.angle, text: w.s.text, ...fade };
     window.overlayApi?.saveWidget?.(w.key, layout);
   }
 
-  // ── Per-widget fade ─────────────────────────────────────────────────────────────────────
-  // `w.s.dim` is 0.2–1, or null meaning "inherit the global setting". Null is the default, so
-  // a user who never opens this control keeps exactly the behaviour they had.
+  // ── Per-widget fade: the PANEL and its TEXT, independently ───────────────────────────────
+  // Sub's ask (2026-08-11): a widget you can almost see through, still carrying text you can
+  // read. `w.s.dim` is the PANEL alpha and `w.s.dimText` the TEXT alpha — each 0.2–1, or null
+  // meaning "inherit". Null is the default, so a user who never opens these controls keeps
+  // exactly the behaviour they had; and dimText falls back to the PANEL value before the global
+  // one, so moving only the panel slider still behaves like the single control it replaces.
+  //
+  // 🔑 BOTH ALPHAS ARE PUSHED INTO THE WIDGET'S OWN DOCUMENT, never applied to the wrapper.
+  // CSS does not cascade across an iframe boundary, but every widget page is served by our own
+  // sidecar, so the frames are same-origin and their documents are writable — the same route
+  // applyTextScale() already takes for `zoom`. The wrapper must stay fully opaque: an opacity
+  // there would MULTIPLY with the two inside, and multiplication is exactly what made the
+  // useful combination unreachable before. Nesting can only ever make text DIMMER than the
+  // panel under it, so "faint panel, readable text" does not exist in that model at any
+  // setting. Two sibling alphas with no container opacity is the whole trick.
+  //
+  // 🔑 Which is also why hover stops being a CSS rule. `.widget:hover { opacity: 1 }` cannot
+  // reach the document doing the fading, so hover has to be pushed too — and once it is pushed
+  // it can be a per-widget preference (`w.s.hoverFull`, default on) rather than a blanket rule.
+  const DIM_MIN = 0.2;
+  const clampDim = (v) => Math.max(DIM_MIN, Math.min(1, Number(v) || 0));
   let globalDim = 1;                       // from prefs.unfocusedOpacity
   const wDim = (w) => (typeof w.s.dim === "number" ? w.s.dim : globalDim);
-  function applyDim(w) {
+  const wDimText = (w) => (typeof w.s.dimText === "number" ? w.s.dimText : wDim(w));
+  const wHoverFull = (w) => w.s.hoverFull !== false;
+  // Arrange mode and the override hotkey force everything to full — you cannot place what you
+  // cannot see. The shell toggles html.no-dim; reading the class keeps ONE source of truth for
+  // a decision that is now half CSS (notifiers) and half JS (everything else).
+  const fadeOverridden = () => document.documentElement.classList.contains("no-dim");
+  const isHovered = (el) => { try { return !!el && el.matches(":hover"); } catch { return false; } };
+
+  function applyFade(w) {
     const el = wEl(w); if (!el) return;
-    el.style.setProperty("--wdim", String(Math.max(0.2, Math.min(1, wDim(w)))));
-    const inp = el.querySelector(".wcfg-dim");
-    if (inp) inp.value = String(Math.round(wDim(w) * 100));
-    const out = el.querySelector(".wcfg-dimv");
-    if (out) out.textContent = wDim(w) >= 1 ? "Off" : Math.round(wDim(w) * 100) + "%";
+    // A notifier has no widget panel to split, so it keeps the original single-opacity path.
+    if (w.notifier) { el.style.setProperty("--wdim", String(clampDim(wDim(w)))); return; }
+    // Interaction ALWAYS restores a widget. Turning "full on hover" off should stop it lighting
+    // up as the cursor crosses it — not hide the thing you are in the middle of using.
+    const busy = el.classList.contains("touched") || el.classList.contains("moving");
+    const full = fadeOverridden() || busy || (wHoverFull(w) && isHovered(el));
+    const surf = full ? 1 : clampDim(wDim(w));
+    const text = full ? 1 : clampDim(wDimText(w));
+    // The canvas draws this widget's skin trinkets on the WRAPPER, outside the iframe (which
+    // clips them), so they cannot inherit the panel's fade — hand them the surface alpha here.
+    el.style.setProperty("--wsurf", String(surf));
+    writeFade(w, surf, text);
+    showFade(w);
   }
-  function applyAllDims() { for (const w of WIDGETS) applyDim(w); }
-  function setWidgetDim(w, pct) {
-    const v = Math.max(0.2, Math.min(1, Number(pct) / 100));
-    // 100% means "never fade" for THIS widget — stored explicitly rather than as null, so it
-    // stays opaque even if the global default is later turned down.
-    w.s.dim = v;
-    applyDim(w);
+  function writeFade(w, surf, text) {
+    const set = (root) => {
+      if (!root) return;
+      root.style.setProperty("--wsurf", String(surf));
+      root.style.setProperty("--wtext", String(text));
+    };
+    // The tracker is local to THIS document, which hosts every other widget too — so its values
+    // go on its own panel. On :root they would fade the entire overlay at once.
+    if (w.local) { set($("panel")); return; }
+    try { set(frameEl(w)?.contentDocument?.documentElement); }
+    catch { /* iframe not ready — reapplied from the load/ready handlers */ }
   }
+  function applyAllFades() { for (const w of WIDGETS) applyFade(w); }
+
+  // Both control surfaces can be showing the same widget at once — the local .wcfg popover and,
+  // for a page that has settings of its own, the rows injected into them — so every readout is
+  // updated rather than the first one found.
+  function fadeControls(w, sel) {
+    const out = [];
+    const local = wEl(w)?.querySelectorAll(sel); if (local) out.push(...local);
+    let root = null; try { root = wSettingsRoot(w); } catch { /* iframe gone */ }
+    if (root) out.push(...root.querySelectorAll(sel));
+    return out;
+  }
+  const dimLabel = (v) => (v >= 1 ? "Off" : Math.round(v * 100) + "%");
+  function showFade(w) {
+    for (const i of fadeControls(w, ".wcfg-dim")) i.value = String(Math.round(wDim(w) * 100));
+    for (const o of fadeControls(w, ".wcfg-dimv")) o.textContent = dimLabel(wDim(w));
+    for (const i of fadeControls(w, ".wcfg-dimtext")) i.value = String(Math.round(wDimText(w) * 100));
+    for (const o of fadeControls(w, ".wcfg-dimtextv")) o.textContent = dimLabel(wDimText(w));
+    for (const c of fadeControls(w, ".wcfg-hover")) c.checked = wHoverFull(w);
+  }
+  // 100% means "never fade" for THIS widget — stored explicitly rather than as null, so it stays
+  // opaque even if the global default is later turned down.
+  function setWidgetDim(w, pct) { w.s.dim = clampDim(Number(pct) / 100); applyFade(w); }
+  function setWidgetDimText(w, pct) { w.s.dimText = clampDim(Number(pct) / 100); applyFade(w); }
+  function setWidgetHoverFull(w, on) { w.s.hoverFull = !!on; applyFade(w); }
 
   // ── Per-widget text size ────────────────────────────────────────────────────────────────
   // Every widget is responsive now: dragging the corner gives you more ROOM, not bigger text. So
@@ -3591,7 +3721,55 @@
   function injectWidgetRows(w) {
     injectTextRow(w);
     injectAngleRow(w);
+    injectFadeRows(w);
     showAngle(w);
+  }
+  // 🔑 The fade controls have to be injected as well, not just offered in the local popover.
+  // A widget with settings of its own never opens that popover (the cog has ONE destination), so
+  // until now those widgets — the Mission & BP Tracker, Mining Scanner, Loot Split and Event
+  // Tracker — had NO fade control at all. Chat is the widget Sub asked for this for.
+  function injectFadeRows(w) {
+    const root = wSettingsRoot(w);
+    if (!root || root.querySelector(".wfade-rows")) return;
+    const doc = root.ownerDocument;
+    const box = doc.createElement("div");
+    box.className = "wfade-rows";
+    const rowCss = "display:flex;align-items:center;gap:6px;padding:6px 12px;";
+    const lblCss = "flex:1;font-size:11px;letter-spacing:.06em;opacity:.85";
+    const rngCss = "width:84px;height:4px;cursor:pointer;accent-color:var(--cyan,#45D0E0)";
+    const valCss = "min-width:34px;text-align:right;font-size:10px;opacity:.75";
+    const slider = (cls, label, title) => '<div style="' + rowCss + '">'
+      + '<span style="' + lblCss + '">' + label + '</span>'
+      + '<input type="range" class="' + cls + '" min="20" max="100" step="5" style="' + rngCss + '"'
+      + ' title="' + title + '" />'
+      + '<b class="' + cls + 'v" style="' + valCss + '"></b></div>';
+    box.innerHTML =
+      '<div style="padding:6px 12px 2px;font-size:9px;font-weight:700;letter-spacing:.18em;'
+      + 'text-transform:uppercase;opacity:.6">Fade when idle</div>'
+      + slider("wcfg-dim", "Panel", "How faint this widget's panel goes while you are not using it. 100% never fades.")
+      + slider("wcfg-dimtext", "Text", "How faint this widget's text goes while you are not using it. 100% never fades.")
+      + '<label style="' + rowCss + 'cursor:pointer">'
+      + '<span style="' + lblCss + '">Full on hover</span>'
+      + '<input type="checkbox" class="wcfg-hover" style="accent-color:var(--cyan,#45D0E0);cursor:pointer"'
+      + ' title="Bring this widget back to full opacity while the cursor is over it." /></label>';
+    wireFadeControls(w, box);
+    root.appendChild(box);
+    showFade(w);
+  }
+  // Shared by the injected rows and the local popover, so the two surfaces cannot drift.
+  // Live-apply while dragging, persist on release — the same shape as the angle slider, so a
+  // widget never saves a value the user is still sweeping through.
+  function wireFadeControls(w, root) {
+    const bind = (sel, set) => {
+      const el = root.querySelector(sel); if (!el) return;
+      el.addEventListener("input", (e) => { e.stopPropagation(); set(el); });
+      el.addEventListener("change", (e) => { e.stopPropagation(); set(el); persistW(w); });
+      el.addEventListener("click", (e) => e.stopPropagation());
+      el.addEventListener("pointerdown", (e) => e.stopPropagation()); // don't start a widget drag
+    };
+    bind(".wcfg-dim", (el) => setWidgetDim(w, el.value));
+    bind(".wcfg-dimtext", (el) => setWidgetDimText(w, el.value));
+    bind(".wcfg-hover", (el) => setWidgetHoverFull(w, el.checked));
   }
   function injectAngleRow(w) {
     const root = wSettingsRoot(w);
@@ -3659,13 +3837,14 @@
   }
   function resetWidget(w) {
     if (groupOf(w)) detachFromGroup(w, { keepPlace: true }); // reset means "back on its own", too
-    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null; w.s.dim = null;
+    w.s.w = null; w.s.h = null; w.s.scale = null; w.s.angle = null; w.s.text = null;
+    w.s.dim = null; w.s.dimText = null; w.s.hoverFull = null;
     centreWidget(w);
     const f = frameEl(w);
     if (f) { f.style.width = ""; f.style.height = ""; } // drop any inline size (mining's setSize)
     applyFrame(w);
     applyTextScale(w);
-    applyDim(w);  // back to inheriting the global default
+    applyFade(w);  // back to inheriting the global default, and to full-on-hover
     showAngle(w); // the sliders have to fall back to flat with it
     persistW(w);
   }
@@ -3680,9 +3859,14 @@
     // summonCog, which is what makes this cover clicks INSIDE an iframe's own settings panel.
     if (w && w === wcfgOpenFor) armWidgetSettingsIdle();
     if (touchedWidget === w) return;
-    if (touchedWidget) wEl(touchedWidget)?.classList.remove("touched");
+    const was = touchedWidget;
+    if (was) wEl(was)?.classList.remove("touched");
     touchedWidget = w;
     if (w) wEl(w)?.classList.add("touched");
+    // `.touched` restores a faded widget to full, and for a panelled widget that is no longer a
+    // CSS rule — the alphas live inside its document, so the class change has to be pushed.
+    if (was) applyFade(was);
+    if (w) applyFade(w);
   }
   document.addEventListener("pointerdown", (e) => {
     const t = e.target; // a non-Element target (document) has no closest()
@@ -3722,7 +3906,10 @@
     // Wire the load handler ONCE — a widget can be unloaded and re-armed any number of times now.
     if (!w.wired) {
       w.wired = true;
-      f.addEventListener("load", () => { if (w.armed) { probeSettings(w); applyTextScale(w); } });
+      // 🔑 The fade has to be re-pushed on every load. It lives on the frame's OWN documentElement
+      // now, so a reload (arming, a regroup, a theme switch) throws it away silently — the widget
+      // would come back at full opacity with its sliders still claiming otherwise.
+      f.addEventListener("load", () => { if (w.armed) { probeSettings(w); applyTextScale(w); applyFade(w); } });
     }
     const theme = document.documentElement.getAttribute("data-theme") || (PREFS && PREFS.theme) || "mobiglas";
     const lite = document.documentElement.classList.contains("amd-lite") ? "&lite=1" : "";
@@ -3800,7 +3987,7 @@
     const base = {
       // notifyVisibility: the page is only NOW able to hear it. An armed-hidden widget is created
       // and hidden before its contentWindow exists, so that first onHide went nowhere.
-      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); applyTextScale(w); notifyVisibility(w, wShown(w)); },
+      ready: () => { applyFrame(w); syncWidgetTheme(w); probeSettings(w); applyTextScale(w); applyFade(w); notifyVisibility(w, wShown(w)); },
       // Every embedded page calls this on pointerdown, so it doubles as "the user is engaging
       // THIS widget" — which is what reveals its header even if the wrapper never sees the
       // cursor because an iframe is under it.
@@ -3848,8 +4035,13 @@
   window.overlayApi?.onBindingChartReload?.(() => { try { frameWin(WBY.bindingChart)?.__bindingReload?.(); } catch { /* not loaded */ } });
   // The shell's fade override: the hotkey, and arrange mode. Per-widget values are untouched —
   // this only suspends the fade while it is on.
-  window.overlayApi?.onDimOverride?.((off) => document.documentElement.classList.toggle("no-dim", !!off));
-  window.overlayApi?.onDimGlobal?.((v) => { if (Number.isFinite(v)) { globalDim = v; applyAllDims(); } });
+  // html.no-dim still drives the notifiers straight from CSS, but a panelled widget's fade lives
+  // inside its own document where that class cannot reach — so the override has to be re-pushed.
+  window.overlayApi?.onDimOverride?.((off) => {
+    document.documentElement.classList.toggle("no-dim", !!off);
+    applyAllFades();
+  });
+  window.overlayApi?.onDimGlobal?.((v) => { if (Number.isFinite(v)) { globalDim = v; applyAllFades(); } });
 
   // Tab clicks (delegated on the document — tabs are re-rendered into widget bars constantly).
   document.addEventListener("click", (e) => {
@@ -3922,7 +4114,7 @@
         }
         applyFrame(w);
         applyTextScale(w);
-        applyDim(w);
+        applyFade(w);
         if (w.local) probeSettings(w); // no iframe load event will ever fire for it
         if (q.has(w.key.toLowerCase())) setWidgetVisible(w, true); // headless-test this widget
       }
@@ -4051,7 +4243,7 @@
         // ONE destination. A page with its own settings opens THAT (the Text size row was injected
         // into it); everything else opens the local popover, which carries Text size itself.
         if (el.classList.contains("has-settings")) {
-          try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); } catch { /* iframe gone */ }
+          try { frameWin(w)?.__widgetSettings?.(); showTextScale(w); showAngle(w); showFade(w); } catch { /* iframe gone */ }
           syncViewMask();
           armWidgetSettingsIdle(w);
           return;
@@ -4059,6 +4251,7 @@
         el.classList.add("cfgopen");
         showTextScale(w);
         showAngle(w);
+        showFade(w);
         syncViewMask();
         armWidgetSettingsIdle(w);
       });
@@ -4071,14 +4264,19 @@
       angIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetAngle(w, angIn.value); });
       angIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
       angIn?.addEventListener("pointerdown", (e) => e.stopPropagation()); // don't start a widget drag
-      const dimIn = el.querySelector(".wcfg-dim");
-      dimIn?.addEventListener("input", (e) => { e.stopPropagation(); setWidgetDim(w, dimIn.value); });
-      dimIn?.addEventListener("change", (e) => { e.stopPropagation(); persistLayout(w); });
-      dimIn?.addEventListener("pointerdown", (e) => e.stopPropagation());
+      // 🔑 persistW, not persistLayout. The fade is per WIDGET, but persistLayout writes to the
+      // GROUP when one is stacked — so a grouped widget's fade was being saved onto an object
+      // nothing reads it back from, and silently forgot itself on restart.
+      wireFadeControls(w, el);
       el.querySelector(".wh-move")?.addEventListener("click", (e) => { e.stopPropagation(); window.overlayApi?.beginMove?.(); });
       el.querySelector(".wh-reset")?.addEventListener("click", (e) => { e.stopPropagation(); resetWidget(w); });
       // Engaging a widget's own chrome reveals its header too (the iframe can't report this one).
       el.addEventListener("pointerdown", () => touchWidget(w));
+      // Hover-to-full used to be `.widget:hover { opacity: 1 }`. It cannot stay CSS now that the
+      // fade lives inside the widget's own document, so the crossing is watched here and pushed
+      // through applyFade — which is also what lets it be a per-widget preference.
+      el.addEventListener("mouseenter", () => applyFade(w));
+      el.addEventListener("mouseleave", () => applyFade(w));
     }
   }
 
@@ -4352,10 +4550,17 @@
     // Close the Blueprint panel from the panel itself (setBlueprintVisible persists it, and the
     // hub checkbox reads that flag when it opens, so the two stay in step).
     // Hovering the panel pulls its bar out too; `.touched` keeps it out while its cog menu is open.
-    $("panel").addEventListener("pointerdown", () => $("panel").classList.add("touched"));
+    // The tracker keeps its own copy of the touch latch (it is local to this document rather than
+    // a registry iframe), so its fade has to be re-pushed from here as well — same reason as
+    // touchWidget: the alphas are on the panel, not in a stylesheet that can see the class.
+    const localW = () => WIDGETS.find((w) => w.local);
+    const refadeLocal = () => { const w = localW(); if (w) applyFade(w); };
+    $("panel").addEventListener("pointerdown", () => { $("panel").classList.add("touched"); refadeLocal(); });
+    $("panel").addEventListener("mouseenter", refadeLocal);
+    $("panel").addEventListener("mouseleave", refadeLocal);
     document.addEventListener("pointerdown", (e) => {
       const t = e.target;
-      if (!(t instanceof Element) || !t.closest("#panel")) $("panel").classList.remove("touched");
+      if (!(t instanceof Element) || !t.closest("#panel")) { $("panel").classList.remove("touched"); refadeLocal(); }
     });
     $("moveDone").addEventListener("click", () => window.overlayApi.endMove());
     // The full-screen banner's Done exits arrange for ALL widgets. It's off the panel, so it
