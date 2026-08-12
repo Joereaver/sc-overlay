@@ -40,6 +40,10 @@
 //        {t:"activity", activity}              what you are doing, off game.log. OPT-IN at the
 //                                              client; null clears. 48 chars, charged against
 //                                              the message budget, unchanged values are free.
+//        {t:"color", color}                    your name colour as an INDEX 0..7 (null clears).
+//                                              An index, never a colour value — the palette is
+//                                              the widget's, and a hex from a client would be
+//                                              CSS landing in everyone else's DOM.
 //   s→c  {t:"welcome", you:{...}, categories}  hello accepted; categories = the activity list
 //        {t:"joined", ch, label?, kind?}       membership changes (always server-initiated)
 //        {t:"roominfo", ch, category,          the room you just joined; `code` ONLY for a
@@ -50,9 +54,18 @@
 //        {t:"left", ch}
 //        {t:"history", ch, msgs:[Msg]}         last messages, follows joined
 //        {t:"msg", ...Msg}                     live message (Msg = {ch,id,from,text,at})
-//        {t:"presence", ch, count, members}    unique handles in the room, debounced;
-//                                              members = [{handle,verified,activity?}], capped
-//                                              at 200. `activity` is OMITTED when not shared.
+//        {t:"presence", ch, count, members}    unique handles in the room, debounced; capped at
+//                                              200. members = [{handle, verified, activity?,
+//                                              inGame?, color?, org?, orgRank?, orgStars?}].
+//                                              🔑 orgStars is RSI's 1-5 and is the same scale
+//                                              for every org — the only one anything may sort
+//                                              or gate on. orgRank is the org's own word for
+//                                              that tier and is display text only.
+//                                              Optional fields are OMITTED
+//                                              when they don't apply — `inGame` absent means
+//                                              "not in the PU", never "offline". There is no
+//                                              offline. `color` absent = they never picked one.
+//        {t:"color", color}                    your colour was saved (echo of what you sent)
 //        {t:"dir", channels}                   the PUBLIC custom-room directory
 //                                              [{ch,label,category,count}], on welcome +
 //                                              debounced on change. Private rooms are absent.
@@ -137,6 +150,12 @@ const modlink = createModLink({
 
 /** Bans — lowercase handles. The whole point of the RSI-verify gate is that these stick. */
 const bans = loaded.bans;
+/** handle (lowercase) → colour INDEX 0..7. The palette itself lives in the widget, so it can be
+ *  theme-aware across the 16 manufacturer skins; the server only ever knows which of the eight.
+ *  🔴 An index, never a colour value: a hex from a client would be arbitrary CSS landing in every
+ *  other player's member list. */
+const userColors = loaded.prefs ?? new Map();
+const COLOR_MAX = 7;
 /** slug → { label, category, privacy, code, owner, created, lastActive, invites } */
 const customDir = loaded.rooms;
 /** ch → { ch, id, handle, text, by, at } — at most one pinned message per room.
@@ -349,6 +368,14 @@ function roomSend(ch, frame) {
   const text = JSON.stringify(frame);
   for (const c of r.members) if (c.ws.readyState === 1) c.ws.send(text);
 }
+/** In the PU right now, as far as their own game.log is concerned. Membership of a `region:`
+ *  room is the ONLY evidence of it the server has, and it is good evidence: the client joins one
+ *  off a `Join PU` line and the sidecar drops it after 15 minutes of an untouched log. */
+const inPu = (conn) => {
+  for (const ch of conn.channels) if (ch.startsWith("region:")) return true;
+  return false;
+};
+
 function presence(ch) {
   const r = rooms.get(ch);
   if (!r || r.presenceTimer) return;
@@ -365,6 +392,21 @@ function presence(ch) {
       if (seen.has(c.handleLower)) continue;
       const m = { handle: c.handle, verified: c.verified };
       if (c.activity) m.activity = c.activity;
+      // Absent = "no choice made", which the client renders as the name hash it always used.
+      const col = userColors.get(c.handleLower);
+      if (typeof col === "number") m.color = col;
+      // Org standing, for the badge. Sent only when the dossier actually gave us one.
+      if (c.orgSid) m.org = c.orgSid;
+      if (c.orgRank) m.orgRank = c.orgRank;
+      if (c.orgStars) m.orgStars = c.orgStars;
+      // 🔑 IN-GAME is derived from membership of a `region:` room, which the client only ever
+      // holds while game.log says it is in the PU — and the sidecar drops it after 15 minutes of
+      // an untouched log, so it self-corrects when someone alt-F4s. No new client data, no new
+      // frame, and nothing a client can assert about itself that its own log has not already said.
+      // 🔴 There is deliberately NO "offline" here. Everyone in a presence list is connected by
+      // definition; someone you cannot see is simply absent from the list, and saying "offline"
+      // about them would be a confident lie about a person sitting in a room you never joined.
+      for (const ch of c.channels) if (ch.startsWith("region:")) { m.inGame = true; break; }
       seen.set(c.handleLower, m);
     }
     roomSend(ch, { t: "presence", ch, count: seen.size, members: [...seen.values()].slice(0, MEMBERS_CAP) });
@@ -602,7 +644,17 @@ async function verifyIdentity(hello) {
     // The verified org from the RSI dossier (captured at handle-verification time) drives the
     // org channel. Absent/redacted org just means no org room — never a refusal.
     const sid = String(d?.orgSid ?? "");
-    const org = ORG_SID_RE.test(sid) ? { sid, name: String(d?.orgName ?? sid).slice(0, 60) } : null;
+    // 🔑 `stars` is RSI's own 1-5 and is the same scale for every org; `rank` is the org's own
+    // word for that tier and is DISPLAY TEXT ONLY. Anything that sorts, gates or infers must use
+    // the stars — "President", "SSGT" and "Soon to be Casual" are all real tier names and none
+    // of them can be ordered against another org's.
+    const stars = Number(d?.orgRankStars);
+    const org = ORG_SID_RE.test(sid) ? {
+      sid,
+      name: String(d?.orgName ?? sid).slice(0, 60),
+      rank: String(d?.orgRank ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, 32),
+      stars: Number.isInteger(stars) && stars >= 1 && stars <= 5 ? stars : 0,
+    } : null;
     return { handle, verified: true, org };
   } catch { return null; }
 }
@@ -751,7 +803,7 @@ wss.on("connection", (ws) => {
     // "not sharing", never "idle".
     activity: null,
     channels: new Set(),
-    orgSid: null, token: null, // org membership + the token used to re-check it
+    orgSid: null, orgRank: null, orgStars: 0, token: null, // org membership + the token used to re-check it
     stamps: [], // send timestamps for the message rate limit
     acts: [],   // and for access attempts (join / dm / invite / delete)
     alive: true,
@@ -775,6 +827,10 @@ wss.on("connection", (ws) => {
       conn.handleLower = id.handle.toLowerCase();
       conn.verified = id.verified;
       conn.orgSid = id.org ? id.org.sid.toLowerCase() : null;
+      // The org's own word for their tier, and RSI's underlying 1-5. Only the number is
+      // comparable between orgs; the word is a label.
+      conn.orgRank = id.org?.rank || null;
+      conn.orgStars = id.org?.stars || 0;
       // Every real handle and org that connects becomes a name nobody can impersonate.
       reserveName(conn.handleLower, "handle");
       if (conn.orgSid) reserveName(conn.orgSid, "org");
@@ -782,7 +838,13 @@ wss.on("connection", (ws) => {
       conn.token = typeof f.token === "string" ? f.token : null;
       // The category list rides the welcome frame so the widget's dropdown is rendered from the
       // server's list rather than a copy that drifts. v1 clients ignore the extra field.
-      conn.send({ t: "welcome", you: { handle: conn.handle, verified: conn.verified }, categories: ROOM_CATEGORIES });
+      // `you.color` is their own saved choice, so the picker opens showing what is actually set
+      // rather than defaulting to "none" and inviting them to re-pick what they already have.
+      conn.send({
+        t: "welcome",
+        you: { handle: conn.handle, verified: conn.verified, color: userColors.get(conn.handleLower) ?? null },
+        categories: ROOM_CATEGORIES,
+      });
       joinRoom(conn, "global");
       // Verified org → its room, automatically. No setup, no invite — membership on the RSI
       // dossier IS the invite.
@@ -815,11 +877,44 @@ wss.on("connection", (ws) => {
     }
 
     if (f.t === "loc") {
+      const wasInPu = inPu(conn);
       const want = new Set(locChannels(f));
       // Only the AUTO location channels churn with the log — global/org/custom stay put.
       for (const ch of [...conn.channels])
         if ((ch.startsWith("region:") || ch.startsWith("shard:") || ch.startsWith("dgs:")) && !want.has(ch)) leaveRoom(conn, ch);
       for (const ch of want) joinRoom(conn, ch);
+      // 🔑 Joining/leaving a room only refreshes THAT room's presence — but the in-game marker
+      // rides on every room this person is in, so quitting the game would leave a stale "in game"
+      // dot beside their name in Global and their org for as long as they stayed connected.
+      // Only on a real transition: `loc` arrives on every shard hop and most of them do not
+      // change whether they are in the PU at all.
+      if (inPu(conn) !== wasInPu) for (const ch of conn.channels) presence(ch);
+      return;
+    }
+
+    // ── your name colour ─────────────────────────────────────────────────
+    // Sub, 2026-08-12: "just pick eight colors and allow the people to go and change the color
+    // of their name." It is a per-PERSON choice that everyone else sees, so it lives on the
+    // server rather than in each client's localStorage — the whole value is that a regular
+    // becomes recognisable at a glance to the room, not to themselves.
+    if (f.t === "color") {
+      const raw = f.color;
+      const idx = raw === null || raw === undefined ? null : Number(raw);
+      // 🔴 An INTEGER 0..7, and it is validated here rather than trusted. The client renders
+      // this into every other player's DOM; anything that is not one of eight indices is refused
+      // outright rather than clamped, because a clamp turns a bad frame into a silent wrong answer.
+      if (idx !== null && !(Number.isInteger(idx) && idx >= 0 && idx <= COLOR_MAX)) {
+        conn.send({ t: "error", code: "bad_msg", message: "That isn't one of the colours." });
+        return;
+      }
+      if ((userColors.get(conn.handleLower) ?? null) === idx) return;   // unchanged is free
+      if (!underRate(conn)) { conn.send({ t: "error", code: "rate", message: "Slow down a little." }); return; }
+      conn.stamps.push(Date.now());
+      if (idx === null) userColors.delete(conn.handleLower); else userColors.set(conn.handleLower, idx);
+      store.saveUserColor(conn.handleLower, idx);
+      conn.send({ t: "color", color: idx });
+      // Same fan-out as activity: every room they are in has a member list that just went stale.
+      for (const ch of conn.channels) presence(ch);
       return;
     }
 
@@ -1143,9 +1238,20 @@ setInterval(() => {
     verifyIdentity({ token: c.token }).then((id) => {
       if (!id || !id.verified) return;                       // transient failure — leave it alone
       const next = id.org ? id.org.sid.toLowerCase() : null;
-      if (next === c.orgSid) return;
+      // A promotion inside the SAME org is not a room change but it is a badge change, so it
+      // has to reach the rails — otherwise a rank sticks at whatever it was when they connected.
+      const nextRank = id.org?.rank || null;
+      const nextStars = id.org?.stars || 0;
+      if (next === c.orgSid && nextRank === c.orgRank && nextStars === c.orgStars) return;
+      if (next === c.orgSid) {
+        c.orgRank = nextRank; c.orgStars = nextStars;
+        for (const ch of c.channels) presence(ch);
+        return;
+      }
       if (c.orgSid) leaveRoom(c, `org:${c.orgSid}`);
       c.orgSid = next;
+      c.orgRank = nextRank;
+      c.orgStars = nextStars;
       if (next) joinRoom(c, `org:${next}`, id.org.name, "org");
       console.log(`[chat-server] org changed for ${c.handle}: ${c.orgSid ?? "none"}`);
     }).catch(() => { /* transient — keep the current membership */ });

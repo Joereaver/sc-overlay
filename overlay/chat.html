@@ -57,6 +57,23 @@
   #shareAct svg { width: 12px; height: 12px; fill: none; stroke: currentColor;
     stroke-width: 1.3; stroke-linejoin: round; }
   #shareAct[aria-pressed="true"] { opacity: 1; color: var(--gold); }
+  /* Name colour: the button IS the current colour, so the control states its own value. */
+  #colorBtn { flex: none; padding: 2px 4px; line-height: 0; }
+  #colorSwatch { display: block; width: 10px; height: 10px; border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.35); }
+  /* The rail head is the positioned ancestor; the popover hangs under it and is clamped by the
+     rail's own width, so there is nothing to measure. */
+  #right .rail-head { position: relative; }
+  #colorPop { display: none; position: absolute; top: 100%; right: 4px; z-index: 40;
+    padding: 6px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel-solid, #12181c); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+    grid-template-columns: repeat(4, 18px); gap: 6px; }
+  #colorPop.open { display: grid; }
+  #colorPop button { width: 18px; height: 18px; padding: 0; border-radius: 50%; cursor: pointer;
+    border: 2px solid transparent; }
+  #colorPop button.sel { border-color: #fff; }
+  /* "No colour" — back to the name hash. A slash, because an empty circle would read as white. */
+  #colorPop button.none { background: transparent; border: 1px dashed var(--faint); position: relative; }
   /* What someone is doing, on their row in the member list. Truncates rather than wrapping:
      this rail is narrow, and a two-line member row breaks the scan down the list of names. */
   .mrow .act { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
@@ -340,6 +357,21 @@
   .mrow { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; }
   .mrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mrow .vf { flex: none; font-size: 8px; font-weight: 800; color: var(--green, #38d980); }
+  /* The status marker. Hollow = connected to chat; filled + lit = in the PU. Deliberately the
+     ONLY thing on this row carrying a status, and deliberately not a colour that means identity. */
+  .mrow .st { flex: none; width: 6px; height: 6px; border-radius: 50%;
+    border: 1px solid var(--faint); box-sizing: border-box; }
+  .mrow .st.ingame { background: var(--green, #38d980); border-color: var(--green, #38d980);
+    box-shadow: 0 0 4px rgba(56, 217, 128, 0.6); }
+  /* Nothing known about them — an invisible spacer, so names stay aligned without the row
+     claiming a state it cannot know. */
+  .mrow .st.unseen { border-color: transparent; }
+  /* Org standing. Stars because that is RSI's own scale and the only thing comparable between
+     orgs; the org's own name for the tier lives in the tooltip. Warmer as it climbs, so the
+     difference between a recruit and a leader reads without counting. */
+  .mrow .orgr { flex: none; font-size: 7.5px; letter-spacing: -0.5px; color: var(--cyan-dim); }
+  .mrow .orgr.r4 { color: var(--gold); }
+  .mrow .orgr.r5 { color: var(--gold); text-shadow: 0 0 4px rgba(255, 176, 60, 0.5); }
   .mrow.you .nm { color: var(--gold); font-weight: 700; }
   /* Friends mode: where a friend currently IS, when a channel you share can see them.
      🔑 Silence is NOT "offline" — presence only covers rooms you are both in, so a friend
@@ -644,6 +676,12 @@
           <button id="shareAct" class="hbtn sm" type="button" aria-pressed="false">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.3 8S3.7 3.6 8 3.6 14.7 8 14.7 8 12.3 12.4 8 12.4 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="2.1"/></svg>
           </button>
+          <!-- Your name colour. Beside the rail it affects, for the same reason the share switch
+               is: the control and the thing it changes are on screen together. -->
+          <button id="colorBtn" class="hbtn sm" type="button" title="The colour your name shows in">
+            <span id="colorSwatch"></span>
+          </button>
+          <div id="colorPop"></div>
           <span id="memCount" class="n"></span></div>
         <div id="memList" class="rail-body"></div>
       </div>
@@ -768,6 +806,42 @@
     d.textContent = text;
     append(d);
   }
+  /* Eight name colours, Sub's call (2026-08-12: "just pick eight colors and allow the people to
+     go and change the color of their name"). The PALETTE lives here rather than on the server
+     because only the client knows which of the 16 manufacturer skins is on — and because a
+     colour VALUE arriving from another player's client would be arbitrary CSS in this DOM. The
+     wire carries an index; these are what the index means.
+     🔑 Chosen to stay apart at 11.5px on a dark panel: no two adjacent hues, nothing so dark it
+     reads as disabled, and nothing so close to the gold that "you" stops standing out. */
+  const NAME_COLORS = [
+    "#e0b341", // amber
+    "#5fd0e8", // cyan
+    "#5fe08a", // green
+    "#f08a4b", // orange
+    "#ef7fa8", // pink
+    "#b98cf0", // violet
+    "#ef6b6b", // red
+    "#7fa8ef", // blue
+  ];
+  /** handle (lowercase) → chosen colour index. Fed by every presence frame and kept for the
+   *  session, so a message from someone who has since left the room still renders in their
+   *  colour. 🔑 It degrades to the name hash rather than to a default colour — an unset name has
+   *  always had a stable colour here and that should not change just because the feature exists. */
+  const chosenColors = new Map();
+  function noteColors(members) {
+    if (!Array.isArray(members)) return;
+    for (const m of members) {
+      const k = (m.handle ?? "").toLowerCase();
+      if (!k) continue;
+      if (typeof m.color === "number") chosenColors.set(k, m.color);
+      else chosenColors.delete(k);
+    }
+  }
+  function nameColor(handle) {
+    const idx = chosenColors.get((handle ?? "").toLowerCase());
+    return typeof idx === "number" && NAME_COLORS[idx] ? NAME_COLORS[idx] : handleColor(handle);
+  }
+
   function handleColor(handle) {
     let h = 0;
     for (const c of handle) h = (h * 31 + c.codePointAt(0)) % 360;
@@ -926,18 +1000,56 @@
     return { frag, mentionedMe };
   }
 
+  /** How long ago, in the fewest characters that cannot be misread.
+   *
+   *  🔑 The units stop at DAYS. Weeks and months are ambiguous to read at a glance ("2mo" — two
+   *  months or two minutes?) and scrollback is capped at 200 messages per room anyway, so
+   *  anything that old is rare enough to be worth the full date instead of a compressed one.
+   *  🔑 Under a minute says "now" rather than "0m". A counter that sits on zero looks broken. */
+  function agoText(iso) {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return "";
+    const s = Math.floor((Date.now() - t) / 1000);
+    if (s < 45) return "now";
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + "m";
+    if (s < 86400) return Math.round(s / 3600) + "h";
+    const d = Math.round(s / 86400);
+    if (d <= 6) return d + "d";
+    // Past a week the relative form stops helping — say the date outright.
+    try { return new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }); } catch { return d + "d"; }
+  }
+  /** Write the relative text and hang the exact time off the tooltip. */
+  function stampTs(el) {
+    const iso = el.dataset.at;
+    if (!iso) return;
+    el.textContent = agoText(iso);
+    try { el.title = new Date(iso).toLocaleString(); } catch { /* bad ts */ }
+  }
+  /** 🔑 "5m" becomes wrong just by sitting there, so the rendered rows have to be re-stamped on
+   *  a timer — nothing else in this widget re-renders while you read it. One pass a minute over
+   *  the visible log is cheap and keeps every row honest without touching the DOM structure. */
+  setInterval(() => {
+    for (const el of document.querySelectorAll("#log .ts")) stampTs(el);
+  }, 60_000);
+
   function msgRow(m) {
     const row = document.createElement("div");
     row.className = "msg";
     const ts = document.createElement("span");
     ts.className = "ts";
-    try { ts.textContent = new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { /* bad ts */ }
+    // 🔴 A clock time is a LIE about old scrollback. Chat rooms are quiet for days at a time, so
+    // the top of the log is routinely last week — and "14:32" reads as today to everyone
+    // (Sub, 2026-08-12: "a user might think that that was actually sent today, but it's not").
+    // The relative form is the one that cannot be misread; the exact time is on hover, where it
+    // costs nothing and is there when someone actually needs it.
+    ts.dataset.at = m.at ?? "";
+    stampTs(ts);
     row.appendChild(ts);
     const who = m.from?.handle ?? "?";
     const nm = document.createElement("span");
     nm.className = "nm";
     nm.textContent = who;
-    nm.style.color = handleColor(who);
+    nm.style.color = nameColor(who);
     // Right-click a name in the log for the same menu as the member list. 🔑 stopPropagation, or
     // the ROW's message menu fires straight after and replaces it — the name is the more specific
     // target and has to win.
@@ -1518,15 +1630,28 @@
   }
 
   /** One person row, shared by both rail modes so a name reads the same in either. */
-  function personRow(handle, { you = false, verified = false, star = false, where = "", activity = "" } = {}) {
+  function personRow(handle, { you = false, verified = false, star = false, where = "", activity = "", inGame = false, unseen = false, org = "", orgRank = "", orgStars = 0 } = {}) {
     const row = document.createElement("div");
     row.className = "mrow" + (you ? " you" : "");
     row.addEventListener("contextmenu", (e) => { e.preventDefault(); openCtx(handle, e.clientX, e.clientY); });
     row.title = "Right-click for mention, friends and profile";
+    // 🔴 THE DOT MEANS ONE THING NOW: are they in the game. A per-handle hash colour used to
+    // live here and Sub asked what the red one meant — it meant nothing, which is the whole
+    // problem with putting identity on a marker. Identity is the NAME's colour; a marker reads
+    // as a status light, so it had better be a status.
+    // 🔑 There are only two states, and neither is "offline". Everyone on this list is connected
+    // by definition; someone you cannot see is simply not on it. Saying offline about them would
+    // be a confident lie about a person sitting in a room you never joined.
+    // A friend in no channel we share is `unseen`: we know nothing about them, so the row says
+    // nothing about them. An empty slot keeps the names aligned without asserting a state.
+    const dot = document.createElement("span");
+    dot.className = "st" + (unseen ? " unseen" : inGame ? " ingame" : "");
+    if (!unseen) dot.title = inGame ? "In the 'verse right now" : "Connected to chat, not in game";
+    row.appendChild(dot);
     const nm = document.createElement("span");
     nm.className = "nm"; nm.textContent = handle;
     // Same colour the name carries in the log, so a member list and its messages agree.
-    if (!you) nm.style.color = handleColor(handle);
+    if (!you) nm.style.color = nameColor(handle);
     row.appendChild(nm);
     if (star) {
       const f = document.createElement("span");
@@ -1537,6 +1662,20 @@
       const v = document.createElement("span");
       v.className = "vf"; v.textContent = "✔"; v.title = "RSI-verified";
       row.appendChild(v);
+    }
+    // Org standing.
+    // 🔴 The BADGE is the star count, because that is the only thing comparable between orgs —
+    // RSI gives every org the same five tiers and each org names them itself. The org's own word
+    // ("SSGT", "President", "Expendable Crew Member") is real information and goes in the
+    // tooltip, but it is a LABEL: nothing here sorts or ranks by it, and nothing should.
+    if (orgStars > 0) {
+      const b = document.createElement("span");
+      b.className = "orgr r" + orgStars;
+      b.textContent = "★".repeat(orgStars);
+      b.title = (orgRank ? orgRank + (org ? " · " : "") : "")
+        + (org ? org.toUpperCase() : "")
+        + " — rank " + orgStars + " of 5";
+      row.appendChild(b);
     }
     // 🔑 Only ever rendered when the person actually shared something. Nothing is drawn in its
     // place otherwise — most people will never turn this on, and a placeholder ("idle", a dash)
@@ -1560,7 +1699,51 @@
   function renderMembers() {
     $("memTitle").textContent = rightMode === "friends" ? "Friends" : "Here";
     renderShareBtn();
+    renderColorSwatch();
     if (rightMode === "friends") renderFriendList(); else renderHere();
+  }
+
+  /** The eight-colour picker, plus a ninth option that clears back to the name hash.
+   *  🔑 Rebuilt on every open rather than kept in sync: it is nine buttons, and a picker that
+   *  can disagree with the saved value is worse than one that is rebuilt. */
+  function renderColorPop() {
+    const pop = $("colorPop");
+    pop.textContent = "";
+    const mine = typeof view?.you?.color === "number" ? view.you.color : null;
+    const pick = (idx) => {
+      if (view?.you) view.you.color = idx;
+      // Optimistic: our own row and every message we have sent should recolour at once. The
+      // server echoes a `color` frame back, which is what makes it true for everyone else.
+      const me = (view?.you?.handle ?? "").toLowerCase();
+      if (idx === null) chosenColors.delete(me); else chosenColors.set(me, idx);
+      renderColorSwatch(); renderMembers(); renderLog();
+      setColorPop(false);
+      void post("/api/chat/color", { color: idx });
+    };
+    const none = document.createElement("button");
+    none.type = "button"; none.className = "none" + (mine === null ? " sel" : "");
+    none.title = "No colour — go back to the one your name gets automatically";
+    none.addEventListener("click", () => pick(null));
+    pop.appendChild(none);
+    NAME_COLORS.forEach((c, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.style.background = c;
+      if (mine === i) b.className = "sel";
+      b.title = "Use this colour for your name";
+      b.addEventListener("click", () => pick(i));
+      pop.appendChild(b);
+    });
+  }
+  function renderColorSwatch() {
+    const mine = typeof view?.you?.color === "number" ? view.you.color : null;
+    const sw = $("colorSwatch");
+    sw.style.background = mine === null ? "transparent" : NAME_COLORS[mine];
+    sw.style.borderStyle = mine === null ? "dashed" : "solid";
+  }
+  function setColorPop(open) {
+    if (open) renderColorPop();
+    $("colorPop").classList.toggle("open", !!open);
   }
 
   /** The share switch. 🔑 The tooltip has to say WHAT would be published, not just that
@@ -1580,6 +1763,11 @@
     list.textContent = "";
     const c = chanOf(activeCh);
     const members = c?.members ?? [];
+    // 🔑 Learn colours from the SAME data this rail renders from. They were only being picked up
+    // off the presence SSE frame, so a member list that arrived any other way (a state push, a
+    // reconnect, a test driving the view directly) rendered the rail correctly while the LOG
+    // still showed the old hash colour — two paths for one fact, disagreeing.
+    noteColors(members);
     $("memCount").textContent = c && typeof c.count === "number" ? String(c.count) : "";
     if (!members.length) {
       const e = document.createElement("div");
@@ -1597,6 +1785,8 @@
         verified: !!m.verified,
         star: isFriend(m.handle),
         activity: m.activity ?? "",
+        inGame: !!m.inGame,
+        org: m.org ?? "", orgRank: m.orgRank ?? "", orgStars: m.orgStars ?? 0,
       }));
     }
   }
@@ -1622,7 +1812,9 @@
     for (const c of chans()) {
       for (const m of c.members ?? []) {
         const k = m.handle.toLowerCase();
-        if (!seen.has(k)) seen.set(k, { label: c.label, verified: !!m.verified, activity: m.activity ?? "" });
+        if (!seen.has(k)) seen.set(k, { label: c.label, verified: !!m.verified, activity: m.activity ?? "",
+                                        inGame: !!m.inGame, org: m.org ?? "", orgRank: m.orgRank ?? "",
+                                        orgStars: m.orgStars ?? 0 });
       }
     }
     // The ones you can see right now first, then the rest alphabetically.
@@ -1631,8 +1823,12 @@
       return sa - sb || a.localeCompare(b);
     })) {
       const hit = seen.get(h.toLowerCase());
+      // 🔑 A friend we cannot see gets NO row decoration at all — no marker, no "offline". The
+      // absence of a `where` is the honest signal: they may simply be somewhere we can't look.
       list.appendChild(personRow(h, { verified: !!hit?.verified, star: true, where: hit?.label ?? "",
-                                      activity: hit?.activity ?? "" }));
+                                      activity: hit?.activity ?? "", inGame: !!hit?.inGame,
+                                      org: hit?.org ?? "", orgRank: hit?.orgRank ?? "",
+                                      orgStars: hit?.orgStars ?? 0, unseen: !hit }));
     }
   }
 
@@ -1692,6 +1888,9 @@
     applyRails();
     // Before renderTabs, or the dot this may light would not be drawn until the next push.
     noteApplications();
+    // A full state push carries every channel's member list, so it is also the moment we learn
+    // everyone's colour — including after a reconnect, where no presence frame may follow.
+    for (const c of chans()) noteColors(c.members);
     renderTabs(); renderChannels(); renderMembers(); renderChanSettings(); renderPin(); renderApps(); renderLog();
     if (view?.status === "error" && view.error) sys(view.error);
     else if (view?.status === "connecting") sys("Connecting…");
@@ -1724,7 +1923,10 @@
       else if (f.type === "presence") {
         const c = chanOf(f.ch);
         if (c) { c.count = f.count; if (Array.isArray(f.members)) c.members = f.members; }
-        renderTabs(); renderChannels();
+        // 🔑 Learn colours from EVERY presence frame, not just the active channel's — a name in
+        // the log should render in its owner's colour whichever room you happen to be looking at.
+        noteColors(f.members);
+        renderTabs(); renderChannels(); renderLog();
         if (f.ch === activeCh) renderMembers();
       }
       else if (f.type === "dir") { if (view) view.directory = (f.channels ?? []).filter((d) => !chanOf(d.ch)); renderChannels(); }
@@ -2290,6 +2492,15 @@
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chatShareActivity: next }),
     }).catch(() => { if (view) view.shareActivity = !next; renderShareBtn(); });
+  });
+  $("colorBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    setColorPop(!$("colorPop").classList.contains("open"));
+  });
+  // Click anywhere else closes it. 🔑 The listener is on the PANEL, not the document: this page
+  // is an iframe and a document-level click never fires for a click on the canvas around it.
+  $("panel").addEventListener("click", (e) => {
+    if (!$("colorPop").contains(e.target) && e.target !== $("colorBtn")) setColorPop(false);
   });
   $("appYes").addEventListener("click", () => resolveApp(true));
   $("appNo").addEventListener("click", () => resolveApp(false));

@@ -857,8 +857,64 @@ try {
 
   // 🔴 It is charged against the MESSAGE budget. Presence reaches everyone in every channel you
   // are in, so an uncharged activity would be a cheaper broadcast than actually talking.
-  for (let i = 0; i < 8; i++) acA.send({ t: "activity", activity: "state " + i });
-  await acA.next((f) => f.t === "error" && f.code === "rate", "spamming it hits the rate limit");
+  // 🔑 On a THROWAWAY connection: exhausting the rate window is the point of this assertion, and
+  // doing it on acA would silently starve every test after it (which it did, once).
+  const acSpam = client();
+  await acSpam.open();
+  acSpam.send({ t: "hello", handle: "ActorSpam" });
+  await acSpam.next((f) => f.t === "joined" && f.ch === "global", "ActorSpam joins global");
+  for (let i = 0; i < 8; i++) acSpam.send({ t: "activity", activity: "state " + i });
+  await acSpam.next((f) => f.t === "error" && f.code === "rate", "spamming it hits the rate limit");
+  acSpam.ws.close();
+
+  // ── name colour: a per-person choice everyone else sees ───────────────────
+  // 🔑 Its OWN connection. Setting a colour is charged against the message budget (5 per 10s),
+  // and running this on acA — which has already spent most of its window on activity changes —
+  // starved it silently. Rate limits make suites order-dependent; a fresh client makes them not.
+  const acC = client();
+  await acC.open();
+  acC.send({ t: "hello", handle: "ActorThree" });
+  await acC.next((f) => f.t === "welcome", "ActorThree connects");
+  await acC.next((f) => f.t === "joined" && f.ch === "global", "ActorThree joins global");
+
+  acC.send({ t: "color", color: 3 });
+  await until(() => acMember(acB, "ActorThree")?.color === 3, "the room is told ActorThree's colour");
+  assert.equal(acMember(acB, "ActorTwo")?.color, undefined, "someone who never picked one has no colour");
+
+  // 🔴 An INDEX, never a colour value. A hex from a client would be arbitrary CSS travelling
+  // into every other player's member list and message log.
+  // 🔑 "3" is in here deliberately: `Number("3")` is 3, so a validator written with a cast would
+  // accept it. Refusing it is the assertion — coercion is how a validator starts accepting things.
+  for (const bad of ["#ff0000", "red", 8, -1, 1.5, "3"]) {
+    acC.send({ t: "color", color: bad });
+    await acC.next((f) => f.t === "error" && f.code === "bad_msg", `a colour of ${JSON.stringify(bad)} is refused`);
+    assert.equal(acMember(acB, "ActorThree")?.color, 3, "...and the saved colour is untouched");
+  }
+
+  const acD = client();
+  await acD.open();
+  acD.send({ t: "hello", handle: "ActorFour" });
+  await acD.next((f) => f.t === "joined" && f.ch === "global", "ActorFour joins global");
+  acD.send({ t: "color", color: 0 });
+  const ackC = await acD.next((f) => f.t === "color" && f.color === 0, "you are told what was saved");
+  assert.equal(ackC.color, 0);
+  acD.send({ t: "color", color: null });
+  await until(() => acMember(acB, "ActorFour")?.color === undefined, "clearing it removes the colour");
+
+  // ── the in-game marker ────────────────────────────────────────────────────
+  // 🔴 The bug this pins: joining/leaving a room only refreshes THAT room's presence, so leaving
+  // the PU used to leave a stale "in game" dot beside your name in Global for as long as you
+  // stayed connected. The marker has to clear in EVERY room you are in.
+  acA.send({ t: "loc", region: "use1b", shard: "pub_use1b_12326004_040", dgs: "abc1234567" });
+  await until(() => acMember(acB, "ActorOne")?.inGame === true,
+    "being in the PU shows in GLOBAL, not just in the region room");
+  acA.send({ t: "loc", region: null, shard: null, dgs: null });
+  await until(() => acMember(acB, "ActorOne")?.inGame === undefined,
+    "...and leaving the PU clears it in global too");
+  // 🔑 Absent, never `inGame: false`. There is no "offline" in this system: everyone in a
+  // presence list is connected by definition, and someone you cannot see is simply not listed.
+  assert.equal(Object.prototype.hasOwnProperty.call(acMember(acB, "ActorOne"), "inGame"), false,
+    "the key is omitted rather than set false");
 
   console.log("chat-server tests passed");
 } finally {

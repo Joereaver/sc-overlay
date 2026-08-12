@@ -2133,6 +2133,7 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
        || url === "/api/chat/dm" || url === "/api/chat/dmlist"
        || url === "/api/chat/pin" || url === "/api/chat/unpin" || url === "/api/chat/report"
        || url === "/api/chat/apply" || url === "/api/chat/application"
+       || url === "/api/chat/color"
        || url === "/api/chat/delete-room") && req.method === "POST") {
     if (!fromThisMachine(req)) {
       res.writeHead(403, { "Content-Type": "application/json" });
@@ -2160,6 +2161,9 @@ async function handleRequest(req: import("node:http").IncomingMessage, res: Serv
       : url.endsWith("/dm") ? chat.dm(String(body.to ?? ""), String(body.text ?? ""))
       : url.endsWith("/pin") ? chat.pin(String(body.ch ?? ""), Number(body.id))
       : url.endsWith("/unpin") ? chat.unpin(String(body.ch ?? ""))
+      // Your name colour, as everyone else will see it — so it belongs in the same
+      // "acts with the user's identity" group as the rest, not on the LAN.
+      : url.endsWith("/color") ? (chat.setColor(body.color === null ? null : Number(body.color)), true)
       : url.endsWith("/apply") ? chat.apply(String(body.ch ?? ""), body.note ? String(body.note) : undefined)
       : url.endsWith("/application") ? chat.resolveApplication(
         String(body.ch ?? ""), String(body.handle ?? ""), body.accept === true)

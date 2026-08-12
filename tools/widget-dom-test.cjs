@@ -2169,7 +2169,12 @@ async function run(label, script, preload, query, page) {
   // here the whole suite only passes for a developer who happens to have a chart configured, and
   // fails outright against a fresh profile (npm run dev:fresh), which is exactly when you most
   // want to be able to run it.
-  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp|\/api\/binding-image(\?|$)/;
+  // 🔑 `/api/fab-img/<uuid>` 404s for any item with no CROWDSOURCED capture, which is 70% of the
+  // catalogue — the thumbnail then falls back to the clay render, exactly as designed. It only
+  // shows up when a live item that happens to lack one is on screen, so this suite went red for
+  // 16 suites at once purely because the tracker's state had moved on (it drives the LIVE
+  // sidecar). Same class as binding-image below: a shipped state, not a fault.
+  const EXPECTED_404 = /(^|\/\/)(api\.frankerfacez\.com|7tv\.io|api\.betterttv\.net)\/|deliberate-404-for-test\.webp|\/api\/binding-image(\?|$)|\/api\/fab-img\//;
   win.webContents.session.webRequest.onCompleted({ urls: ["*://*/*"] }, (d) => {
     if (d.statusCode < 400) return;
     if (d.statusCode === 404 && EXPECTED_404.test(d.url)) return;
@@ -2675,6 +2680,40 @@ const CHATLINKS = `(async () => {
      items.join(" | "));
   closeCtx();
 
+  // ── timestamps say HOW LONG AGO, not what o'clock ───────────────────────
+  // 🔴 The bug: a clock time on week-old scrollback reads as today. Sub, 2026-08-12: "a user
+  // might think that that was actually sent today, but it's not."
+  {
+    const tsOf = (minsAgo) => {
+      const gCh2 = view.channels[0];
+      gCh2.msgs = [{ id: 900, from: { handle: "Rytharr", verified: true }, text: "hi",
+                     at: new Date(Date.now() - minsAgo * 60000).toISOString() }];
+      renderLog();
+      return document.querySelector("#log .msg .ts");
+    };
+    ok("a message from seconds ago says now", tsOf(0.1).textContent === "now", tsOf(0.1).textContent);
+    ok("...minutes ago in minutes", tsOf(7).textContent === "7m", tsOf(7).textContent);
+    ok("...hours ago in hours", tsOf(200).textContent === "3h", tsOf(200).textContent);
+    ok("...and days ago in DAYS, which is the whole point",
+       tsOf(60 * 24 * 3).textContent === "3d", tsOf(60 * 24 * 3).textContent);
+    // 🔴 NO BACKSLASH ESCAPES IN A SUITE REGEX. Every suite is a template literal, so a written
+    // backslash-d collapses to a literal "d" before the regex is ever compiled — the pattern
+    // then quietly tests for the LETTER d, and the syntax check cannot see it. Use [0-9]. This
+    // is the documented trap in SKILL.md and it cost two false failures here.
+    // (And no backticks in this comment either — that is the sibling trap, hit one edit later.)
+    // 🔑 Evaluate the render ONCE per assertion too: calling a rendering helper three times
+    // inside one expression makes a failure unreadable, which is how the above looked like a
+    // product bug for a minute.
+    const hasDigit = (s) => /[0-9]/.test(String(s));
+    // Past a week the compressed form stops helping and it says the date outright.
+    const old = tsOf(60 * 24 * 30).textContent;
+    ok("beyond a week it gives the date instead", hasDigit(old) && !/^[0-9]+d$/.test(old), old);
+    // 🔑 The exact time is never lost — it moves to the tooltip, where it costs nothing.
+    const hover = tsOf(90).title;
+    ok("the exact time is still there, on hover", hasDigit(hover) && hover.length > 8, hover);
+    view.channels[0].msgs = [];
+  }
+
   // ── what someone is doing, when they have chosen to share it ─────────────
   // 🔑 The interesting assertion is the NEGATIVE one. Almost nobody will turn this on, so the
   // row with no activity is the common case — and rendering anything at all in its place
@@ -2708,6 +2747,71 @@ const CHATLINKS = `(async () => {
      $("shareAct").getAttribute("aria-pressed") === "true"
        && /Click to stop/i.test($("shareAct").title), $("shareAct").title);
   view.shareActivity = false;
+
+  // ── the marker means ONLINE now, and the colour means identity ───────────
+  // 🔴 The dot used to be a per-handle hash colour and Sub asked what the red one meant. It
+  // meant nothing. A marker reads as a status light, so it had better be a status.
+  view.channels[0].members = [
+    { handle: "Rytharr", verified: true, inGame: true, color: 2 },
+    { handle: "Zed", verified: true },
+    { handle: "IMC-Subliminal", verified: true },
+  ];
+  renderMembers();
+  const stOf = (h) => acRowOf(h).querySelector(".st");
+  ok("someone in the PU is marked in-game", stOf("Rytharr").classList.contains("ingame"));
+  ok("...and says so in words on hover", /verse/i.test(stOf("Rytharr").title), stOf("Rytharr").title);
+  ok("someone connected but not in game is marked, but not as in-game",
+     !!stOf("Zed") && !stOf("Zed").classList.contains("ingame"));
+  // 🔴 There is no "offline" anywhere in this system, and there must not be: presence only covers
+  // rooms you are both in, so it would be a confident lie about someone you simply cannot see.
+  ok("...and nothing anywhere claims they are offline",
+     !/offline/i.test(document.getElementById("memList").textContent + (stOf("Zed").title ?? "")),
+     stOf("Zed").title);
+
+  // The colour is a CHOICE, shared by the server, and it falls back to the old name hash.
+  const nmColor = (h) => acRowOf(h).querySelector(".nm").style.color;
+  ok("a chosen colour is what the name renders in",
+     nmColor("Rytharr") === "rgb(95, 224, 138)", nmColor("Rytharr"));
+  ok("...and someone who never chose keeps the colour their name always had",
+     !!nmColor("Zed") && nmColor("Zed") !== nmColor("Rytharr"), nmColor("Zed"));
+  // The same person reads the same in the log as in the rail — one lookup, not two.
+  view.channels[0].msgs = [{ id: 901, from: { handle: "Rytharr", verified: true }, text: "o7", at: new Date().toISOString() }];
+  renderLog();
+  ok("the log agrees with the member list about their colour",
+     document.querySelector("#log .msg .nm").style.color === nmColor("Rytharr"),
+     document.querySelector("#log .msg .nm").style.color);
+  view.channels[0].msgs = [];
+
+  // ── org standing: the BADGE is the star count, the label is only a label ─
+  // 🔴 Measured across real dossiers, the rank NAME is free text each org picks: "SSGT",
+  // "President", "Expendable Crew Member", "Soon to be Casual". Nothing can be ordered from it.
+  // RSI's underlying 1-5 is the same scale for every org, so that is what the badge shows.
+  view.channels[0].members = [
+    { handle: "Rytharr", verified: true, org: "pxp", orgRank: "Expendable Crew Member", orgStars: 1 },
+    { handle: "Xan-Man", verified: true, org: "sbb", orgRank: "President", orgStars: 5 },
+    { handle: "Zed", verified: true },
+  ];
+  renderMembers();
+  const orgOf = (h) => acRowOf(h).querySelector(".orgr");
+  ok("a rank shows as that many stars", orgOf("Rytharr").textContent === "★", orgOf("Rytharr").textContent);
+  ok("...and a leader shows five", orgOf("Xan-Man").textContent === "★★★★★", orgOf("Xan-Man").textContent);
+  // 🔑 The org's own word for the tier is real information and is kept — in the TOOLTIP, where
+  // it informs without inviting anything to compare "President" against "SSGT".
+  ok("the org's own name for the rank is on hover",
+     /Expendable Crew Member/.test(orgOf("Rytharr").title) && /PXP/.test(orgOf("Rytharr").title),
+     orgOf("Rytharr").title);
+  ok("...and says which of five, so the stars are unambiguous",
+     /5/.test(orgOf("Xan-Man").title), orgOf("Xan-Man").title);
+  ok("someone with no public org gets no badge at all", !orgOf("Zed"));
+
+  // The picker: eight, plus a way back to no choice at all.
+  setColorPop(true);
+  const swatches = [...document.querySelectorAll("#colorPop button")];
+  ok("the picker offers eight colours plus 'no colour'", swatches.length === 9, swatches.length);
+  ok("...and marks which one is yours", swatches.filter((b) => b.classList.contains("sel")).length === 1);
+  setColorPop(false);
+  ok("...and closes again", !document.getElementById("colorPop").classList.contains("open"));
+
   view.channels[0].members = [{ handle: "Rytharr", verified: true }, { handle: "IMC-Subliminal", verified: true }];
   renderMembers();
 

@@ -26,6 +26,22 @@ import { regionOfShard } from "./missions-parser.js";
 export interface ChatIdentity {
   handle: string;
   verified: boolean;
+  /** Their chosen name colour as an INDEX into the widget's palette, 0-7. Absent = never picked
+   *  one, which the widget renders as the name hash it has always used. Never a colour VALUE:
+   *  this crosses from one player's client into everyone else's DOM. */
+  color?: number;
+  /** In the PU right now, per their own game.log. 🔑 Absent means "not in the PU" — it never
+   *  means offline, and nothing in this system can say offline: presence only covers rooms you
+   *  are both in, so silence about someone is silence, not a claim. */
+  inGame?: boolean;
+  /** Their org's SID, and their standing in it.
+   *  🔑 `orgStars` is RSI's own 1-5 and is the SAME SCALE for every org — the only one anything
+   *  may sort, gate or infer from. `orgRank` is the org's own word for that tier ("SSGT",
+   *  "President", "Expendable Crew Member") and is display text only; it cannot be compared
+   *  against another org's, or against itself over time. */
+  org?: string;
+  orgRank?: string;
+  orgStars?: number;
   /** What they are doing, off their game.log — only present when they have opted in to sharing
    *  it. 🔑 ABSENT means "not sharing", never "idle": most people will never turn this on, and a
    *  UI that renders a blank as a state would be confidently wrong about almost everyone. */
@@ -319,6 +335,22 @@ export class ChatClient extends EventEmitter {
    *  this their activity would silently vanish from every rail the first time the socket blipped
    *  — which reads as the feature being broken, not as a reconnect. Same reason sendLoc is
    *  re-run there. */
+  /** Pick your name colour, by palette index (null clears it back to the name hash).
+   *  Re-sent on welcome for the same reason `sendLoc` is: a reconnect is invisible to the user,
+   *  and their colour silently reverting for everyone else would read as the feature failing. */
+  setColor(color: number | null): void {
+    const next = color === null || color === undefined ? null : Math.trunc(Number(color));
+    if (next !== null && !(Number.isInteger(next) && next >= 0 && next <= 7)) return;
+    if (next === this.color) return;
+    this.color = next;
+    this.sendColor();
+  }
+  private color: number | null = null;
+  private sendColor(): void {
+    if (this.status !== "connected") return;
+    this.wsSend({ t: "color", color: this.color });
+  }
+
   setActivity(activity: string | null): void {
     const next = activity && activity.trim() ? activity.trim().slice(0, 48) : null;
     if (next === this.activity) return;
@@ -354,6 +386,10 @@ export class ChatClient extends EventEmitter {
         this.sendLoc();
         // Only sends anything if the user actually turned it on — null is a no-op on the server.
         if (this.activity) this.sendActivity();
+        // 🔑 The server's own copy wins on a FIRST connect (it is the durable one, and this
+        // process may have just started); after that, ours is what the user last chose here.
+        if (this.color === null && typeof f.you?.color === "number") this.color = f.you.color;
+        else if (this.color !== null && this.color !== (f.you?.color ?? null)) this.sendColor();
         // Rejoin the user's custom rooms — this is what makes a reconnect (or app restart)
         // land back in the same channels instead of just Global.
         for (const name of this.customRooms) this.wsSend({ t: "join", name });
@@ -402,6 +438,13 @@ export class ChatClient extends EventEmitter {
         this.pushState();
         return;
       }
+      // The server confirming what it saved. Kept so `view().you.color` is what the SERVER has,
+      // not what we hoped it had — the picker renders off that.
+      case "color":
+        this.color = typeof f.color === "number" ? f.color : null;
+        if (this.you) this.you = { ...this.you, color: this.color ?? undefined };
+        this.pushState();
+        return;
       case "notice":
         // A plain server-to-user message. Today: "that room was deleted" — which the user has
         // to be told, or a channel disappearing reads as a connection fault.

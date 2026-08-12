@@ -152,3 +152,15 @@ CREATE TABLE IF NOT EXISTS known_names (
   kind text NOT NULL,           -- 'org' | 'handle'
   seen timestamptz NOT NULL DEFAULT now()
 );
+
+-- Per-player display preferences. Today that is one thing: the colour their name renders in,
+-- for everyone, so a regular becomes recognisable at a glance in a busy channel.
+-- 🔴 The colour is stored as an INDEX into a palette the CLIENT owns, never as a colour value.
+-- A hex string from a client would be arbitrary CSS travelling into every other player's member
+-- list and message log; an integer 0-7 cannot be anything but one of eight colours. It also
+-- means the palette stays theme-aware — the 16 manufacturer skins pick their own eight.
+CREATE TABLE IF NOT EXISTS user_prefs (
+  handle  text PRIMARY KEY,          -- lowercase, the identity everywhere in this server
+  color   integer,                   -- 0..7, or NULL for "whatever the name hashes to"
+  updated timestamptz NOT NULL DEFAULT now()
+);
