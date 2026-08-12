@@ -356,84 +356,28 @@
     </div>
   </div>
 
-<!-- ══════════ TIER 1 ══════════ -->
+<!-- ══════════ TIER 1 ══════════
+     Setup FIRST (Sub, 2026-08-11). The opt-ins used to open the page, which put the things you
+     must decide about in front of the things you just need to work — and it buried the sync token
+     that half the opt-ins below depend on. -->
   <div class="tier">
-    <div class="tier-h">Opt-in features <span class="tier-sub">all off until you turn them on</span></div>
+    <div class="tier-h">Setup &amp; defaults <span class="tier-sub">the essentials, sensible out of the box</span></div>
   </div>
 
+  <!-- 🔑 Sync is its own card, and it is FIRST. It used to be "Collection & privacy", sharing a
+       box with log sharing — which conflated two different bargains: one backs YOUR data up for
+       YOU, the other sends data to us. Log sharing now sits with the other contributions, and this
+       card is only about your account. Its position matters too: every opt-in further down that
+       says "needs a sync token" is pointing at this box. -->
   <div class="card">
-    <div class="label">Collection &amp; privacy</div>
+    <div class="label">Sync</div>
+    <div class="hint" style="margin-top:0">Backs your collection up to your subliminal.gg account — and it is the token the opt-in features further down ask for.</div>
     <div class="setrow">
       <label class="opt"><input type="checkbox" id="syncEnabled" /> Sync my collection to subliminal.gg</label>
       <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Backs up your blueprint collection + tracked mission to your subliminal.gg account and lets you browse it on the web. Needs a token — get one at <a href="https://subliminal.gg/blueprints" target="_blank">subliminal.gg/blueprints</a> → &ldquo;Connect the desktop tracker&rdquo; and paste it below.</span></span>
     </div>
     <input type="text" id="syncToken" placeholder="scbp_…  paste your token from subliminal.gg/blueprints" />
     <div class="hint" id="syncStatus"></div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="shareLogs" /> Share anonymized logs to improve the tracker</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Sends your Star Citizen <code>Game.log</code> so mission and blueprint parsing can be fixed against real logs. Your handle, account ID, IP and session are stripped and chat is dropped before it leaves your PC. Needs a sync token.</span></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="label">Screen reading (OCR)</div>
-    <div class="hint" style="margin-top:0">Uses Windows' built-in text recognition, only while Star Citizen is focused.</div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="missionOcr" /> Detect the mission I'm tracking in-game</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Reads the tracked-mission panel so the overlay knows which mission you've actually selected — ground truth the game log can't give. No account needed.</span></span>
-    </div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="fabCapture" /> Help build the item image library</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">When you open a Fabrication Kiosk in-game, the app snaps the item's picture and contributes it to subliminal.gg's catalog — only items we don't have yet. You're credited on the contributor leaderboard. Needs a sync token.</span></span>
-    </div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="fabClaim" /> Offer to add blueprints the fabricator shows that I'm missing</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">The game only writes a blueprint to your log the moment you receive it, and those logs get deleted over time — so anything you earned before installing the app can never be detected. The Fabrication Kiosk only lists blueprints you own, so when it shows one we have no record of, you get 30 seconds to add it. You confirm each one, so check the name matches what's on your screen.</span></span>
-    </div>
-  </div>
-
-  <!-- 🔑 Its OWN card, not a row in "Screen reading (OCR)" above, for two reasons that both
-       matter. That card's blurb says "Uses Windows' built-in text recognition" — this one uses
-       RapidOCR, because Windows OCR could not read the board's 12px giver line at all. And every
-       other opt-in there is a standing preference you tick once, while this is a SESSION: it
-       force-disarms on every launch, so filing it beside them would misrepresent what ticking it
-       does. -->
-  <div class="card">
-    <div class="label">Contract payouts</div>
-    <div class="hint" style="margin-top:0">A scan session, not a setting — it always starts off when the app launches.</div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="payoutScan" onchange="onPayoutScanToggle()" /> Read contract payouts off the mobiGlas board</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">About a thousand contracts are paid an amount the game calculates when you accept them — it exists nowhere in the game files, so the contract board is the only place to read it. Turn this on and a panel opens on the overlay; open mobiGlas &rarr; Contracts and expand a category, and it records what each one pays and contributes it to subliminal.gg so the mission pages can show a typical payout. It reads the board and nothing else. Needs a sync token.</span></span>
-    </div>
-    <div class="hint" id="payoutScanStatus"></div>
-  </div>
-
-  <div class="card">
-    <div class="label">Widgets &amp; interaction</div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="miningAutoShow" /> Pop the Mining Scanner open when I'm scanning or refining</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Shows the Mining Scanner on its own when the scanner or Refinement Center is detected. Only a signature matching a known ore counts — debris and stray numbers won't pop it open. If you close it, it stays away for a bit before it can pop again.</span></span>
-    </div>
-    <div class="setrow">
-      <label class="opt"><input type="checkbox" id="holdToInteract" onchange="onHoldModeToggle()" /> Only let me click the overlay while I hold a key</label>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">With this on, the overlay is click-through during gameplay — hold the interact key (set it under Hotkeys) and hover a widget to click it. Prevents accidental clicks mid-game.</span></span>
-    </div>
-    <div class="setrow">
-      <div class="opt" style="flex-direction:column; align-items:stretch; gap:8px;">
-        <span>Infographic Viewer</span>
-        <div class="add" style="margin-top:0">
-          <input type="text" id="bindingPng" placeholder="no PNG chosen — pick one to fill the Infographic Viewer" readonly />
-          <button onclick="chooseBinding()">Choose PNG…</button>
-          <button class="danger" onclick="clearBinding()" title="Remove">✕</button>
-        </div>
-      </div>
-      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Pick a PNG (transparency supported — e.g. a joystick binding chart) and it fills the Infographic Viewer, which you place and size like any other. Toggle it with the binding hotkey (set under Hotkeys) or from the tray.</span></span>
-    </div>
-  </div>
-
-  <!-- ══════════ TIER 2 ══════════ -->
-  <div class="tier">
-    <div class="tier-h">Setup &amp; defaults <span class="tier-sub">the essentials, sensible out of the box</span></div>
   </div>
 
   <div class="card">
@@ -688,6 +632,68 @@
     <div class="hint">Takes effect the next time each widget loads.</div>
   </div>
 
+  <!-- ══════════ TIER 2 ══════════
+       Sub's regrouping, 2026-08-11: the things that SEND US DATA belong together, in one place
+       someone can find, rather than scattered by which OCR engine happens to read them. The split
+       here is by who benefits, which is the distinction a person actually cares about when
+       deciding — not by implementation. Two settings left this tier entirely and now live in the
+       widgets they control (Mining Scanner's auto-show, the Infographic Viewer's PNG). -->
+  <div class="tier">
+    <div class="tier-h">Opt-in features <span class="tier-sub">all off until you turn them on</span></div>
+  </div>
+
+  <div class="card">
+    <div class="label">Screen reading (OCR)</div>
+    <div class="hint" style="margin-top:0">Uses Windows' built-in text recognition, only while Star Citizen is focused. These two are for you — nothing leaves your PC.</div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="missionOcr" /> Detect the mission I'm tracking in-game</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Reads the tracked-mission panel so the overlay knows which mission you've actually selected — ground truth the game log can't give. No account needed.</span></span>
+    </div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="fabClaim" /> Offer to add blueprints the fabricator shows that I'm missing</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">The game only writes a blueprint to your log the moment you receive it, and those logs get deleted over time — so anything you earned before installing the app can never be detected. The Fabrication Kiosk only lists blueprints you own, so when it shows one we have no record of, you get 30 seconds to add it. You confirm each one, so check the name matches what's on your screen.</span></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">Help improve SC Overlay</div>
+    <div class="hint" style="margin-top:0">Everything here sends something to subliminal.gg so the app and the site get better for everyone. All of it needs a sync token, and all of it is off until you turn it on.</div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="fabCapture" /> Help build the item image library</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">When you open a Fabrication Kiosk in-game, the app snaps the item's picture and contributes it to subliminal.gg's catalog — only items we don't have yet. You're credited on the contributor leaderboard. Needs a sync token.</span></span>
+    </div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="shareLogs" /> Share anonymized logs to improve the tracker</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Sends your Star Citizen <code>Game.log</code> so mission and blueprint parsing can be fixed against real logs. Your handle, account ID, IP and session are stripped and chat is dropped before it leaves your PC. Needs a sync token.</span></span>
+    </div>
+
+    <!-- 🔑 A BUTTON, not a checkbox (Sub, 2026-08-11). Every other opt-in here is a standing
+         preference you tick once and forget; this one is a SESSION that force-disarms on every
+         launch. A checkbox promises to remember, so ticking it made a promise the feature does not
+         keep — and it read as something already running rather than something you go and do. It
+         also uses RapidOCR rather than Windows OCR, because Windows OCR could not read the board's
+         12px giver line at all, which is why it does not belong under the card above. -->
+    <div class="setrow" style="align-items:flex-start">
+      <div class="opt" style="flex-direction:column; align-items:stretch; gap:6px;">
+        <span>Contract payouts</span>
+        <div class="hint" style="margin:0">Around a thousand contracts are paid an amount the game works out when you accept them, and it exists nowhere in the game files — the board is the only place to read it. Runs until you stop it, and never starts on its own.</div>
+        <div class="add" style="margin-top:0">
+          <button type="button" id="payoutScanBtn" onclick="onPayoutScanToggle()">Start reading the board</button>
+        </div>
+        <div class="hint" id="payoutScanStatus" style="margin:0"></div>
+      </div>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">Start this, then open mobiGlas &rarr; Contracts and expand a category. A panel appears on the overlay showing every row it reads, and what each contract pays is contributed to subliminal.gg so the mission pages can show a typical payout. It reads the board and nothing else. Needs a sync token.</span></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">Interaction</div>
+    <div class="setrow">
+      <label class="opt"><input type="checkbox" id="holdToInteract" onchange="onHoldModeToggle()" /> Only let me click the overlay while I hold a key</label>
+      <span class="info" tabindex="0" role="button" aria-label="More info">i<span class="tip">With this on, the overlay is click-through during gameplay — hold the interact key (set it under Hotkeys) and hover a widget to click it. Prevents accidental clicks mid-game.</span></span>
+    </div>
+  </div>
+
   <!-- ══════════ TIER 3 ══════════
        "More" used to be a junk drawer: browser sources, promos, diagnostics and About all in one
        heap. Diagnostics moved up to Performance & fixes where it belongs, promos got their own
@@ -869,7 +875,10 @@
     checkLogPath();
     document.getElementById("hwAccel").checked = !!cfg.hwAccel;
     document.getElementById("amdCompat").checked = !!cfg.amdCompat;
-    document.getElementById("bindingPng").value = cfg.bindingPng || "";
+    // bindingPng and miningAutoShow are NOT read or written here any more — they moved into the
+    // Infographic Viewer and Mining Scanner widgets, which now own them outright. Keeping a copy
+    // in this form would make it a second writer: this page saves the WHOLE form, so a value
+    // changed in a widget while this window sat open would be silently written back stale.
     // `?? def`, NOT `|| def`: "" is a hotkey the user deliberately REMOVED and has to survive a
     // reload; only a missing field means "never set" and takes the default.
     for (const which of Object.keys(HOTKEYS)) {
@@ -884,7 +893,6 @@
     document.getElementById("fabCapture").checked = !!cfg.fabCapture;
     document.getElementById("fabClaim").checked = !!cfg.fabClaim;
     document.getElementById("missionOcr").checked = !!cfg.missionOcr;
-    document.getElementById("miningAutoShow").checked = !!cfg.miningAutoShow;
     document.getElementById("scFeedShowSeconds").value = String(cfg.scFeedShowSeconds ?? 12);
     document.getElementById("unlockAlertShowSeconds").value = String(cfg.unlockAlertShowSeconds ?? 8);
     document.getElementById("shareLogs").checked = !!cfg.shareLogs;
@@ -947,14 +955,12 @@
       hwAccel: document.getElementById("hwAccel").checked,
       amdCompat: document.getElementById("amdCompat").checked,
       unfocusedOpacity: Number(document.getElementById("unfocusedOpacity").value || 100) / 100,
-      bindingPng: document.getElementById("bindingPng").value,
       holdToInteract: document.getElementById("holdToInteract").checked,
       revertThemeOnFoot: document.getElementById("revertThemeOnFoot").checked,
       syncEnabled: document.getElementById("syncEnabled").checked,
       fabCapture: document.getElementById("fabCapture").checked,
       fabClaim: document.getElementById("fabClaim").checked,
       missionOcr: document.getElementById("missionOcr").checked,
-      miningAutoShow: document.getElementById("miningAutoShow").checked,
       scFeedShowSeconds: showSecs("scFeedShowSeconds", 12),
       unlockAlertShowSeconds: showSecs("unlockAlertShowSeconds", 8),
       shareLogs: document.getElementById("shareLogs").checked,
@@ -1000,12 +1006,7 @@
   }
   function pickLog(i) { document.getElementById("logPath").value = window.__detected[i].path; save(); }
 
-  async function chooseBinding() {
-    if (!window.overlayConfig) { alert("File picker unavailable — update the app."); return; }
-    const p = await window.overlayConfig.pickPng();
-    if (p) { document.getElementById("bindingPng").value = p; save(); }
-  }
-  function clearBinding() { document.getElementById("bindingPng").value = ""; save(); }
+  // chooseBinding/clearBinding moved to the Infographic Viewer widget, which owns the setting now.
 
   // Opt-in hold-to-interact: apply live via the shell, and persist via save().
   function onHoldModeToggle() {
@@ -1026,8 +1027,11 @@
   //    at this machine, so the toggle talks to the route that enforces that.
   // The sidecar broadcasts the change on the missions SSE, which is what puts the dashboard on
   // the overlay — this function never opens a window itself.
+  // The live state, mirrored from the sidecar. A button has no checked property to read back, and
+  // the truth is not local anyway — the overlay panel's own Stop button and ✕ both end the session.
+  let payoutScanOn = false;
   async function onPayoutScanToggle() {
-    const on = document.getElementById("payoutScan").checked;
+    const on = !payoutScanOn;
     try {
       await fetch("/api/payout-scan", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1040,25 +1044,29 @@
   // first, and the one a bare checkbox cannot answer. Same three preconditions the dashboard
   // reports, so the two surfaces cannot disagree about whether the thing is ready.
   async function refreshPayoutScan() {
-    const box = document.getElementById("payoutScan");
+    const btn = document.getElementById("payoutScanBtn");
     const status = document.getElementById("payoutScanStatus");
-    if (!box || !status) return;
+    if (!btn || !status) return;
     let d = null;
     try { d = await (await fetch("/api/payout-scan", { cache: "no-store" })).json(); } catch { /* sidecar down */ }
     if (!d) { status.textContent = ""; return; }
-    box.checked = !!d.on;
+    payoutScanOn = !!d.on;
+    btn.textContent = payoutScanOn ? "Stop reading the board" : "Start reading the board";
+    btn.classList.toggle("danger", payoutScanOn);
     const missing = [];
-    if (!d.syncReady) missing.push("a sync token (set one above)");
+    if (!d.syncReady) missing.push("a sync token (set one at the top)");
     if (!d.calibrated) missing.push("a calibrated board area");
+    // A button that cannot work should say so before you press it, not after.
+    btn.disabled = missing.length > 0 && !payoutScanOn;
     status.textContent = missing.length
       ? "Needs " + missing.join(" and ") + " before it can record anything."
-      : d.on
-        ? "Scanning. The panel on the overlay shows every row it reads."
+      : payoutScanOn
+        ? "Reading. The panel on the overlay shows every row it picks up."
         : "";
   }
-  // This checkbox is the one control here whose value can change while the window sits open —
-  // the overlay panel's own Stop button and ✕ both end the session. Re-read on focus so coming
-  // back to this window never shows a tick for a sweep that has already finished.
+  // This is the one control here whose state can change while the window sits open — the overlay
+  // panel's own Stop button and ✕ both end the session. Re-read on focus so coming back to this
+  // window never offers to stop a sweep that has already finished.
   window.addEventListener("focus", refreshPayoutScan);
 
   // ── canvas calibration (mixed-DPI) ───────────────────────────────────────
@@ -1289,7 +1297,7 @@
   // Auto-save the plain checkboxes the instant they're toggled, so a change can never be lost by
   // closing/scrolling away without clicking Save. (Theme, hotkeys, hold-to-interact and the file
   // pickers already save on change; the sync token stays manual so a half-typed token isn't sent.)
-  ["syncEnabled", "shareLogs", "fabCapture", "fabClaim", "missionOcr", "miningAutoShow", "hwAccel", "amdCompat", "revertThemeOnFoot"]
+  ["syncEnabled", "shareLogs", "fabCapture", "fabClaim", "missionOcr", "hwAccel", "amdCompat", "revertThemeOnFoot"]
     .forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener("change", save); });
   // The sync field shows the truncated saved key; clear it on focus so a new token pastes
   // cleanly, and restore the preview on blur if nothing was typed.

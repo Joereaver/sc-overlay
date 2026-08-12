@@ -1998,6 +1998,20 @@ const WCFGIDLE = `(async () => {
   cog().click();
   await sleep(30);
   ok("...and a third click reopens it", open());
+  cog().click(); await sleep(30);
+
+  // 🔑 The TRACKER is the one widget whose bar cog IS #cog — a single button carrying both
+  // wh-cog and id=cog, so it has TWO click listeners on the same element and stopPropagation
+  // does nothing about that. If the bar handler acts on it too, the two fight: one opens, the
+  // other sees it open and closes it, and the menu never appears at all. That stayed hidden for
+  // as long as the bar handler was a no-op for local widgets.
+  const menu = document.getElementById("cogMenu");
+  const bpCog = document.getElementById("panel").querySelector(".wh-cog");
+  ok("the tracker bar cog is the same element as #cog", bpCog && bpCog.id === "cog", bpCog ? bpCog.id : "missing");
+  bpCog.click(); await sleep(40);
+  ok("the tracker cog OPENS its menu", menu.classList.contains("open"));
+  bpCog.click(); await sleep(40);
+  ok("...and closes it again", !menu.classList.contains("open"));
 
   await sleep(500);
   ok("it closes itself once idle", !open());

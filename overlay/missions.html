@@ -3097,8 +3097,35 @@
       noAngle: true,
       // Re-read the PNG each time it's summoned, so a re-exported chart appears without a restart.
       onShow: (w) => { try { frameWin(w)?.__bindingReload?.(); } catch { /* not loaded yet */ } },
+      // 🔑 The PNG picker moved OUT of global Settings and into this widget (Sub, 2026-08-11):
+      // "what is this widget showing" is a question you ask at the widget. The shell owns the
+      // file dialog, and overlayApi.cfg is the very channel the settings page already used —
+      // this adds reach, not power.
+      host: () => ({
+        pickPng: async () => {
+          let p = null;
+          try { p = await window.overlayApi?.cfg?.pickPng?.(); } catch { /* no shell (OBS/browser) */ }
+          if (!p) return null;               // dialog cancelled, or no shell to ask
+          await setBindingPng(p);
+          return p;
+        },
+        clearPng: () => setBindingPng(""),
+      }),
     },
   ];
+
+  // Settings no longer holds a copy of this value, deliberately: it saves the WHOLE form, so a
+  // path chosen here while that window sat open would have been written back stale. The POST is a
+  // field-by-field merge server-side, so sending this one key disturbs nothing else.
+  async function setBindingPng(path) {
+    try {
+      await fetch("/api/config", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bindingPng: path }),
+      });
+    } catch { /* sidecar down — the widget re-reads on its next show */ }
+    try { frameWin(WBY.bindingChart)?.__bindingReload?.(); } catch { /* not loaded yet */ }
+  }
 
   // Runtime state hangs off each entry as `.s` so it never collides with the config above.
   const WBY = {};
@@ -4479,6 +4506,15 @@
       const bar = el.querySelector(".whead");
       el.querySelector(".wh-cog")?.addEventListener("click", (e) => {
         e.stopPropagation();
+        // 🔑 THE TRACKER'S BAR COG *IS* #cog — one button carrying both `wh-cog` and `id="cog"`,
+        // so it has TWO click listeners and `stopPropagation` does nothing about that (they are
+        // on the same element; only stopImmediatePropagation would, and suppressing the other one
+        // is not what we want). #cog's own handler already toggles the menu correctly, so this one
+        // must stand down or the two fight: this opens, that sees it open and closes it, and the
+        // menu never appears. It went unnoticed for exactly as long as this branch was a no-op for
+        // local widgets — the old code reached through frameWin(), which is null for a widget that
+        // lives in this document.
+        if (w.local) return;
         // 🔑 THE COG TOGGLES. It used to only ever OPEN, so clicking it a second time re-opened an
         // already-open sheet and read as a dead button — the 15s idle timer was the only way to
         // dismiss one (Sub, 2026-08-11: "I can't get the settings menu to go away"). Both

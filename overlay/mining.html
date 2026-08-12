@@ -319,9 +319,11 @@
   #cogMenu .cog-canvas-only { display: none !important; }
   body.canvas #cogMenu .cog-sec.cog-canvas-only { display: block !important; }
   body.canvas #cogMenu .cog-slider.cog-canvas-only { display: flex !important; }
+  body.canvas #cogMenu .cog-opt.cog-canvas-only { display: flex !important; }
   /* Embedded mode keeps the per-widget angle slider (the parent applies the angle it sets). */
   body.embedded #cogMenu .cog-sec.cog-canvas-only { display: block !important; }
   body.embedded #cogMenu .cog-slider.cog-canvas-only { display: flex !important; }
+  body.embedded #cogMenu .cog-opt.cog-canvas-only { display: flex !important; }
   /* Alert-tone row: choose/clear a custom WAV. */
   #cogMenu .cog-tone { display: flex; align-items: center; gap: 8px; padding: 4px 12px 7px; font-size: 11.5px; color: var(--cyan-dim); }
   #cogMenu .cog-tone .lnk { cursor: pointer; color: var(--cyan-text); text-decoration: underline dotted; }
@@ -440,6 +442,12 @@
     <div id="cogMenu">
       <div class="cog-sec cog-canvas-only">This widget</div>
       <div class="cog-slider cog-canvas-only"><span>Angle</span><input type="range" id="cogAngle" min="-35" max="35" step="1" value="0" /><b id="cogAngleV">0°</b></div>
+      <!-- 🔑 Lives HERE, not in global Settings (Sub, 2026-08-11). It is a setting about this
+           widget's behaviour, so the place you look for it is this widget. Canvas-only: a browser
+           source cannot pop itself open. -->
+      <label class="cog-opt cog-canvas-only" title="Shows the Mining Scanner on its own when the scanner or Refinement Center is detected. Only a signature matching a known ore counts - debris and stray numbers will not pop it open. If you close it, it stays away for a bit before it can pop again.">
+        <input type="checkbox" id="autoShowChk" /> Pop open when I am scanning or refining
+      </label>
       <div class="cog-sec">Audio</div>
       <label class="cog-opt"><input type="checkbox" id="voiceChk" /> HAL voice announcements</label>
       <div class="cog-slider"><span>Volume</span><input type="range" id="volSlider" min="0" max="100" step="1" /></div>
@@ -1128,6 +1136,30 @@
   // The menu itself stays — it's what __widgetSettings (below) opens.
   // The parent bar's per-widget cog opens THIS widget's settings (its presence there is probed
   // from this function existing), so both cogs open the same menu.
+  // ── Pop open when scanning (moved here from global Settings) ────────────────────────────
+  // This one is app CONFIG, not a localStorage preference like the audio rows above it: the SHELL
+  // reads config.miningAutoShow to decide whether to arm the widget while it is hidden. So it
+  // round-trips through /api/config, exactly as the settings page does.
+  // 🔑 The POST is a partial merge server-side (field-by-field), so sending this one key cannot
+  // disturb anything else — and the settings page no longer carries a copy of the value, which
+  // would have made it a second writer able to save a stale one back over this.
+  (async () => {
+    const box = $("autoShowChk");
+    if (!box) return;
+    try {
+      const c = await (await fetch("/api/config", { cache: "no-store" })).json();
+      box.checked = !!c.miningAutoShow;
+    } catch { /* sidecar down - leave it unticked rather than lying about the state */ }
+    box.addEventListener("change", async () => {
+      try {
+        await fetch("/api/config", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ miningAutoShow: box.checked }),
+        });
+      } catch { /* nothing useful to say in a cog menu; it re-reads next open */ }
+    });
+  })();
+
   window.__widgetSettings = () => setCog(true);
   // Lets the parent inject its Text size row INTO this menu, so the bar's cog opens ONE settings
   // surface instead of a separate popover that then points at another one.
